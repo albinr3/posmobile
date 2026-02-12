@@ -1,0 +1,186 @@
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet } from 'react-native';
+import { Button, Text, Surface } from 'react-native-paper';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { useAuthStore } from '../../store/authStore';
+import { useUser } from '@clerk/clerk-expo';
+
+interface BiometricSetupScreenProps {
+  navigation: any;
+}
+
+export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) {
+  const [hasHardware, setHasHardware] = useState(false);
+  const [isEnrolled, setIsEnrolled] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const { setBiometricEnabled, setUser } = useAuthStore();
+  const { user } = useUser();
+
+  useEffect(() => {
+    checkBiometricSupport();
+  }, []);
+
+  const checkBiometricSupport = async () => {
+    const hardware = await LocalAuthentication.hasHardwareAsync();
+    const enrolled = await LocalAuthentication.isEnrolledAsync();
+    setHasHardware(hardware);
+    setIsEnrolled(enrolled);
+  };
+
+  const handleEnableBiometric = async () => {
+    setLoading(true);
+    try {
+      const result = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Confirma tu identidad',
+        fallbackLabel: 'Usar código',
+        cancelLabel: 'Cancelar',
+      });
+
+      if (result.success) {
+        setBiometricEnabled(true);
+        // TODO: Guardar preferencia en SecureStore
+        if (user) {
+          setUser({
+            id: user.id,
+            name: user.fullName || user.firstName || 'Usuario',
+            phone: user.primaryPhoneNumber?.phoneNumber,
+            email: user.primaryEmailAddress?.emailAddress,
+            companyId: '',
+            role: '',
+          });
+        }
+        navigateToHome();
+      }
+    } catch (error) {
+      console.error('Error configurando biométrico:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const navigateToHome = () => {
+    // Navegar a la pantalla de selección de subusuario
+    navigation.navigate('SelectUser');
+  };
+
+  const handleSkip = () => {
+    if (user) {
+      setUser({
+        id: user.id,
+        name: user.fullName || user.firstName || 'Usuario',
+        phone: user.primaryPhoneNumber?.phoneNumber,
+        email: user.primaryEmailAddress?.emailAddress,
+        companyId: '',
+        role: '',
+      });
+    }
+    navigateToHome();
+  };
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <View style={styles.content}>
+        <Surface style={styles.card}>
+          <View style={styles.iconContainer}>
+            <Text style={styles.icon}>🔐</Text>
+          </View>
+
+          <Text style={styles.title}>Acceso Rápido</Text>
+          
+          {hasHardware && isEnrolled ? (
+            <>
+              <Text style={styles.description}>
+                Habilita el acceso con huella digital o Face ID para iniciar sesión más rápido
+              </Text>
+
+              <Button
+                mode="contained"
+                onPress={handleEnableBiometric}
+                loading={loading}
+                style={styles.button}
+                contentStyle={styles.buttonContent}
+                icon="fingerprint"
+              >
+                Habilitar Biométrico
+              </Button>
+
+              <Button
+                mode="text"
+                onPress={handleSkip}
+                style={styles.skipButton}
+              >
+                Omitir por ahora
+              </Button>
+            </>
+          ) : (
+            <>
+              <Text style={styles.description}>
+                {!hasHardware 
+                  ? 'Tu dispositivo no tiene soporte para autenticación biométrica'
+                  : 'No tienes huellas o Face ID registrados en tu dispositivo'
+                }
+              </Text>
+
+              <Button
+                mode="contained"
+                onPress={handleSkip}
+                style={styles.button}
+                contentStyle={styles.buttonContent}
+              >
+                Continuar
+              </Button>
+            </>
+          )}
+        </Surface>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  content: {
+    flex: 1,
+    padding: 20,
+    justifyContent: 'center',
+  },
+  card: {
+    padding: 24,
+    borderRadius: 12,
+    elevation: 2,
+    alignItems: 'center',
+  },
+  iconContainer: {
+    marginBottom: 20,
+  },
+  icon: {
+    fontSize: 64,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  description: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  button: {
+    width: '100%',
+    marginTop: 8,
+  },
+  buttonContent: {
+    paddingVertical: 8,
+  },
+  skipButton: {
+    marginTop: 12,
+  },
+});
