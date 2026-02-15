@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { Surface, Text, Chip } from 'react-native-paper';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
@@ -35,7 +35,7 @@ export function ProductDetailScreen({ route }: ProductDetailScreenProps) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.center}>
           <Text>Cargando producto...</Text>
         </View>
@@ -45,7 +45,7 @@ export function ProductDetailScreen({ route }: ProductDetailScreenProps) {
 
   if (!product) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.center}>
           <Text>No se encontro el producto.</Text>
         </View>
@@ -54,7 +54,7 @@ export function ProductDetailScreen({ route }: ProductDetailScreenProps) {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <Surface style={styles.card}>
           <Text style={styles.name}>{product.name}</Text>

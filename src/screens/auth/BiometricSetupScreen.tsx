@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Button, Text, Surface } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuthStore } from '../../store/authStore';
 import { useUser } from '@clerk/clerk-expo';

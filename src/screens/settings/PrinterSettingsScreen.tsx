@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid } from 'react-native';
 import { Text, Surface, Button, ActivityIndicator, List, Divider, Switch } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface PrinterDevice {

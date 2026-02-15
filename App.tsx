@@ -48,6 +48,9 @@ function RootApp() {
 
   useEffect(() => {
     initializeApp();
+    return () => {
+      syncService.destroy();
+    };
   }, []);
 
   // Configurar token getter cuando useAuth esté disponible
@@ -142,7 +145,7 @@ function RootApp() {
       <SafeAreaProvider>
         <PaperProvider theme={theme}>
           <AppNavigator />
-          <StatusBar style="auto" />
+          <StatusBar style="auto" translucent={false} />
         </PaperProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
@@ -151,7 +154,11 @@ function RootApp() {
 
 export default function App() {
   if (!publishableKey) {
-    throw new Error('Missing EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY');
+    return (
+      <View style={styles.container}>
+        <Text style={styles.errorText}>Falta EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY en el entorno.</Text>
+      </View>
+    );
   }
 
   return (

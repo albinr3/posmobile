@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { View, StyleSheet, FlatList } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { Searchbar, Surface, Text, Button } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { db } from '../../database/Database';
@@ -53,7 +53,7 @@ export function SelectCustomerScreen({ navigation }: SelectCustomerScreenProps) 
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.header}>
         <Searchbar
           placeholder="Buscar cliente..."

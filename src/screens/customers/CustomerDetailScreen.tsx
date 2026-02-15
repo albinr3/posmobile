@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { Surface, Text, Chip } from 'react-native-paper';
 import { db } from '../../database/Database';
 
@@ -34,7 +34,7 @@ export function CustomerDetailScreen({ route }: CustomerDetailScreenProps) {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.center}>
           <Text>Cargando cliente...</Text>
         </View>
@@ -44,7 +44,7 @@ export function CustomerDetailScreen({ route }: CustomerDetailScreenProps) {
 
   if (!customer) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.center}>
           <Text>No se encontro el cliente.</Text>
         </View>
@@ -53,7 +53,7 @@ export function CustomerDetailScreen({ route }: CustomerDetailScreenProps) {
   }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+    <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <Surface style={styles.card}>
           <Text style={styles.name}>{customer.name}</Text>

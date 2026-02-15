@@ -8,12 +8,12 @@ import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
-import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useAuthStore } from '../../store/authStore';
 
-interface AddProductScreenProps {
+interface ProductEditScreenProps {
   navigation: any;
+  route: any;
 }
 
 interface OptionItem {
@@ -21,10 +21,16 @@ interface OptionItem {
   name: string;
 }
 
-export function AddProductScreen({ navigation }: AddProductScreenProps) {
+export function ProductEditScreen({ navigation, route }: ProductEditScreenProps) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const { subUserToken, accountId } = useAuthStore();
+  const { productId } = route.params;
+
+  const [localId, setLocalId] = useState<string>('');
+  const [serverId, setServerId] = useState<string | null>(null);
+  const [currentStock, setCurrentStock] = useState(0);
+
   const [name, setName] = useState('');
   const [sku, setSku] = useState('');
   const [reference, setReference] = useState('');
@@ -38,119 +44,13 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   const [categoryMenuVisible, setCategoryMenuVisible] = useState(false);
   const [cost, setCost] = useState('');
   const [price, setPrice] = useState('');
-  const [stock, setStock] = useState('');
-  const [minStock, setMinStock] = useState('5');
+  const [minStock, setMinStock] = useState('0');
   const [taxRate, setTaxRate] = useState<'18' | '16' | '0'>('18');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [apiNextProductId, setApiNextProductId] = useState<string>('Cargando...');
-  const [idLoading, setIdLoading] = useState(false);
   const [catalogsLoading, setCatalogsLoading] = useState(false);
-  const nextIdLoadedRef = useRef(false);
-  const catalogsLoadedRef = useRef(false);
-
-  const resolveNextIdFromResponse = (payload: any): string | null => {
-    const source = payload?.data ?? payload;
-    const candidates = [
-      source?.nextId,
-      source?.nextID,
-      source?.nextCode,
-      source?.nextProductId,
-      source?.nextProductCode,
-      source?.id,
-      source?.code,
-      source?.productId,
-      source?.productCode,
-    ];
-    for (const value of candidates) {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        return String(value).trim();
-      }
-    }
-    return null;
-  };
-
-  const loadNextProductId = useCallback(async (force = false) => {
-    if (idLoading && !force) return;
-    try {
-      setIdLoading(true);
-      if (force) setApiNextProductId('Cargando...');
-      const clerkToken = await getToken();
-      if (!clerkToken || !subUserToken) {
-        setApiNextProductId('No disponible');
-        return;
-      }
-
-      const headers = {
-        Authorization: `Bearer ${clerkToken}`,
-        'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-        'X-SubUser-Token': subUserToken,
-        ...(accountId ? { 'X-Account-Id': accountId } : {}),
-      };
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-      const candidates = ['/api/products/next-id', '/api/products/next-code', '/api/products/next'];
-
-      for (const path of candidates) {
-        try {
-          const response = await axios.get(`${API_URL}${path}`, { headers });
-          const nextId = resolveNextIdFromResponse(response.data);
-          if (nextId) {
-            setApiNextProductId(nextId);
-            return;
-          }
-        } catch {
-          // intentar siguiente endpoint candidato
-        }
-      }
-
-      // Fallback: calcular siguiente correlativo usando listado de productos de la API
-      try {
-        let cursor: string | undefined;
-        let maxProductId = 0;
-        let guard = 0;
-        do {
-          const response = await axios.get(`${API_URL}/api/products`, {
-            headers,
-            params: {
-              take: 200,
-              ...(cursor ? { cursor } : {}),
-            },
-          });
-          const payload = response.data?.data || [];
-          for (const item of payload) {
-            const parsed = Number(item?.productId ?? 0);
-            if (Number.isFinite(parsed) && parsed > maxProductId) {
-              maxProductId = parsed;
-            }
-          }
-          cursor = response.data?.nextCursor || undefined;
-          guard += 1;
-        } while (cursor && guard < 50);
-
-        const nextFromList = maxProductId + 1;
-        if (nextFromList > 0) {
-          setApiNextProductId(`PROD-${String(nextFromList).padStart(4, '0')}`);
-          return;
-        }
-      } catch (fallbackError) {
-        console.error('Error fallback obteniendo próximo ID desde /api/products:', fallbackError);
-      }
-
-      setApiNextProductId('No disponible');
-    } catch (error) {
-      console.error('Error obteniendo próximo ID de producto:', error);
-      setApiNextProductId('No disponible');
-    } finally {
-      setIdLoading(false);
-    }
-  }, [accountId, getToken, idLoading, subUserToken]);
-
-  useEffect(() => {
-    if (!subUserToken) return;
-    if (nextIdLoadedRef.current) return;
-    nextIdLoadedRef.current = true;
-    loadNextProductId();
-  }, [loadNextProductId, subUserToken]);
+  const hasPendingImageSelectionRef = useRef(false);
+  const initializedProductRef = useRef<string | null>(null);
 
   const loadCatalogOptions = useCallback(async () => {
     try {
@@ -175,9 +75,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             const response = await axios.get(`${API_URL}${path}`, { headers });
             return response.data?.data || [];
           } catch (error: any) {
-            if (error?.response?.status !== 404) {
-              throw error;
-            }
+            if (error?.response?.status !== 404) throw error;
           }
         }
         return [];
@@ -201,38 +99,112 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
     }
   }, [accountId, getToken, subUserToken]);
 
+  const loadProduct = useCallback(async () => {
+    try {
+      const row = await db.queryFirst<any>('SELECT * FROM products WHERE local_id = ?', [productId]);
+      if (!row) {
+        Alert.alert('Error', 'Producto no encontrado', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        return;
+      }
+
+      let parsed: any = null;
+      try {
+        parsed = row.data ? JSON.parse(row.data) : null;
+      } catch {
+        parsed = null;
+      }
+
+      const imageFromData = Array.isArray(parsed?.imageUrls) && parsed.imageUrls.length > 0 ? String(parsed.imageUrls[0]) : null;
+
+      setLocalId(row.local_id);
+      setServerId(row.server_id ? String(row.server_id) : null);
+      setCurrentStock(Number(row.stock || parsed?.stock || 0));
+      setName(String(row.name || parsed?.name || ''));
+      setSku(String(row.sku || parsed?.sku || ''));
+      setReference(String(parsed?.reference || ''));
+      setSupplierId(parsed?.supplierId ? String(parsed.supplierId) : null);
+      setCategoryId(parsed?.categoryId ? String(parsed.categoryId) : null);
+      setCost(((Number(row.cost_cents || parsed?.costCents || 0) || 0) / 100).toString());
+      setPrice(((Number(row.price_cents || parsed?.priceCents || 0) || 0) / 100).toString());
+      setMinStock(String(parsed?.minStock ?? 0));
+      const taxRaw = String(parsed?.itbisRateBp ?? parsed?.taxRate ?? 18);
+      setTaxRate(taxRaw === '16' || taxRaw === '0' ? (taxRaw as '16' | '0') : '18');
+      if (!hasPendingImageSelectionRef.current) {
+        setImageUri(imageFromData || row.image_url || parsed?.imageUri || null);
+      }
+    } catch (error) {
+      console.error('Error cargando producto para edición:', error);
+      Alert.alert('Error', 'No se pudo cargar el producto');
+    }
+  }, [navigation, productId]);
+
   useEffect(() => {
-    if (!subUserToken) return;
-    if (catalogsLoadedRef.current) return;
-    catalogsLoadedRef.current = true;
+    if (initializedProductRef.current === productId) return;
+    initializedProductRef.current = productId;
+    hasPendingImageSelectionRef.current = false;
+    loadProduct();
     loadCatalogOptions();
-  }, [loadCatalogOptions, subUserToken]);
+  }, [productId, loadCatalogOptions, loadProduct]);
+
+  useEffect(() => {
+    if (!supplierId) return;
+    const supplier = suppliers.find((item) => item.id === supplierId);
+    if (supplier) setSupplierName(supplier.name);
+  }, [supplierId, suppliers]);
+
+  useEffect(() => {
+    if (!categoryId) return;
+    const category = categories.find((item) => item.id === categoryId);
+    if (category) setCategoryName(category.name);
+  }, [categoryId, categories]);
 
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permisos', 'Se necesita acceso a la galería');
-      return;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permisos', 'Se necesita acceso a la galería');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: 'images',
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (!result.canceled) {
+        hasPendingImageSelectionRef.current = true;
+        setImageUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error seleccionando imagen en edición de producto:', error);
+      Alert.alert('Error', 'No se pudo abrir la galería');
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: 'images',
-      allowsEditing: false,
-      quality: 0.8,
-    });
-    if (!result.canceled) setImageUri(result.assets[0].uri);
   };
 
   const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permisos', 'Se necesita acceso a la cámara');
-      return;
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permisos', 'Se necesita acceso a la cámara');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      if (!result.canceled) {
+        hasPendingImageSelectionRef.current = true;
+        setImageUri(result.assets[0].uri);
+      }
+    } catch (error) {
+      console.error('Error tomando foto en edición de producto:', error);
+      Alert.alert('Error', 'No se pudo abrir la cámara');
     }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: false,
-      quality: 0.8,
+  };
+
+  const scanBarcode = () => {
+    navigation.navigate('BarcodeScanner', {
+      onScan: (barcode: string) => setSku(barcode),
     });
-    if (!result.canceled) setImageUri(result.assets[0].uri);
   };
 
   const handleSave = async () => {
@@ -251,53 +223,66 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
     setLoading(true);
     try {
-      const localId = generateLocalId();
       const costCents = Math.round(parseFloat(cost) * 100);
       const priceCents = Math.round(parseFloat(price) * 100);
-      const stockValue = stock ? parseFloat(stock) : 0;
+      const isLocalImage = !!imageUri && imageUri.startsWith('file://');
+      const imageUrls = imageUri && !isLocalImage ? [imageUri] : [];
 
-      const productData = {
+      const payload = {
+        id: serverId || undefined,
         localId,
-        apiProductId: apiNextProductId !== 'No disponible' && apiNextProductId !== 'Cargando...' ? apiNextProductId : null,
         name: name.trim(),
         sku: sku.trim() || null,
-        costCents,
-        priceCents,
-        stock: stockValue,
         reference: reference.trim() || null,
         supplierId,
         categoryId,
+        costCents,
+        priceCents,
+        stock: currentStock,
         minStock: Number(minStock || 0),
-        taxRate: Number(taxRate),
-        imageUri,
-        createdAt: Date.now(),
+        itbisRateBp: Number(taxRate) * 100,
+        imageUri: isLocalImage ? imageUri : null,
+        imageUrls,
+        updatedAt: Date.now(),
       };
 
-      await db.insert('products', {
-        local_id: localId,
-        name: productData.name,
-        sku: productData.sku,
-        cost_cents: costCents,
-        price_cents: priceCents,
-        stock: stockValue,
-        synced: 0,
-        data: JSON.stringify(productData),
-      });
+      await db.update(
+        'products',
+        localId,
+        {
+          name: payload.name,
+          sku: payload.sku,
+          cost_cents: payload.costCents,
+          price_cents: payload.priceCents,
+          stock: currentStock,
+          synced: 0,
+          data: JSON.stringify(payload),
+        },
+        'local_id'
+      );
 
-      await syncService.queueOperation('product', 'create', productData, localId);
-      Alert.alert('Éxito', 'Producto guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      if (serverId) {
+        await db.runAsync(
+          "DELETE FROM sync_queue WHERE entity_type = 'product' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
+          [localId]
+        );
+        await syncService.queueOperation('product', 'update', payload, localId);
+      } else {
+        await db.runAsync(
+          "DELETE FROM sync_queue WHERE entity_type = 'product' AND entity_local_id = ? AND status IN ('pending','error')",
+          [localId]
+        );
+        await syncService.queueOperation('product', 'create', payload, localId);
+      }
+
+      hasPendingImageSelectionRef.current = false;
+      Alert.alert('Éxito', 'Producto actualizado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {
-      console.error('Error guardando producto:', error);
-      Alert.alert('Error', 'No se pudo guardar el producto');
+      console.error('Error actualizando producto:', error);
+      Alert.alert('Error', 'No se pudo actualizar el producto');
     } finally {
       setLoading(false);
     }
-  };
-
-  const scanBarcode = () => {
-    navigation.navigate('BarcodeScanner', {
-      onScan: (barcode: string) => setSku(barcode),
-    });
   };
 
   return (
@@ -306,7 +291,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
           <Icon source="arrow-left" size={24} color="#fff" />
         </TouchableOpacity>
-        <Text style={styles.topHeaderTitle}>Nuevo Producto</Text>
+        <Text style={styles.topHeaderTitle}>Editar Producto</Text>
         <View style={styles.backBtn} />
       </View>
 
@@ -317,16 +302,6 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
               <Text style={styles.sectionIconText}>🧾</Text>
             </View>
             <Text style={styles.sectionTitle}>Información General</Text>
-          </View>
-
-          <View style={styles.readOnlyField}>
-            <View style={styles.readOnlyTop}>
-              <Text style={styles.readOnlyLabel}>ID (Definido por API)</Text>
-              <TouchableOpacity onPress={() => loadNextProductId(true)} style={styles.refreshIdBtn}>
-                <Icon source="refresh" size={16} color={ui.colors.textMuted} />
-              </TouchableOpacity>
-            </View>
-            <Text style={styles.readOnlyValue}>{apiNextProductId}</Text>
           </View>
 
           <TextInput
@@ -481,23 +456,9 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
           <View style={styles.row}>
             <View style={styles.half}>
-              <Text style={styles.counterLabel}>Existencia Actual</Text>
-              <View style={styles.counterWrap}>
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setStock(String(Math.max(0, Number(stock || 0) - 1)))}>
-                  <Icon source="minus" size={16} color={ui.colors.textMuted} />
-                </TouchableOpacity>
-                <TextInput
-                  value={stock}
-                  onChangeText={setStock}
-                  mode="flat"
-                  keyboardType="decimal-pad"
-                  style={styles.counterInput}
-                  underlineColor="transparent"
-                  activeUnderlineColor="transparent"
-                />
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setStock(String(Number(stock || 0) + 1))}>
-                  <Icon source="plus" size={16} color={ui.colors.textMuted} />
-                </TouchableOpacity>
+              <Text style={styles.counterLabel}>Existencia Actual (solo lectura)</Text>
+              <View style={styles.counterWrapReadOnly}>
+                <Text style={styles.readOnlyStockValue}>{currentStock}</Text>
               </View>
             </View>
             <View style={styles.half}>
@@ -546,7 +507,6 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             ))}
           </View>
         </View>
-
       </ScrollView>
 
       <View style={[styles.bottomAction, { paddingBottom: Math.max(insets.bottom, 10) }]}>
@@ -560,7 +520,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
           style={styles.saveButton}
           contentStyle={styles.saveButtonContent}
         >
-          Guardar Producto
+          Guardar Cambios
         </Button>
       </View>
     </SafeAreaView>
@@ -612,20 +572,6 @@ const styles = StyleSheet.create({
   },
   sectionIconText: { fontSize: 14 },
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700' },
-  readOnlyField: {
-    margin: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: ui.colors.border,
-    borderRadius: ui.radius.md,
-    backgroundColor: '#F8F7FB',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  readOnlyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  refreshIdBtn: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center' },
-  readOnlyLabel: { color: ui.colors.textMuted, fontSize: 11, fontWeight: '600' },
-  readOnlyValue: { color: '#6B7280', fontSize: 14, fontWeight: '700', marginTop: 4 },
   row: {
     flexDirection: 'row',
     gap: 10,
@@ -658,22 +604,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   scanText: { color: ui.colors.primary, fontWeight: '700' },
-  counterLabel: { color: ui.colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 6 },
-  counterWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: ui.colors.border,
-    borderRadius: ui.radius.md,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-  },
-  counterBtn: {
-    width: 36,
-    height: 46,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   imageWrap: {
     margin: 14,
     marginBottom: 10,
@@ -688,13 +618,6 @@ const styles = StyleSheet.create({
   productImage: { width: '100%', height: '100%', borderRadius: ui.radius.md },
   imagePlaceholder: { color: ui.colors.textMuted, fontWeight: '600' },
   imageButtonsRow: { marginHorizontal: 14, marginBottom: 14, flexDirection: 'row', gap: 8 },
-  counterInput: {
-    flex: 1,
-    height: 46,
-    backgroundColor: 'transparent',
-    textAlign: 'center',
-  },
-  taxRow: { marginTop: 10, flexDirection: 'row', gap: 8, paddingHorizontal: 14 },
   smallBtn: {
     flex: 1,
     height: 40,
@@ -705,6 +628,38 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   smallBtnText: { color: ui.colors.text, fontWeight: '600' },
+  counterLabel: { color: ui.colors.textMuted, fontSize: 11, fontWeight: '700', marginBottom: 6 },
+  counterWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    borderRadius: ui.radius.md,
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  counterWrapReadOnly: {
+    height: 46,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    borderRadius: ui.radius.md,
+    backgroundColor: '#F8F7FB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readOnlyStockValue: { color: '#6B7280', fontSize: 16, fontWeight: '800' },
+  counterBtn: {
+    width: 36,
+    height: 46,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  counterInput: {
+    flex: 1,
+    height: 46,
+    backgroundColor: 'transparent',
+    textAlign: 'center',
+  },
   taxChips: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 10, gap: 8 },
   taxChip: {
     height: 38,
@@ -733,4 +688,3 @@ const styles = StyleSheet.create({
   saveButton: { borderRadius: ui.radius.lg },
   saveButtonContent: { height: 52 },
 });
-

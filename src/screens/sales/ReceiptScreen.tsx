@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Share } from 'react-native';
 import { Text, Surface, Button, Divider } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { Sale, SaleItem } from '../../types';
@@ -87,7 +87,7 @@ Gracias por su compra!
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.loadingContainer}>
           <Text>Cargando...</Text>
         </View>
@@ -97,7 +97,7 @@ Gracias por su compra!
 
   if (!sale) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.loadingContainer}>
           <Text>Venta no encontrada</Text>
         </View>

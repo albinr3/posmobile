@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Image, KeyboardAvoidingView, Platform } from 'react-native';
-import { TextInput, Button, Text, Surface } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  View,
+  StyleSheet,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableOpacity,
+  TextInput,
+} from 'react-native';
+import { Button, Text } from 'react-native-paper';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useOAuth, useSignIn, useAuth } from '@clerk/clerk-expo';
 import { makeRedirectUri } from 'expo-auth-session';
+import { ui } from '../../theme/ui';
 
 interface LoginScreenProps {
   navigation: any;
@@ -17,26 +25,16 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const { startOAuthFlow } = useOAuth({ strategy: 'oauth_google' });
 
   const handleEmailCode = async () => {
-    if (!email || !email.includes('@')) {
-      return;
-    }
-
-    if (!isLoaded) {
-      return;
-    }
+    if (!email || !email.includes('@')) return;
+    if (!isLoaded) return;
 
     setLoading(true);
     try {
       await signIn.create({ identifier: email.trim() });
-
       const factors = (signIn.supportedFirstFactors as any[]) || [];
-      const emailCodeFactor = factors.find(
-        (factor: any) => factor.strategy === 'email_code'
-      );
+      const emailCodeFactor = factors.find((factor: any) => factor.strategy === 'email_code');
       const emailAddressId = emailCodeFactor?.emailAddressId;
-      if (!emailAddressId) {
-        throw new Error('No email_code factor available for this identifier');
-      }
+      if (!emailAddressId) throw new Error('No email_code factor available for this identifier');
 
       await signIn.prepareFirstFactor({
         strategy: 'email_code',
@@ -53,13 +51,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const handleGoogle = async () => {
     setLoading(true);
     try {
-      // Si ya hay una sesión activa, cerrarla primero
       if (isSignedIn) {
         try {
           await signOut();
         } catch (signOutError) {
           console.log('Error cerrando sesión previa:', signOutError);
-          // Continuar de todas formas
         }
       }
 
@@ -74,17 +70,10 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         navigation.navigate('BiometricSetup');
       }
     } catch (error: any) {
-      // Si el error es "already signed in", intentar usar la sesión existente
-      if (error?.errors?.[0]?.message?.includes('already signed in') || 
-          error?.message?.includes('already signed in')) {
-        try {
-          // Si ya está autenticado, navegar directamente
-          if (isSignedIn) {
-            navigation.navigate('BiometricSetup');
-            return;
-          }
-        } catch (navigateError) {
-          console.error('Error navegando:', navigateError);
+      if (error?.errors?.[0]?.message?.includes('already signed in') || error?.message?.includes('already signed in')) {
+        if (isSignedIn) {
+          navigation.navigate('BiometricSetup');
+          return;
         }
       }
       console.error('Error Google OAuth:', error);
@@ -95,55 +84,44 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
-        <View style={styles.content}>
-          <View style={styles.logoContainer}>
-            <Text style={styles.title}>MOVOPos</Text>
-            <Text style={styles.subtitle}>Sistema de Punto de Venta</Text>
-          </View>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
+        <View style={styles.hero}>
+          <View style={styles.heroBubbleTop} />
+          <View style={styles.heroBubbleBottom} />
+          <Text style={styles.brand}>MOVOpos</Text>
+          <Text style={styles.brandSubtitle}>Sistema de Punto de Venta</Text>
+        </View>
 
-          <Surface style={styles.card}>
-            <Text style={styles.cardTitle}>Iniciar Sesión</Text>
-            <Text style={styles.cardDescription}>
-              Ingresa tu email o continúa con Google
-            </Text>
+        <View style={styles.panel}>
+          <Text style={styles.panelTitle}>Bienvenido</Text>
+          <Text style={styles.panelSubtitle}>Ingresa tu correo para continuar</Text>
 
-            <TextInput
-              label="Email"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              mode="outlined"
-              style={styles.input}
-              placeholder="correo@empresa.com"
-            />
+          <TextInput
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+            placeholder="correo@empresa.com"
+            placeholderTextColor={ui.colors.textMuted}
+            style={styles.input}
+          />
 
-            <Button
-              mode="contained"
-              onPress={handleEmailCode}
-              loading={loading}
-              disabled={loading || !email.includes('@')}
-              style={styles.button}
-              contentStyle={styles.buttonContent}
-            >
-              Enviar código al email
-            </Button>
+          <Button
+            mode="contained"
+            onPress={handleEmailCode}
+            loading={loading}
+            disabled={loading || !email.includes('@')}
+            buttonColor={ui.colors.primary}
+            textColor="#fff"
+            style={styles.primaryButton}
+            contentStyle={styles.buttonContent}
+          >
+            Enviar código
+          </Button>
 
-            <Button
-              mode="outlined"
-              onPress={handleGoogle}
-              disabled={loading}
-              style={styles.secondaryButton}
-              contentStyle={styles.buttonContent}
-              icon="google"
-            >
-              Continuar con Google
-            </Button>
-          </Surface>
+          <TouchableOpacity onPress={handleGoogle} disabled={loading} style={styles.googleButton}>
+            <Text style={styles.googleButtonText}>Continuar con Google</Text>
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -151,57 +129,67 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+  container: { flex: 1, backgroundColor: ui.colors.background },
+  keyboardView: { flex: 1 },
+  hero: {
+    height: '43%',
+    backgroundColor: ui.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
   },
-  keyboardView: {
-    flex: 1,
+  heroBubbleTop: {
+    position: 'absolute',
+    width: 240,
+    height: 240,
+    borderRadius: 240,
+    top: -120,
+    right: -90,
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
-  content: {
+  heroBubbleBottom: {
+    position: 'absolute',
+    width: 220,
+    height: 220,
+    borderRadius: 220,
+    bottom: -110,
+    left: -80,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+  },
+  brand: { color: '#fff', fontSize: 38, fontWeight: '800', letterSpacing: 0.4 },
+  brandSubtitle: { color: 'rgba(255,255,255,0.85)', fontSize: 14, marginTop: 8 },
+  panel: {
     flex: 1,
-    padding: 20,
+    marginTop: -24,
+    backgroundColor: ui.colors.surface,
+    borderTopLeftRadius: 30,
+    borderTopRightRadius: 30,
+    paddingHorizontal: 24,
+    paddingTop: 28,
+  },
+  panelTitle: { fontSize: 28, color: ui.colors.text, fontWeight: '700' },
+  panelSubtitle: { marginTop: 4, marginBottom: 20, color: ui.colors.textMuted, fontSize: 14 },
+  input: {
+    height: 54,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    paddingHorizontal: 16,
+    fontSize: 16,
+    color: ui.colors.text,
+    backgroundColor: '#F9F8FC',
+  },
+  primaryButton: { marginTop: 18, borderRadius: ui.radius.lg },
+  buttonContent: { height: 50 },
+  googleButton: {
+    marginTop: 12,
+    height: 50,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 40,
-  },
-  title: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#1a73e8',
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#666',
-    marginTop: 8,
-  },
-  card: {
-    padding: 24,
-    borderRadius: 12,
-    elevation: 2,
-  },
-  cardTitle: {
-    fontSize: 24,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  cardDescription: {
-    fontSize: 14,
-    color: '#666',
-    marginBottom: 24,
-  },
-  input: {
-    marginBottom: 16,
-  },
-  button: {
-    marginTop: 8,
-  },
-  secondaryButton: {
-    marginTop: 12,
-  },
-  buttonContent: {
-    paddingVertical: 8,
-  },
+  googleButtonText: { color: ui.colors.text, fontWeight: '600' },
 });
+

@@ -1,14 +1,23 @@
 import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
-import { Text, Surface, Card, Button, Divider } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text } from 'react-native-paper';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
+import Svg, { Circle } from 'react-native-svg';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
 import { useSyncStore } from '../../store/syncStore';
+import { ui } from '../../theme/ui';
 
 interface DashboardScreenProps {
   navigation: any;
+}
+
+interface PaymentSlice {
+  label: string;
+  value: number;
+  color: string;
 }
 
 export function DashboardScreen({ navigation }: DashboardScreenProps) {
@@ -22,7 +31,9 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
     totalCustomers: 0,
   });
   const [refreshing, setRefreshing] = useState(false);
-  const { isOnline, pendingCount, lastSyncTime } = useSyncStore();
+  const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentSlice[]>([]);
+  const { isOnline, pendingCount } = useSyncStore();
+  const tabBarHeight = useBottomTabBarHeight();
 
   useFocusEffect(
     useCallback(() => {
@@ -36,25 +47,21 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
       today.setHours(0, 0, 0, 0);
       const todayTimestamp = today.getTime();
 
-      // Ventas del día
       const salesResult = await db.queryFirst<any>(
-        `SELECT COUNT(*) as count, COALESCE(SUM(total_cents), 0) as total 
+        `SELECT COUNT(*) as count, COALESCE(SUM(total_cents), 0) as total
          FROM sales WHERE created_at >= ?`,
         [todayTimestamp]
       );
-
-      // Cuentas por cobrar
+      const salesRows = await db.query<any>(
+        `SELECT total_cents, data
+         FROM sales WHERE created_at >= ?`,
+        [todayTimestamp]
+      );
       const arResult = await db.queryFirst<any>(
-        `SELECT COUNT(*) as count, COALESCE(SUM(balance_cents), 0) as total 
+        `SELECT COUNT(*) as count, COALESCE(SUM(balance_cents), 0) as total
          FROM accounts_receivable WHERE status IN ('PENDIENTE', 'PARCIAL')`
       );
-
-      // Productos con stock bajo
-      const lowStockResult = await db.queryFirst<any>(
-        `SELECT COUNT(*) as count FROM products WHERE stock <= 10`
-      );
-
-      // Totales
+      const lowStockResult = await db.queryFirst<any>(`SELECT COUNT(*) as count FROM products WHERE stock <= 10`);
       const productsResult = await db.queryFirst<any>('SELECT COUNT(*) as count FROM products');
       const customersResult = await db.queryFirst<any>('SELECT COUNT(*) as count FROM customers');
 
@@ -67,6 +74,49 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
         totalProducts: productsResult?.count || 0,
         totalCustomers: customersResult?.count || 0,
       });
+
+      let cashSalesCents = 0;
+      let creditSalesCents = 0;
+
+      for (const sale of salesRows) {
+        let method = 'EFECTIVO';
+        try {
+          const parsed = sale?.data ? JSON.parse(sale.data) : null;
+          method = parsed?.paymentMethod || parsed?.payment_method || 'EFECTIVO';
+        } catch {
+          method = 'EFECTIVO';
+        }
+        const normalizedMethod = String(method).toUpperCase();
+        const amount = sale.total_cents || 0;
+        if (normalizedMethod === 'CREDITO') {
+          creditSalesCents += amount;
+        } else {
+          cashSalesCents += amount;
+        }
+      }
+
+      const paymentsRows = await db.query<any>('SELECT amount_cents, data FROM payments');
+      let collectedTodayCents = 0;
+      for (const payment of paymentsRows) {
+        let createdAt = 0;
+        try {
+          const parsed = payment?.data ? JSON.parse(payment.data) : null;
+          createdAt = Number(parsed?.createdAt || 0);
+        } catch {
+          createdAt = 0;
+        }
+
+        if (createdAt >= todayTimestamp && createdAt < todayTimestamp + 24 * 60 * 60 * 1000) {
+          collectedTodayCents += payment.amount_cents || 0;
+        }
+      }
+
+      const slices: PaymentSlice[] = [
+        { label: 'Ventas al contado', value: cashSalesCents, color: '#1FA464' },
+        { label: 'Ventas a crédito', value: creditSalesCents, color: '#7F13EC' },
+        { label: 'Cobros realizados hoy', value: collectedTodayCents, color: '#E27C1B' },
+      ];
+      setPaymentBreakdown(slices);
     } catch (error) {
       console.error('Error cargando estadísticas:', error);
     } finally {
@@ -79,117 +129,118 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
     loadStats();
   };
 
-  const navigateThroughHome = (tabName: string, stackScreen?: string) => {
-    navigation.navigate('Home', {
-      screen: tabName,
-      ...(stackScreen ? { params: { screen: stackScreen } } : {}),
-    });
-  };
+  const totalPie = paymentBreakdown.reduce((sum, item) => sum + item.value, 0);
+  const radius = 62;
+  const strokeWidth = 26;
+  const circumference = 2 * Math.PI * radius;
+  let currentOffset = 0;
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
+    <SafeAreaView style={styles.container} edges={[]}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + 24 }]}
       >
-        {/* Status de conexión */}
-        <Surface style={[styles.statusBar, !isOnline && styles.offlineBar]}>
-          <Text style={styles.statusText}>
-            {isOnline ? '🟢 Conectado' : '🔴 Sin conexión'}
-          </Text>
-          {pendingCount > 0 && (
-            <Text style={styles.pendingText}>{pendingCount} pendientes de sincronizar</Text>
+        <View style={styles.pageHeader}>
+          <Text style={styles.pageHeaderTitle}>Dashboard</Text>
+          <Text style={styles.pageHeaderSubtitle}>Resumen de ventas, inventario y cuentas por cobrar.</Text>
+        </View>
+
+        <View style={styles.headerCard}>
+          <Text style={styles.headerTitle}>Resumen del negocio</Text>
+          <Text style={styles.headerSubtitle}>Controla ventas, inventario y cobros en tiempo real</Text>
+          <View style={styles.connectionPill}>
+            <Text style={styles.connectionText}>{isOnline ? 'En linea' : 'Sin conexion'}</Text>
+            <Text style={styles.pendingText}>Pendientes: {pendingCount}</Text>
+          </View>
+        </View>
+
+        <View style={styles.highlightCard}>
+          <Text style={styles.highlightLabel}>Ventas de hoy</Text>
+          <Text style={styles.highlightValue}>{formatCurrency(stats.salesToday)}</Text>
+          <Text style={styles.highlightCaption}>{stats.salesCount} transacciones</Text>
+        </View>
+
+        <View style={styles.gridRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricValue}>{formatCurrency(stats.pendingAR)}</Text>
+            <Text style={styles.metricLabel}>Por cobrar</Text>
+            <Text style={styles.metricSub}>{stats.pendingARCount} cuentas</Text>
+          </View>
+          <View style={[styles.metricCard, stats.lowStockCount > 0 && styles.warningCard]}>
+            <Text style={[styles.metricValue, stats.lowStockCount > 0 && styles.warningText]}>{stats.lowStockCount}</Text>
+            <Text style={styles.metricLabel}>Stock bajo</Text>
+            <Text style={styles.metricSub}>productos</Text>
+          </View>
+        </View>
+
+        <View style={styles.gridRow}>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricValue}>{stats.totalProducts}</Text>
+            <Text style={styles.metricLabel}>Productos</Text>
+          </View>
+          <View style={styles.metricCard}>
+            <Text style={styles.metricValue}>{stats.totalCustomers}</Text>
+            <Text style={styles.metricLabel}>Clientes</Text>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>Resumen de hoy</Text>
+        <View style={styles.chartCard}>
+          {totalPie > 0 ? (
+            <>
+              <View style={styles.chartWrap}>
+                <Svg width={160} height={160} viewBox="0 0 160 160">
+                  <Circle cx={80} cy={80} r={radius} stroke="#EFEAF8" strokeWidth={strokeWidth} fill="none" />
+                  {paymentBreakdown.map((slice) => {
+                    const progress = slice.value / totalPie;
+                    const dash = progress * circumference;
+                    const offset = circumference - currentOffset;
+                    currentOffset += dash;
+                    return (
+                      <Circle
+                        key={slice.label}
+                        cx={80}
+                        cy={80}
+                        r={radius}
+                        stroke={slice.color}
+                        strokeWidth={strokeWidth}
+                        strokeDasharray={`${dash} ${circumference - dash}`}
+                        strokeDashoffset={offset}
+                        strokeLinecap="butt"
+                        rotation={-90}
+                        originX={80}
+                        originY={80}
+                        fill="none"
+                      />
+                    );
+                  })}
+                </Svg>
+                <View style={styles.chartCenter}>
+                  <Text style={styles.chartCenterLabel}>Total</Text>
+                  <Text style={styles.chartCenterValue}>{formatCurrency(totalPie)}</Text>
+                </View>
+              </View>
+              <View style={styles.legendList}>
+                {paymentBreakdown.map((slice) => {
+                  const percentage = Math.round((slice.value / totalPie) * 100);
+                  return (
+                    <View key={slice.label} style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: slice.color }]} />
+                      <View style={styles.legendTextWrap}>
+                        <Text style={styles.legendLabel}>{slice.label}</Text>
+                        <Text style={styles.legendValue}>
+                          {formatCurrency(slice.value)} ({percentage}%)
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </>
+          ) : (
+            <Text style={styles.emptyChartText}>No hay ventas hoy para graficar.</Text>
           )}
-        </Surface>
-
-        {/* Ventas del día */}
-        <Card style={styles.mainCard}>
-          <Card.Content>
-            <Text style={styles.cardTitle}>Ventas de Hoy</Text>
-            <Text style={styles.mainValue}>{formatCurrency(stats.salesToday)}</Text>
-            <Text style={styles.cardSubtext}>{stats.salesCount} transacciones</Text>
-          </Card.Content>
-          <Card.Actions>
-            <Button onPress={() => navigateThroughHome('POS', 'POSMain')}>
-              Ver Ventas
-            </Button>
-          </Card.Actions>
-        </Card>
-
-        {/* Grid de estadísticas */}
-        <View style={styles.statsGrid}>
-          <Surface style={styles.statCard}>
-            <Text style={styles.statValue}>{formatCurrency(stats.pendingAR)}</Text>
-            <Text style={styles.statLabel}>Por Cobrar</Text>
-            <Text style={styles.statSubtext}>{stats.pendingARCount} cuentas</Text>
-          </Surface>
-
-          <Surface style={[styles.statCard, stats.lowStockCount > 0 && styles.warningCard]}>
-            <Text style={[styles.statValue, stats.lowStockCount > 0 && styles.warningText]}>
-              {stats.lowStockCount}
-            </Text>
-            <Text style={styles.statLabel}>Stock Bajo</Text>
-            <Text style={styles.statSubtext}>productos</Text>
-          </Surface>
-        </View>
-
-        <View style={styles.statsGrid}>
-          <Surface style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.totalProducts}</Text>
-            <Text style={styles.statLabel}>Productos</Text>
-            <Text style={styles.statSubtext}>en inventario</Text>
-          </Surface>
-
-          <Surface style={styles.statCard}>
-            <Text style={styles.statValue}>{stats.totalCustomers}</Text>
-            <Text style={styles.statLabel}>Clientes</Text>
-            <Text style={styles.statSubtext}>registrados</Text>
-          </Surface>
-        </View>
-
-        <Divider style={styles.divider} />
-
-        {/* Acciones rápidas */}
-        <Text style={styles.sectionTitle}>Acciones Rápidas</Text>
-        <View style={styles.actionsGrid}>
-          <Button
-            mode="contained"
-            icon="cash-register"
-            onPress={() => navigateThroughHome('POS', 'POSMain')}
-            style={styles.actionButton}
-            contentStyle={styles.actionButtonContent}
-          >
-            Nueva Venta
-          </Button>
-          <Button
-            mode="outlined"
-            icon="account-plus"
-            onPress={() => navigateThroughHome('CustomersTab', 'AddCustomer')}
-            style={styles.actionButton}
-            contentStyle={styles.actionButtonContent}
-          >
-            Nuevo Cliente
-          </Button>
-          <Button
-            mode="outlined"
-            icon="package-variant"
-            onPress={() => navigateThroughHome('Inventory', 'AddProduct')}
-            style={styles.actionButton}
-            contentStyle={styles.actionButtonContent}
-          >
-            Nuevo Producto
-          </Button>
-          <Button
-            mode="outlined"
-            icon="cash-plus"
-            onPress={() => navigateThroughHome('AR', 'ARList')}
-            style={styles.actionButton}
-            contentStyle={styles.actionButtonContent}
-          >
-            Cobrar
-          </Button>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -197,99 +248,89 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+  container: { flex: 1, backgroundColor: ui.colors.background },
+  pageHeader: {
+    marginBottom: 6,
   },
-  scrollContent: {
-    padding: 12,
+  pageHeaderTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: ui.colors.text,
   },
-  statusBar: {
+  pageHeaderSubtitle: {
+    fontSize: 13,
+    color: ui.colors.textMuted,
+    marginTop: 2,
+  },
+  content: { padding: 14, paddingTop: 12 },
+  headerCard: {
+    backgroundColor: ui.colors.primary,
+    borderRadius: ui.radius.xl,
+    padding: 18,
+  },
+  headerTitle: { color: '#fff', fontWeight: '800', fontSize: 24 },
+  headerSubtitle: { marginTop: 4, color: 'rgba(255,255,255,0.85)', fontSize: 13 },
+  connectionPill: {
+    marginTop: 14,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 12,
-    backgroundColor: '#e8f5e9',
   },
-  offlineBar: {
-    backgroundColor: '#ffebee',
-  },
-  statusText: {
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  pendingText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  mainCard: {
-    marginBottom: 12,
-  },
-  cardTitle: {
-    fontSize: 14,
-    color: '#666',
-  },
-  mainValue: {
-    fontSize: 36,
-    fontWeight: 'bold',
-    color: '#1a73e8',
-    marginVertical: 8,
-  },
-  cardSubtext: {
-    fontSize: 14,
-    color: '#888',
-  },
-  statsGrid: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 12,
-  },
-  statCard: {
-    flex: 1,
+  connectionText: { color: '#fff', fontWeight: '700', fontSize: 12 },
+  pendingText: { color: '#fff', fontSize: 12 },
+  highlightCard: {
+    marginTop: 12,
+    backgroundColor: ui.colors.surface,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
     padding: 16,
-    borderRadius: 12,
+  },
+  highlightLabel: { color: ui.colors.textMuted, fontSize: 13 },
+  highlightValue: { fontSize: 34, color: ui.colors.primary, fontWeight: '800', marginTop: 4 },
+  highlightCaption: { color: ui.colors.textMuted, fontSize: 12 },
+  gridRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  metricCard: {
+    flex: 1,
+    backgroundColor: ui.colors.surface,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    padding: 14,
+  },
+  warningCard: { borderColor: '#FFDFB7', backgroundColor: '#FFF6EA' },
+  metricValue: { fontSize: 24, fontWeight: '800', color: ui.colors.text },
+  warningText: { color: ui.colors.warning },
+  metricLabel: { marginTop: 2, fontSize: 13, color: ui.colors.text },
+  metricSub: { marginTop: 1, fontSize: 11, color: ui.colors.textMuted },
+  sectionTitle: { marginTop: 16, marginBottom: 10, color: ui.colors.text, fontWeight: '700', fontSize: 17 },
+  chartCard: {
+    backgroundColor: ui.colors.surface,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    padding: 14,
+  },
+  chartWrap: { alignItems: 'center', justifyContent: 'center' },
+  chartCenter: {
+    position: 'absolute',
     alignItems: 'center',
-    elevation: 1,
   },
-  warningCard: {
-    backgroundColor: '#fff3e0',
-  },
-  statValue: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#1a73e8',
-  },
-  warningText: {
-    color: '#f57c00',
-  },
-  statLabel: {
-    fontSize: 14,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  statSubtext: {
-    fontSize: 12,
-    color: '#888',
-  },
-  divider: {
-    marginVertical: 16,
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  actionButton: {
-    width: '47%',
-  },
-  actionButtonContent: {
-    paddingVertical: 8,
+  chartCenterLabel: { color: ui.colors.textMuted, fontSize: 11 },
+  chartCenterValue: { color: ui.colors.text, fontSize: 13, fontWeight: '700', textAlign: 'center', marginTop: 2 },
+  legendList: { marginTop: 10, gap: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center' },
+  legendDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
+  legendTextWrap: { flexDirection: 'row', justifyContent: 'space-between', flex: 1 },
+  legendLabel: { color: ui.colors.text, fontSize: 12, fontWeight: '600' },
+  legendValue: { color: ui.colors.textMuted, fontSize: 12 },
+  emptyChartText: {
+    color: ui.colors.textMuted,
+    textAlign: 'center',
+    paddingVertical: 28,
   },
 });
+

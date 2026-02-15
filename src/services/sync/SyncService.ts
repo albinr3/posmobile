@@ -1,10 +1,26 @@
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { db } from '../../database/Database';
 import { useSyncStore } from '../../store/syncStore';
 import { useAuth } from '@clerk/clerk-expo';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+
+function summarizeError(error: any) {
+  if (!error) return { message: 'Error desconocido' };
+  if (axios.isAxiosError(error)) {
+    return {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    };
+  }
+  return {
+    message: error?.message || String(error),
+    name: error?.name,
+  };
+}
 
 // Helper para obtener token de autenticación
 // Nota: Esta función debe ser llamada desde un contexto donde Clerk esté disponible
@@ -25,7 +41,9 @@ async function getAuthToken(): Promise<string | null> {
 
 class SyncService {
   private isSyncing = false;
+  private isInitialized = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
+  private unsubscribeNetInfo: (() => void) | null = null;
   private getTokenFn: (() => Promise<string | null>) | null = null;
   private getSubUserTokenFn: (() => Promise<string | null>) | null = null;
 
@@ -50,8 +68,11 @@ class SyncService {
   }
 
   async init() {
+    if (this.isInitialized) return;
+    this.isInitialized = true;
+
     // Escuchar cambios de conectividad
-    NetInfo.addEventListener(state => {
+    this.unsubscribeNetInfo = NetInfo.addEventListener(state => {
       useSyncStore.getState().setIsOnline(state.isConnected ?? false);
       
       if (state.isConnected) {
@@ -192,6 +213,27 @@ class SyncService {
     if (!subUserToken) {
       throw new Error('No hay token de subusuario disponible. Por favor, selecciona un usuario.');
     }
+
+    if (
+      item.entity_type === 'product' &&
+      (item.action === 'create' || item.action === 'update') &&
+      data?.imageUri &&
+      (!Array.isArray(data.imageUrls) || data.imageUrls.length === 0)
+    ) {
+      const uploadedUrls = await this.uploadProductImageFromUri(data.imageUri, clerkToken, subUserToken, accountId);
+      if (uploadedUrls.length === 0) {
+        console.warn(`No se pudo subir imagen para product ${item.entity_local_id}; se sincronizara sin foto.`);
+      } else {
+        data.imageUrls = uploadedUrls;
+        const updatedQueueData = { ...data };
+        await db.update(
+          'sync_queue',
+          item.id,
+          { data: JSON.stringify(updatedQueueData) },
+          'id'
+        );
+      }
+    }
     
     // Preparar datos según el tipo de entidad
     const requestData = await this.prepareRequestData(item.entity_type, data, item.action);
@@ -214,7 +256,7 @@ class SyncService {
       },
     });
 
-    // Actualizar ID del servidor en la tabla local
+    // Actualizar estado local después de sincronizar
     if (item.action === 'create') {
       const createdId =
         response.data?.id ||
@@ -231,7 +273,129 @@ class SyncService {
       await db.update(table, item.entity_local_id, {
         server_id: createdId,
         synced: 1,
+        ...(item.entity_type === 'product' && Array.isArray(data?.imageUrls)
+          ? { data: JSON.stringify({ ...data, imageUrls: data.imageUrls }) }
+          : {}),
       }, 'local_id');
+    } else if (item.action === 'update') {
+      const table = this.getTableName(item.entity_type);
+      await db.update(table, item.entity_local_id, {
+        synced: 1,
+        ...(item.entity_type === 'product' && Array.isArray(data?.imageUrls)
+          ? { data: JSON.stringify({ ...data, imageUrls: data.imageUrls }) }
+          : {}),
+      }, 'local_id');
+    }
+  }
+
+  private async uploadProductImageFromUri(
+    imageUri: string,
+    clerkToken: string,
+    subUserToken: string,
+    accountId: string | null
+  ): Promise<string[]> {
+    try {
+      const uri = String(imageUri || '').trim();
+      if (!uri) return [];
+
+      const fileName = uri.split('/').pop() || `product-${Date.now()}.jpg`;
+      const extension = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() : 'jpg';
+      const mimeType =
+        extension === 'png'
+          ? 'image/png'
+          : extension === 'webp'
+            ? 'image/webp'
+            : extension === 'heic'
+              ? 'image/heic'
+              : 'image/jpeg';
+
+      const form = new FormData();
+      form.append('file', {
+        uri,
+        name: fileName,
+        type: mimeType,
+      } as any);
+
+      const uploadUrl = `${API_URL}/api/upload-product-image`;
+      console.log('[SyncService][upload-product-image] Inicio upload', {
+        uploadUrl,
+        uri,
+        fileName,
+        mimeType,
+      });
+      try {
+        const response = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${clerkToken}`,
+            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+            'X-SubUser-Token': subUserToken,
+            ...(accountId ? { 'X-Account-Id': accountId } : {}),
+          },
+          body: form as any,
+        });
+
+        if (!response.ok) {
+          const bodyText = await response.text();
+          throw new Error(`Upload HTTP ${response.status}: ${bodyText}`);
+        }
+
+        const payload = await response.json();
+        const url =
+          payload?.url ||
+          payload?.data?.url ||
+          payload?.file?.url ||
+          null;
+        if (url) {
+          console.log('[SyncService][upload-product-image] Multipart OK', { url: String(url) });
+          return [String(url)];
+        }
+        console.warn('[SyncService][upload-product-image] Multipart respondió sin URL', { payload });
+      } catch (multipartError) {
+        console.warn('[SyncService][upload-product-image] Multipart falló, intentando fallback base64...', summarizeError(multipartError));
+      }
+
+      // Fallback robusto para Android/Expo Go: enviar base64 en JSON
+      const base64 = await LegacyFileSystem.readAsStringAsync(uri, {
+        encoding: 'base64' as any,
+      });
+      if (!base64) {
+        console.warn('[SyncService][upload-product-image] Fallback base64 vacío');
+        return [];
+      }
+      console.log('[SyncService][upload-product-image] Fallback base64 generado', {
+        base64Length: base64.length,
+      });
+
+      const jsonResp = await axios.post(
+        uploadUrl,
+        { base64, fileName, mimeType },
+        {
+          headers: {
+            Authorization: `Bearer ${clerkToken}`,
+            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+            'X-SubUser-Token': subUserToken,
+            ...(accountId ? { 'X-Account-Id': accountId } : {}),
+            'Content-Type': 'application/json',
+          },
+          timeout: 45000,
+        }
+      );
+
+      const url =
+        jsonResp.data?.url ||
+        jsonResp.data?.data?.url ||
+        jsonResp.data?.file?.url ||
+        null;
+      if (!url) {
+        console.warn('[SyncService][upload-product-image] Fallback JSON respondió sin URL', { data: jsonResp.data });
+        return [];
+      }
+      console.log('[SyncService][upload-product-image] Fallback JSON OK', { url: String(url) });
+      return [String(url)];
+    } catch (error) {
+      console.error('[SyncService][upload-product-image] Error subiendo imagen de producto:', summarizeError(error));
+      return [];
     }
   }
 
@@ -242,6 +406,8 @@ class SyncService {
           name: data.name,
           sku: data.sku || null,
           reference: data.reference || null,
+          supplierId: data.supplierId || null,
+          categoryId: data.categoryId || null,
           priceCents: data.priceCents || Math.round((data.price || 0) * 100),
           costCents: data.costCents || Math.round((data.cost || 0) * 100),
           stock: data.stock || 0,
@@ -635,7 +801,14 @@ class SyncService {
   destroy() {
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
+      this.syncInterval = null;
     }
+    if (this.unsubscribeNetInfo) {
+      this.unsubscribeNetInfo();
+      this.unsubscribeNetInfo = null;
+    }
+    this.isInitialized = false;
+    this.isSyncing = false;
   }
 }
 

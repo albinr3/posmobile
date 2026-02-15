@@ -1,28 +1,18 @@
 import React, { useState, useRef } from 'react';
-import { View, StyleSheet, KeyboardAvoidingView, Platform } from 'react-native';
-import { TextInput, Button, Text, Surface } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, StyleSheet, KeyboardAvoidingView, Platform, TextInput as RNTextInput } from 'react-native';
+import { TextInput, Button, Text } from 'react-native-paper';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useAuth } from '@clerk/clerk-expo';
+import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
 import { syncService } from '../../services/sync/SyncService';
-import axios from 'axios';
-import { TextInput as RNTextInput } from 'react-native';
+import { ui } from '../../theme/ui';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
 
-interface SubUserLoginScreenProps {
-  navigation: any;
-  route: {
-    params: {
-      userId: string;
-      username: string;
-      accountId: string;
-    };
-  };
-}
-
-export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProps) {
-  const { userId, username, accountId } = route.params;
+export function SubUserLoginScreen({ navigation, route }: any) {
+  const username = route?.params?.username || '';
+  const accountId = route?.params?.accountId || '';
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +28,6 @@ export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProp
 
     setLoading(true);
     setError(null);
-
     try {
       const clerkToken = await getToken();
       if (!clerkToken) {
@@ -48,13 +37,10 @@ export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProp
 
       const response = await axios.post(
         `${API_URL}/api/auth/subuser/login`,
-        {
-          username,
-          password,
-        },
+        { username, password },
         {
           headers: {
-            'Authorization': `Bearer ${clerkToken}`,
+            Authorization: `Bearer ${clerkToken}`,
             'X-Clerk-Authorization': `Bearer ${clerkToken}`,
             'Content-Type': 'application/json',
           },
@@ -62,45 +48,22 @@ export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProp
       );
 
       if (response.data.success && response.data.token && response.data.user) {
-        console.log('✅ Login exitoso - Usuario:', response.data.user.username);
-        console.log('🔑 Token de subusuario recibido:', response.data.token ? `${response.data.token.substring(0, 20)}...` : 'NO TOKEN');
-        console.log('🔑 Clerk token disponible:', clerkToken ? `${clerkToken.substring(0, 20)}...` : 'NO TOKEN');
-        
-        await setSubUser(
-          response.data.user,
-          response.data.token,
-          accountId || response.data.user.accountId
-        );
-
-        console.log('🔄 Iniciando sincronización inicial...');
+        await setSubUser(response.data.user, response.data.token, accountId || response.data.user.accountId);
         try {
           syncService.setGetTokenFunction(getToken);
-          syncService.setGetSubUserTokenFunction(async () => {
-            console.log('🔑 GetSubUserToken llamado - retornando token');
-            return response.data.token;
-          });
-          
+          syncService.setGetSubUserTokenFunction(async () => response.data.token);
           await syncService.fullSync(clerkToken);
-          console.log('✅ Sincronización inicial completada');
         } catch (syncError: any) {
-          console.error('⚠️ Error en sincronización inicial:', syncError);
-          if (syncError.response) {
-            console.error('⚠️ Status:', syncError.response.status);
-            console.error('⚠️ Data:', syncError.response.data);
-          }
+          console.error('Error en sincronización inicial:', syncError);
         }
       } else {
         setError('Error al iniciar sesión');
       }
     } catch (err: any) {
       console.error('Error al iniciar sesión:', err);
-      if (err.response?.status === 401) {
-        setError('Usuario o contraseña incorrectos');
-      } else if (err.response?.data?.error) {
-        setError(err.response.data.error);
-      } else {
-        setError('Error de conexión. Verifica tu internet.');
-      }
+      if (err.response?.status === 401) setError('Usuario o contraseña incorrectos');
+      else if (err.response?.data?.error) setError(err.response.data.error);
+      else setError('Error de conexión. Verifica tu internet.');
     } finally {
       setLoading(false);
     }
@@ -108,62 +71,50 @@ export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProp
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.keyboardView}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.keyboardView}>
         <View style={styles.content}>
-          <Surface style={styles.card} elevation={2}>
-            <Text variant="headlineMedium" style={styles.title}>
-              Iniciar Sesión
-            </Text>
+          <View style={styles.lockBubble}>
+            <Text style={styles.lockText}>🔒</Text>
+          </View>
+          <Text style={styles.title}>Ingresa tu contraseña</Text>
+          <Text style={styles.subtitle}>@{username}</Text>
 
-            <Text variant="bodyLarge" style={styles.subtitle}>
-              Hola, {username}
-            </Text>
+          <TextInput
+            ref={passwordInputRef}
+            label="Contraseña"
+            value={password}
+            onChangeText={(text) => {
+              setPassword(text);
+              if (error) setError(null);
+            }}
+            secureTextEntry
+            mode="outlined"
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="done"
+            onSubmitEditing={handleLogin}
+            style={styles.input}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+          />
 
-            <TextInput
-              ref={passwordInputRef}
-              label="Contraseña"
-              value={password}
-              onChangeText={(text) => {
-                setPassword(text);
-                if (error) setError(null);
-              }}
-              secureTextEntry
-              mode="outlined"
-              style={styles.input}
-              placeholder="Ingresa tu contraseña"
-              autoCapitalize="none"
-              autoCorrect={false}
-              returnKeyType="done"
-              onSubmitEditing={handleLogin}
-            />
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-            {error && (
-              <Text style={styles.errorText}>{error}</Text>
-            )}
+          <Button
+            mode="contained"
+            onPress={handleLogin}
+            loading={loading}
+            disabled={loading || !password || password.length < 4}
+            buttonColor={ui.colors.primary}
+            style={styles.loginButton}
+            contentStyle={styles.buttonContent}
+          >
+            Iniciar Sesión
+          </Button>
 
-            <Button
-              mode="contained"
-              onPress={handleLogin}
-              loading={loading}
-              disabled={loading || !password || password.length < 4}
-              style={styles.button}
-              contentStyle={styles.buttonContent}
-            >
-              Iniciar Sesión
-            </Button>
-
-            <Button
-              mode="text"
-              onPress={() => navigation.goBack()}
-              disabled={loading}
-              style={styles.backButton}
-            >
-              Volver
-            </Button>
-          </Surface>
+          <Button mode="text" onPress={() => navigation.goBack()} disabled={loading} textColor={ui.colors.primary}>
+            Volver
+          </Button>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -171,51 +122,24 @@ export function SubUserLoginScreen({ navigation, route }: SubUserLoginScreenProp
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  keyboardView: {
-    flex: 1,
-  },
-  content: {
-    flex: 1,
+  container: { flex: 1, backgroundColor: ui.colors.background },
+  keyboardView: { flex: 1 },
+  content: { flex: 1, justifyContent: 'center', paddingHorizontal: 22 },
+  lockBubble: {
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: '#EEDFFF',
+    alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
+    alignSelf: 'center',
+    marginBottom: 20,
   },
-  card: {
-    padding: 24,
-    borderRadius: 12,
-    backgroundColor: 'white',
-  },
-  title: {
-    textAlign: 'center',
-    marginBottom: 8,
-    fontWeight: 'bold',
-  },
-  subtitle: {
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 24,
-  },
-  input: {
-    width: '100%',
-    marginBottom: 16,
-  },
-  errorText: {
-    color: '#d32f2f',
-    fontSize: 14,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  button: {
-    width: '100%',
-    marginTop: 8,
-  },
-  buttonContent: {
-    paddingVertical: 8,
-  },
-  backButton: {
-    marginTop: 12,
-  },
+  lockText: { fontSize: 36 },
+  title: { fontSize: 28, fontWeight: '800', color: ui.colors.text, textAlign: 'center' },
+  subtitle: { fontSize: 15, color: ui.colors.textMuted, textAlign: 'center', marginTop: 6, marginBottom: 20 },
+  input: { marginBottom: 8, backgroundColor: ui.colors.surface },
+  errorText: { color: ui.colors.danger, textAlign: 'center', marginBottom: 8 },
+  loginButton: { marginTop: 8, borderRadius: ui.radius.md },
+  buttonContent: { height: 50 },
 });

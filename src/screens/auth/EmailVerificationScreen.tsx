@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, TextInput as RNTextInput } from 'react-native';
 import { Button, Text, Surface } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useSignIn } from '@clerk/clerk-expo';
 
 interface EmailVerificationScreenProps {

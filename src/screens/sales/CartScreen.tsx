@@ -1,20 +1,40 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Menu } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView } from '../../components/SafeAreaView';
+import { useFocusEffect } from '@react-navigation/native';
 import { useCartStore } from '../../store/cartStore';
 import { formatCurrency, generateInvoiceCode, generateLocalId } from '../../utils/helpers';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { ui } from '../../theme/ui';
 
 interface CartScreenProps {
   navigation: any;
+  route?: {
+    params?: {
+      customerId?: string | null;
+      customerName?: string | null;
+    };
+  };
 }
 
-export function CartScreen({ navigation }: CartScreenProps) {
+export function CartScreen({ navigation, route }: CartScreenProps) {
   const { items, updateQuantity, removeItem, getTotal, customerId, customerName, paymentMethod, setPaymentMethod, clear } = useCartStore();
   const [loading, setLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const { setCustomer } = useCartStore();
+
+  useFocusEffect(
+    useCallback(() => {
+      const routeCustomerId = route?.params?.customerId;
+      const routeCustomerName = route?.params?.customerName;
+
+      if (typeof routeCustomerId !== 'undefined' || typeof routeCustomerName !== 'undefined') {
+        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null);
+      }
+    }, [route?.params?.customerId, route?.params?.customerName, setCustomer])
+  );
 
   const paymentMethods = [
     { label: 'Efectivo', value: 'EFECTIVO' },
@@ -104,7 +124,7 @@ export function CartScreen({ navigation }: CartScreenProps) {
         <IconButton
           icon="delete"
           size={20}
-          iconColor="#d32f2f"
+          iconColor={ui.colors.danger}
           onPress={() => removeItem(item.productId)}
         />
       </View>
@@ -170,6 +190,9 @@ export function CartScreen({ navigation }: CartScreenProps) {
 
           <Button
             mode="contained"
+            buttonColor={ui.colors.primary}
+            textColor="#fff"
+            labelStyle={styles.completeButtonLabel}
             onPress={handleCompleteSale}
             loading={loading}
             disabled={loading}
@@ -187,7 +210,7 @@ export function CartScreen({ navigation }: CartScreenProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: ui.colors.background,
   },
   listContent: {
     padding: 12,
@@ -198,7 +221,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 12,
     marginBottom: 8,
-    borderRadius: 8,
+    borderRadius: ui.radius.md,
+    backgroundColor: ui.colors.surface,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
     elevation: 1,
   },
   itemInfo: {
@@ -207,10 +233,11 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 14,
     fontWeight: '600',
+    color: ui.colors.text,
   },
   itemPrice: {
     fontSize: 12,
-    color: '#666',
+    color: ui.colors.textMuted,
     marginTop: 2,
   },
   quantityContainer: {
@@ -223,6 +250,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     minWidth: 30,
     textAlign: 'center',
+    color: ui.colors.text,
   },
   itemTotal: {
     alignItems: 'flex-end',
@@ -230,7 +258,7 @@ const styles = StyleSheet.create({
   itemTotalText: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#1a73e8',
+    color: ui.colors.primary,
   },
   emptyContainer: {
     alignItems: 'center',
@@ -239,7 +267,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 16,
-    color: '#666',
+    color: ui.colors.textMuted,
     marginBottom: 16,
   },
   summaryCard: {
@@ -248,8 +276,11 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     padding: 16,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderTopLeftRadius: ui.radius.lg,
+    borderTopRightRadius: ui.radius.lg,
+    backgroundColor: ui.colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: ui.colors.border,
     elevation: 8,
   },
   summaryRow: {
@@ -260,10 +291,11 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontSize: 14,
-    color: '#666',
+    color: ui.colors.textMuted,
   },
   divider: {
     marginVertical: 12,
+    backgroundColor: ui.colors.border,
   },
   totalRow: {
     flexDirection: 'row',
@@ -274,16 +306,23 @@ const styles = StyleSheet.create({
   totalLabel: {
     fontSize: 18,
     fontWeight: '600',
+    color: ui.colors.text,
   },
   totalValue: {
     fontSize: 24,
     fontWeight: 'bold',
-    color: '#1a73e8',
+    color: ui.colors.primary,
   },
   completeButton: {
     marginTop: 8,
+    marginBottom: 5,
+    fontSize: 20,
   },
   completeButtonContent: {
     paddingVertical: 8,
+  },
+  completeButtonLabel: {
+    fontSize: 18,
+    fontWeight: '800',
   },
 });

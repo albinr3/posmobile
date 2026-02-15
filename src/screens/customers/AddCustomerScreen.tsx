@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { TextInput, Button, Text, Surface, Switch } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { TextInput, Button, Text, Switch } from 'react-native-paper';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
+import { ui } from '../../theme/ui';
 
 interface AddCustomerScreenProps {
   navigation: any;
@@ -46,43 +47,28 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
         createdAt: Date.now(),
       };
 
-      // Guardar en SQLite
       await db.insert('customers', {
         local_id: localId,
         name: customerData.name,
-        // Evita bug de binding null en expo-sqlite Android (prepareAsync NPE)
         phone: customerData.phone || '',
         synced: 0,
         data: JSON.stringify(customerData),
       });
 
-      // Configurar getters de token antes de encolar para sincronización inmediata
       syncService.setGetTokenFunction(getToken);
       syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-
-      // Agregar a cola de sincronización
       await syncService.queueOperation('customer', 'create', customerData, localId);
 
-      const savedCustomer = await db.queryFirst<{ server_id?: string }>(
-        'SELECT server_id FROM customers WHERE local_id = ?',
-        [localId]
-      );
+      const savedCustomer = await db.queryFirst<{ server_id?: string }>('SELECT server_id FROM customers WHERE local_id = ?', [localId]);
       if (savedCustomer?.server_id) {
-        Alert.alert('Éxito', 'Cliente guardado y sincronizado correctamente', [
-          { text: 'OK', onPress: () => navigation.goBack() }
-        ]);
+        Alert.alert('Éxito', 'Cliente guardado y sincronizado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       } else {
         const clerkToken = await getToken();
         const currentSubUserToken = useAuthStore.getState().subUserToken;
         if (clerkToken && currentSubUserToken) {
-          Alert.alert('Éxito', 'Cliente guardado correctamente', [
-            { text: 'OK', onPress: () => navigation.goBack() }
-          ]);
+          Alert.alert('Éxito', 'Cliente guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
         } else {
-          Alert.alert(
-            'Pendiente de sincronización',
-            'El cliente se guardó localmente pero no se pudo subir a la web todavía. Verifica sesión/conexión y sincroniza de nuevo.'
-          );
+          Alert.alert('Pendiente de sincronización', 'El cliente se guardó localmente pero no se pudo subir a la web todavía.');
         }
       }
     } catch (error) {
@@ -95,96 +81,40 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        <Surface style={styles.formSection}>
-          <Text style={styles.sectionTitle}>Información Básica</Text>
-          
-          <TextInput
-            label="Nombre del Cliente *"
-            value={name}
-            onChangeText={setName}
-            mode="outlined"
-            style={styles.input}
-          />
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Nuevo Cliente</Text>
+          <Text style={styles.headerSubtitle}>Ingresa los datos del cliente</Text>
+        </View>
 
-          <TextInput
-            label="Teléfono"
-            value={phone}
-            onChangeText={setPhone}
-            mode="outlined"
-            keyboardType="phone-pad"
-            style={styles.input}
-            left={<TextInput.Icon icon="phone" />}
-          />
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Informacion Personal</Text>
+          <TextInput label="Nombre del Cliente *" value={name} onChangeText={setName} mode="outlined" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          <TextInput label="Telefono" value={phone} onChangeText={setPhone} mode="outlined" keyboardType="phone-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          <TextInput label="Email" value={email} onChangeText={setEmail} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          <TextInput label="Direccion" value={address} onChangeText={setAddress} mode="outlined" multiline numberOfLines={2} style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+        </View>
 
-          <TextInput
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            mode="outlined"
-            keyboardType="email-address"
-            autoCapitalize="none"
-            style={styles.input}
-            left={<TextInput.Icon icon="email" />}
-          />
-
-          <TextInput
-            label="Dirección"
-            value={address}
-            onChangeText={setAddress}
-            mode="outlined"
-            multiline
-            numberOfLines={2}
-            style={styles.input}
-            left={<TextInput.Icon icon="map-marker" />}
-          />
-        </Surface>
-
-        <Surface style={styles.formSection}>
-          <Text style={styles.sectionTitle}>Crédito</Text>
-          
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Credito</Text>
           <View style={styles.switchRow}>
-            <View>
-              <Text style={styles.switchLabel}>Habilitar crédito</Text>
-              <Text style={styles.switchDescription}>Permite ventas a crédito</Text>
+            <View style={styles.switchTextWrap}>
+              <Text style={styles.switchLabel}>Habilitar credito</Text>
+              <Text style={styles.switchDescription}>Permite ventas a credito para este cliente</Text>
             </View>
-            <Switch value={creditEnabled} onValueChange={setCreditEnabled} />
+            <Switch value={creditEnabled} onValueChange={setCreditEnabled} color={ui.colors.primary} />
           </View>
+          {creditEnabled ? (
+            <TextInput label="Dias de credito" value={creditDays} onChangeText={setCreditDays} mode="outlined" keyboardType="number-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          ) : null}
+        </View>
 
-          {creditEnabled && (
-            <TextInput
-              label="Días de Crédito"
-              value={creditDays}
-              onChangeText={setCreditDays}
-              mode="outlined"
-              keyboardType="number-pad"
-              style={styles.input}
-            />
-          )}
-        </Surface>
-
-        <Surface style={styles.formSection}>
+        <View style={styles.card}>
           <Text style={styles.sectionTitle}>Notas</Text>
-          
-          <TextInput
-            label="Notas adicionales"
-            value={notes}
-            onChangeText={setNotes}
-            mode="outlined"
-            multiline
-            numberOfLines={3}
-            style={styles.input}
-          />
-        </Surface>
+          <TextInput label="Notas adicionales" value={notes} onChangeText={setNotes} mode="outlined" multiline numberOfLines={3} style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+        </View>
 
-        <Button
-          mode="contained"
-          onPress={handleSave}
-          loading={loading}
-          disabled={loading}
-          style={styles.saveButton}
-          contentStyle={styles.saveButtonContent}
-        >
+        <Button mode="contained" onPress={handleSave} loading={loading} disabled={loading} buttonColor={ui.colors.primary} style={styles.saveButton} contentStyle={styles.saveButtonContent}>
           Guardar Cliente
         </Button>
       </ScrollView>
@@ -193,46 +123,26 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
+  container: { flex: 1, backgroundColor: ui.colors.background },
+  content: { padding: 14, paddingBottom: 30 },
+  header: { marginBottom: 10 },
+  headerTitle: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
+  headerSubtitle: { color: ui.colors.textMuted, marginTop: 4 },
+  card: {
+    backgroundColor: ui.colors.surface,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    borderRadius: ui.radius.lg,
+    padding: 14,
+    marginBottom: 10,
   },
-  scrollContent: {
-    padding: 12,
-  },
-  formSection: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    elevation: 1,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 16,
-  },
-  input: {
-    marginBottom: 12,
-  },
-  switchRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  switchLabel: {
-    fontSize: 16,
-  },
-  switchDescription: {
-    fontSize: 12,
-    color: '#666',
-    marginTop: 2,
-  },
-  saveButton: {
-    marginTop: 8,
-    marginBottom: 20,
-  },
-  saveButtonContent: {
-    paddingVertical: 8,
-  },
+  sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 10 },
+  input: { marginBottom: 10, backgroundColor: ui.colors.surface },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  switchTextWrap: { flex: 1, paddingRight: 12 },
+  switchLabel: { color: ui.colors.text, fontWeight: '700' },
+  switchDescription: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
+  saveButton: { borderRadius: ui.radius.md },
+  saveButtonContent: { height: 50 },
 });
+

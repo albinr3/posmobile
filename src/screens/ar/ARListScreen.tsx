@@ -1,7 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Text, Surface, Chip, Divider, Button } from 'react-native-paper';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Text, Chip, Button, Searchbar } from 'react-native-paper';
+import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
@@ -9,6 +9,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { AccountReceivable } from '../../types';
 import { formatCurrency, formatDate } from '../../utils/helpers';
+import { ui } from '../../theme/ui';
 
 interface ARListScreenProps {
   navigation: any;
@@ -19,7 +20,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'partial' | 'overdue'>('all');
-
+  const [searchQuery, setSearchQuery] = useState('');
   const { getToken } = useAuth();
   const { subUserToken } = useAuthStore();
 
@@ -32,11 +33,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const loadARItems = async () => {
     try {
       const result = await db.query<any>(
-        `SELECT * FROM accounts_receivable 
-         WHERE status IN ('PENDIENTE', 'PARCIAL') 
+        `SELECT * FROM accounts_receivable
+         WHERE status IN ('PENDIENTE', 'PARCIAL')
          ORDER BY due_date ASC`
       );
-      const mapped = result.map(row => ({
+      const mapped = result.map((row) => ({
         localId: row.local_id,
         serverId: row.server_id,
         customerId: row.customer_id,
@@ -63,24 +64,21 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
     try {
       const clerkToken = await getToken();
       if (clerkToken && subUserToken) {
-        console.log('🔄 Sincronizando AR...');
         syncService.setGetTokenFunction(getToken);
         syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
         await syncService.fullSync(clerkToken);
-        console.log('✅ AR sincronizado');
       }
     } catch (error) {
-      console.error('❌ Error sincronizando AR:', error);
+      console.error('Error sincronizando AR:', error);
     }
     await loadARItems();
   };
 
-  const isOverdue = (dueDate?: number) => {
-    if (!dueDate) return false;
-    return dueDate < Date.now();
-  };
+  const isOverdue = (dueDate?: number) => !!dueDate && dueDate < Date.now();
 
-  const filteredItems = arItems.filter(item => {
+  const filteredItems = arItems.filter((item) => {
+    const matchesSearch = item.customerName.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    if (!matchesSearch) return false;
     if (filter === 'pending') return item.status === 'PENDIENTE';
     if (filter === 'partial') return item.status === 'PARCIAL';
     if (filter === 'overdue') return isOverdue(item.dueDate);
@@ -90,106 +88,106 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const totalPending = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
 
   const getStatusColor = (status: string, dueDate?: number) => {
-    if (isOverdue(dueDate)) return '#d32f2f';
-    if (status === 'PARCIAL') return '#f57c00';
-    return '#1a73e8';
+    if (isOverdue(dueDate)) return ui.colors.danger;
+    if (status === 'PARCIAL') return ui.colors.warning;
+    return ui.colors.primary;
   };
 
-  const renderARItem = ({ item }: { item: AccountReceivable }) => (
-    <TouchableOpacity
-      onPress={() => navigation.navigate('ARDetail', { arId: item.localId })}
-    >
-      <Surface style={styles.arCard}>
+  const renderARItem = ({ item }: { item: AccountReceivable }) => {
+    const statusColor = getStatusColor(item.status, item.dueDate);
+    const paidPercent = item.totalCents > 0 ? Math.round((item.paidCents / item.totalCents) * 100) : 0;
+
+    return (
+      <TouchableOpacity style={styles.arCard} onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })}>
         <View style={styles.arHeader}>
           <Text style={styles.customerName}>{item.customerName}</Text>
-          <Chip 
-            compact 
-            style={[styles.statusChip, { backgroundColor: getStatusColor(item.status, item.dueDate) + '20' }]}
-            textStyle={[styles.statusChipText, { color: getStatusColor(item.status, item.dueDate) }]}
-          >
-            {isOverdue(item.dueDate) ? 'Vencido' : item.status}
+          <Chip compact style={[styles.statusChip, { backgroundColor: `${statusColor}20` }]} textStyle={[styles.statusChipText, { color: statusColor }]}>
+            {isOverdue(item.dueDate) ? 'Vencida' : item.status}
           </Chip>
         </View>
 
-        <Divider style={styles.divider} />
-
-        <View style={styles.arDetails}>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Total:</Text>
-            <Text style={styles.detailValue}>{formatCurrency(item.totalCents)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Pagado:</Text>
-            <Text style={styles.detailValue}>{formatCurrency(item.paidCents)}</Text>
-          </View>
-          <View style={styles.detailRow}>
-            <Text style={styles.detailLabel}>Pendiente:</Text>
-            <Text style={[styles.detailValue, styles.balanceValue]}>
-              {formatCurrency(item.balanceCents)}
-            </Text>
-          </View>
-          {item.dueDate && (
-            <View style={styles.detailRow}>
-              <Text style={styles.detailLabel}>Vence:</Text>
-              <Text style={[
-                styles.detailValue,
-                isOverdue(item.dueDate) && styles.overdueText
-              ]}>
-                {formatDate(item.dueDate)}
-              </Text>
-            </View>
-          )}
+        <Text style={styles.progressText}>Progreso de pago: {paidPercent}%</Text>
+        <View style={styles.progressBarBg}>
+          <View style={[styles.progressBarFill, { width: `${Math.min(100, Math.max(0, paidPercent))}%` }]} />
         </View>
 
-        <Button
-          mode="contained"
-          compact
-          onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })}
-          style={styles.payButton}
-        >
+        <View style={styles.grid}>
+          <View>
+            <Text style={styles.label}>Pendiente</Text>
+            <Text style={styles.value}>{formatCurrency(item.balanceCents)}</Text>
+          </View>
+          <View style={styles.rightCol}>
+            <Text style={styles.label}>Pagado</Text>
+            <Text style={styles.paid}>{formatCurrency(item.paidCents)}</Text>
+          </View>
+        </View>
+
+        {item.dueDate ? <Text style={[styles.dueDate, isOverdue(item.dueDate) && styles.overdue]}>Vence: {formatDate(item.dueDate)}</Text> : null}
+
+        <Button mode="contained" buttonColor={ui.colors.primary} compact onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })} style={styles.payButton}>
           Registrar Pago
         </Button>
-      </Surface>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
-    <SafeAreaView style={styles.container} edges={['bottom']}>
-      <Surface style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>Total Pendiente</Text>
+    <SafeAreaView style={styles.container} edges={[]}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Cuentas por cobrar</Text>
+        <Text style={styles.summaryLabel}>Total pendiente</Text>
         <Text style={styles.summaryValue}>{formatCurrency(totalPending)}</Text>
-        <Text style={styles.summarySubtext}>{arItems.length} cuentas</Text>
-      </Surface>
+        <Text style={styles.summarySub}>{arItems.length} cuentas activas</Text>
 
-      <View style={styles.filterContainer}>
-        <Chip
-          selected={filter === 'all'}
-          onPress={() => setFilter('all')}
-          style={styles.filterChip}
-        >
-          Todas
-        </Chip>
-        <Chip
-          selected={filter === 'pending'}
-          onPress={() => setFilter('pending')}
-          style={styles.filterChip}
-        >
-          Pendientes
-        </Chip>
-        <Chip
-          selected={filter === 'partial'}
-          onPress={() => setFilter('partial')}
-          style={styles.filterChip}
-        >
-          Parciales
-        </Chip>
-        <Chip
-          selected={filter === 'overdue'}
-          onPress={() => setFilter('overdue')}
-          style={styles.filterChip}
-        >
-          Vencidas
-        </Chip>
+        <View style={styles.searchWrap}>
+          <Searchbar
+            placeholder="Buscar cliente o factura..."
+            placeholderTextColor="#B8B2C8"
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            style={styles.searchbar}
+            inputStyle={styles.searchInput}
+          />
+        </View>
+
+        <View style={styles.filterContainer}>
+          <Chip
+            selected={filter === 'all'}
+            onPress={() => setFilter('all')}
+            style={[styles.filterChip, filter === 'all' && styles.filterChipSelected]}
+            textStyle={[styles.filterChipText, filter === 'all' && styles.filterChipTextSelected]}
+            showSelectedOverlay={false}
+          >
+            Todas
+          </Chip>
+          <Chip
+            selected={filter === 'pending'}
+            onPress={() => setFilter('pending')}
+            style={[styles.filterChip, filter === 'pending' && styles.filterChipSelected]}
+            textStyle={[styles.filterChipText, filter === 'pending' && styles.filterChipTextSelected]}
+            showSelectedOverlay={false}
+          >
+            Pendientes
+          </Chip>
+          <Chip
+            selected={filter === 'partial'}
+            onPress={() => setFilter('partial')}
+            style={[styles.filterChip, filter === 'partial' && styles.filterChipSelected]}
+            textStyle={[styles.filterChipText, filter === 'partial' && styles.filterChipTextSelected]}
+            showSelectedOverlay={false}
+          >
+            Parciales
+          </Chip>
+          <Chip
+            selected={filter === 'overdue'}
+            onPress={() => setFilter('overdue')}
+            style={[styles.filterChip, filter === 'overdue' && styles.filterChipSelected]}
+            textStyle={[styles.filterChipText, filter === 'overdue' && styles.filterChipTextSelected]}
+            showSelectedOverlay={false}
+          >
+            Vencidas
+          </Chip>
+        </View>
       </View>
 
       <FlatList
@@ -197,14 +195,10 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
         renderItem={renderARItem}
         keyExtractor={(item) => item.localId}
         contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[ui.colors.primary]} />}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>
-              {loading ? 'Cargando...' : 'No hay cuentas por cobrar'}
-            </Text>
+            <Text style={styles.emptyText}>{loading ? 'Cargando...' : 'No hay cuentas por cobrar'}</Text>
           </View>
         }
       />
@@ -213,101 +207,69 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: ui.colors.background },
+  header: {
+    backgroundColor: ui.colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomLeftRadius: ui.radius.xl,
+    borderBottomRightRadius: ui.radius.xl,
+  },
+  headerTitle: { color: '#fff', fontSize: 24, fontWeight: '800', marginBottom: 4 },
+  summaryLabel: { color: 'rgba(255,255,255,0.85)', fontSize: 12 },
+  summaryValue: { color: '#fff', fontSize: 33, fontWeight: '800', marginTop: 3, marginBottom: 1 },
+  summarySub: { color: 'rgba(255,255,255,0.82)', marginTop: 2, fontSize: 12 },
+  searchWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: ui.radius.md, paddingLeft: 2, marginTop: 8, marginBottom: 10 },
+  searchbar: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    borderRadius: ui.radius.md,
+    backgroundColor: 'transparent',
+    elevation: 0,
   },
-  summaryCard: {
-    margin: 12,
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    elevation: 2,
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: '#666',
-  },
-  summaryValue: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#1a73e8',
-    marginVertical: 4,
-  },
-  summarySubtext: {
-    fontSize: 12,
-    color: '#888',
-  },
-  filterContainer: {
-    flexDirection: 'row',
-    paddingHorizontal: 12,
-    marginBottom: 8,
-    gap: 8,
-    flexWrap: 'wrap',
-  },
+  searchInput: { minHeight: 40 },
+  filterContainer: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   filterChip: {
     height: 32,
+    borderRadius: ui.radius.md,
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  listContent: {
-    padding: 12,
-    paddingBottom: 20,
+  filterChipSelected: {
+    backgroundColor: '#fff',
   },
-  arCard: {
-    padding: 16,
-    marginBottom: 12,
-    borderRadius: 12,
-    elevation: 1,
-  },
-  arHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  customerName: {
-    fontSize: 18,
-    fontWeight: '600',
-    flex: 1,
-  },
-  statusChip: {
-    height: 28,
-  },
-  statusChipText: {
+  filterChipText: {
+    color: 'rgba(255,255,255,0.9)',
     fontSize: 12,
+    fontWeight: '700',
   },
-  divider: {
-    marginVertical: 12,
+  filterChipTextSelected: {
+    color: ui.colors.primary,
+    fontWeight: '700',
   },
-  arDetails: {},
-  detailRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 4,
+  listContent: { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 },
+  arCard: {
+    backgroundColor: ui.colors.surface,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    padding: 14,
+    marginBottom: 10,
   },
-  detailLabel: {
-    fontSize: 14,
-    color: '#666',
-  },
-  detailValue: {
-    fontSize: 14,
-  },
-  balanceValue: {
-    fontWeight: '600',
-    color: '#1a73e8',
-  },
-  overdueText: {
-    color: '#d32f2f',
-  },
-  payButton: {
-    marginTop: 12,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-  },
-  emptyText: {
-    fontSize: 16,
-    color: '#666',
-  },
+  arHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flex: 1, marginRight: 8 },
+  statusChip: { height: 28 },
+  statusChipText: { fontSize: 11, fontWeight: '700' },
+  progressText: { color: ui.colors.textMuted, fontSize: 11, marginBottom: 5 },
+  progressBarBg: { height: 8, borderRadius: 8, backgroundColor: '#EEEAF6', overflow: 'hidden' },
+  progressBarFill: { height: '100%', backgroundColor: ui.colors.success, borderRadius: 8 },
+  grid: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between' },
+  rightCol: { alignItems: 'flex-end' },
+  label: { color: ui.colors.textMuted, fontSize: 11 },
+  value: { color: ui.colors.text, fontWeight: '800', fontSize: 15, marginTop: 2 },
+  paid: { color: ui.colors.success, fontWeight: '800', fontSize: 15, marginTop: 2 },
+  dueDate: { marginTop: 9, color: ui.colors.textMuted, fontSize: 12 },
+  overdue: { color: ui.colors.danger, fontWeight: '700' },
+  payButton: { marginTop: 10, borderRadius: ui.radius.md, height: 40, justifyContent: 'center' },
+  emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
+  emptyText: { color: ui.colors.textMuted },
 });
 

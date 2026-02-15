@@ -6,8 +6,13 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "scheme": "movopos",
+    "backgroundColor": "#ffffff",
+    "androidStatusBar": {
+      "backgroundColor": "#1a73e8",
+      "barStyle": "light-content",
+      "translucent": false
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -30,7 +35,6 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a73e8"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "CAMERA",
@@ -60,12 +64,11 @@
         {
           "faceIDPermission": "MOVOPos usa Face ID para autenticación segura"
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-sqlite",
+      "expo-web-browser"
     ],
-    "extra": {
-      "eas": {
-        "projectId": "your-project-id"
-      }
-    }
+    "extra": {}
   }
 }
