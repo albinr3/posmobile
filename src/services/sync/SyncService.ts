@@ -264,6 +264,7 @@ class SyncService {
         response.data?.customer?.id ||
         response.data?.product?.id ||
         response.data?.sale?.id ||
+        response.data?.quote?.id ||
         null;
       if (!createdId) {
         throw new Error(`Respuesta de create sin id para ${item.entity_type}`);
@@ -273,6 +274,47 @@ class SyncService {
       await db.update(table, item.entity_local_id, {
         server_id: createdId,
         synced: 1,
+        ...(item.entity_type === 'sale'
+          ? {
+              invoice_code:
+                response.data?.invoiceCode ||
+                response.data?.data?.invoiceCode ||
+                response.data?.sale?.invoiceCode ||
+                data?.invoiceCode ||
+                null,
+              data: JSON.stringify({
+                ...data,
+                invoiceCode:
+                  response.data?.invoiceCode ||
+                  response.data?.data?.invoiceCode ||
+                  response.data?.sale?.invoiceCode ||
+                  data?.invoiceCode ||
+                  null,
+                serverId: createdId,
+              }),
+            }
+          : {}),
+        ...(item.entity_type === 'quote'
+          ? {
+              quote_code:
+                response.data?.quoteCode ||
+                response.data?.data?.quoteCode ||
+                response.data?.quote?.quoteCode ||
+                data?.quoteCode ||
+                null,
+              status: 'synced',
+              data: JSON.stringify({
+                ...data,
+                quoteCode:
+                  response.data?.quoteCode ||
+                  response.data?.data?.quoteCode ||
+                  response.data?.quote?.quoteCode ||
+                  data?.quoteCode ||
+                  null,
+                serverId: createdId,
+              }),
+            }
+          : {}),
         ...(item.entity_type === 'product' && Array.isArray(data?.imageUrls)
           ? { data: JSON.stringify({ ...data, imageUrls: data.imageUrls }) }
           : {}),
@@ -503,6 +545,63 @@ class SyncService {
           amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
           method: data.method || data.paymentMethod,
           note: data.note || null,
+        };
+      case 'quote':
+        let resolvedQuoteCustomerId: string | null = null;
+        if (data.customerId) {
+          const customer = await db.queryFirst<{ server_id?: string }>(
+            'SELECT server_id FROM customers WHERE local_id = ?',
+            [data.customerId]
+          );
+          resolvedQuoteCustomerId = customer?.server_id || null;
+        }
+
+        const quoteItems = await Promise.all(
+          (data.items || []).map(async (item: any) => {
+            const product = await db.queryFirst<{ server_id?: string; data?: string }>(
+              'SELECT server_id, data FROM products WHERE local_id = ?',
+              [item.productId]
+            );
+            if (!product?.server_id) {
+              throw new Error(`Producto sin server_id: ${item.productId}`);
+            }
+
+            let isActive = true;
+            try {
+              const parsed = product.data ? JSON.parse(product.data) : null;
+              if (typeof parsed?.isActive === 'boolean') isActive = parsed.isActive;
+              if (typeof parsed?.active === 'boolean') isActive = parsed.active;
+            } catch {
+              // no-op
+            }
+            if (!isActive) {
+              throw new Error(`Producto inactivo en carrito: ${item.productId}`);
+            }
+
+            const resolvedUnitPriceCents =
+              item.unitPriceCents ||
+              item.priceCents ||
+              Math.round((item.price || 0) * 100);
+
+            if (!Number.isInteger(resolvedUnitPriceCents) || resolvedUnitPriceCents <= 0) {
+              throw new Error(`Precio unitario invalido para producto ${item.productId}`);
+            }
+
+            return {
+              productId: product.server_id,
+              qty: item.quantity || item.qty || 1,
+              unitPriceCents: resolvedUnitPriceCents,
+              wasPriceOverridden: item.wasPriceOverridden || false,
+            };
+          })
+        );
+
+        return {
+          customerId: resolvedQuoteCustomerId,
+          items: quoteItems,
+          shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
+          notes: data.notes || null,
+          validUntil: data.validUntil || null,
         };
       default:
         return data;
@@ -781,6 +880,7 @@ class SyncService {
   private getEndpoint(entityType: string, action: string): string {
     const endpoints: Record<string, string> = {
       'sale': 'sales',
+      'quote': 'quotes',
       'product': 'products',
       'customer': 'customers',
       'payment': 'payments',
@@ -791,6 +891,7 @@ class SyncService {
   private getTableName(entityType: string): string {
     const tables: Record<string, string> = {
       'sale': 'sales',
+      'quote': 'quotes',
       'product': 'products',
       'customer': 'customers',
       'payment': 'payments',

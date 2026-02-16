@@ -1,7 +1,8 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Searchbar, Text, FAB, Avatar, Chip } from 'react-native-paper';
+import { Searchbar, Text, Avatar, Chip } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
+import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
@@ -57,6 +58,14 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
         serverId: row.server_id,
         name: row.name,
         phone: row.phone,
+        address: (() => {
+          try {
+            const parsed = row.data ? JSON.parse(row.data) : null;
+            return parsed?.address || null;
+          } catch {
+            return null;
+          }
+        })(),
         synced: row.synced === 1,
         data: row.data,
       }));
@@ -94,7 +103,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
         <Avatar.Text size={42} label={item.name.substring(0, 2).toUpperCase()} style={styles.avatar} labelStyle={styles.avatarLabel} />
         <View style={styles.customerDetails}>
           <Text style={styles.customerName}>{item.name}</Text>
-          <Text style={styles.customerPhone}>{item.phone || 'Sin telefono'}</Text>
+          <Text style={styles.customerPhone}>{item.address || 'Sin direccion'}</Text>
           {!item.synced ? (
             <Chip compact style={styles.pendingChip} textStyle={styles.pendingChipText}>
               Pendiente
@@ -113,6 +122,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
         <View style={styles.searchWrap}>
           <Searchbar
             placeholder="Buscar clientes..."
+            placeholderTextColor="#B8B2C8"
             onChangeText={setSearchQuery}
             value={searchQuery}
             style={styles.searchbar}
@@ -134,7 +144,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
         }
       />
 
-      <FAB icon="plus" style={styles.fab} onPress={() => navigation.navigate('AddCustomer')} />
+      <SafeFab icon="plus" color="#fff" style={styles.fab} onPress={() => navigation.navigate('AddCustomer')} />
     </SafeAreaView>
   );
 }
@@ -182,6 +192,6 @@ const styles = StyleSheet.create({
   chevron: { fontSize: 26, color: ui.colors.primary },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
-  fab: { position: 'absolute', right: 16, bottom: 16, backgroundColor: ui.colors.primary },
+  fab: { backgroundColor: ui.colors.primary },
 });
 

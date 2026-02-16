@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Text, Icon } from 'react-native-paper';
 import { useNavigation, DrawerActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -53,7 +53,21 @@ export function AppTopHeader() {
         setBillingState(response.data || null);
       } catch (error) {
         if (!mounted) return;
-        console.error('Error cargando estado de prueba:', error);
+        if (axios.isAxiosError(error)) {
+          // En mobile dev es normal perder conectividad al volver del background.
+          // Evitamos LogBox rojo por errores de red esperados.
+          const isNetworkError = !error.response && error.message === 'Network Error';
+          if (isNetworkError) {
+            console.warn('No se pudo cargar estado de prueba (sin conexion temporal).');
+          } else {
+            console.warn('No se pudo cargar estado de prueba.', {
+              status: error.response?.status,
+              message: error.message,
+            });
+          }
+        } else {
+          console.warn('No se pudo cargar estado de prueba.');
+        }
         setBillingState(null);
       }
     };
@@ -88,7 +102,7 @@ export function AppTopHeader() {
             <Icon source="menu" size={22} color={ui.colors.textMuted} />
           </TouchableOpacity>
           <View style={styles.userBadge}>
-            <Text style={styles.userBadgeText}>M</Text>
+            <Image source={require('../../assets/movoLogo.png')} style={styles.userBadgeLogo} resizeMode="contain" />
           </View>
           <Text style={styles.userName} numberOfLines={1}>
             {displayName}
@@ -126,15 +140,15 @@ const styles = StyleSheet.create({
   topLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 8 },
   menuButton: { borderRadius: 16, marginRight: 6, padding: 2 },
   userBadge: {
-    width: 24,
+    width: 30,
     height: 24,
     borderRadius: 6,
-    backgroundColor: ui.colors.primary,
+    backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
   },
-  userBadgeText: { color: '#fff', fontSize: 12, fontWeight: '800' },
+  userBadgeLogo: { width: 24, height: 14 },
   userName: { color: ui.colors.text, fontWeight: '700', fontSize: 14, flexShrink: 1 },
   avatarCircle: {
     width: 30,

@@ -7329,4 +7329,113 @@
 02-15 13:18:17.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175897
 02-15 13:18:17.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
 02-15 13:18:18.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175898
-02-15 13:18:18.232  1855  1896 E HeatmapThread: !@
+02-15 13:18:18.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:19.031  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:19.035  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175899035 lastDateWindow=1771118498000
+02-15 13:18:19.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175899
+02-15 13:18:19.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:20.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175900
+02-15 13:18:20.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:21.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175901
+02-15 13:18:21.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:22.044  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:22.052  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175902052 lastDateWindow=1771118498000
+02-15 13:18:22.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175902
+02-15 13:18:22.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:23.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175903
+02-15 13:18:23.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:24.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175904
+02-15 13:18:24.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:25.062  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:25.067  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175905067 lastDateWindow=1771118498000
+02-15 13:18:25.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175905
+02-15 13:18:25.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:26.099  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:26.099  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:26.101  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:26.102  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:26.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175906
+02-15 13:18:26.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:27.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175907
+02-15 13:18:27.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:28.075  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:28.081  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175908081 lastDateWindow=1771118498000
+02-15 13:18:28.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175908
+02-15 13:18:28.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:29.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175909
+02-15 13:18:29.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:30.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175910
+02-15 13:18:30.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:31.088  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:31.092  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175911092 lastDateWindow=1771118498000
+02-15 13:18:31.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175911
+02-15 13:18:31.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:32.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175912
+02-15 13:18:32.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:33.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175913
+02-15 13:18:33.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:34.101  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:34.105  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175914105 lastDateWindow=1771118498000
+02-15 13:18:34.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175914
+02-15 13:18:34.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:35.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175915
+02-15 13:18:35.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:36.139  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:36.140  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:36.143  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:36.143  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:36.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175916
+02-15 13:18:36.230  1855  1896 E HeatmapThread: !@Entered the read from path function
+02-15 13:18:36.230  1855  1896 E HeatmapThread: !@Read Extended_heatmap from efs is: 18738 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1222 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1417 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1454 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1409 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1445 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1431 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1336 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1452 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1462 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1286 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5718 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 6528 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12766 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12666 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12937 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12912 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 9872 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3784 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3092 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2707 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2480 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 293 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 368 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 297 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 240 0 0 0
+02-15 13:18:36.230  1855  1896 E HeatmapThread: !@Write Extended Heatmap to efs is: 18738 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1222 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1417 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1454 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1409 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1445 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1431 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1336 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1452 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1462 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1286 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 5718 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 6528 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12767 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12666 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12937 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 12912 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 9872 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3784 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 3092 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2707 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 2480 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 293 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 368 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 297 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 240 0 0 0 
+02-15 13:18:36.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:37.116  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:37.121  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175917121 lastDateWindow=1771118498000
+02-15 13:18:37.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175917
+02-15 13:18:37.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:38.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175918
+02-15 13:18:38.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:39.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175919
+02-15 13:18:39.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:40.128  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:40.132  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175920132 lastDateWindow=1771118498000
+02-15 13:18:40.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175920
+02-15 13:18:40.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:41.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175921
+02-15 13:18:41.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:42.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175922
+02-15 13:18:42.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:42.307  1874  1966 E HwcComposer: getLuts failed Status(-129, EX_TRANSACTION_FAILED): 'UNKNOWN_TRANSACTION: '
+02-15 13:18:42.393  2832  5680 E SemWifiService: getCurrentNetworkScore - invalid score data
+02-15 13:18:42.393  2832  5680 E WifiProfileShare.Caster: failed to generate qos array, need to check network score data
+02-15 13:18:43.141  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:43.145  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175923145 lastDateWindow=1771118498000
+02-15 13:18:43.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175923
+02-15 13:18:43.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:43.626  2832  2915 E Watchdog: !@Sync: 3437 heap(MB): 130 / 169 FD: 1455 [2026-02-15 13:18:43.626]
+02-15 13:18:43.719  1814  1895 E BatteryDump: !@new_battery_dump : 4206,-239,100,100,80,316,301,327,316,0,330,328,0,Discharging,NO_CHARGING,None,Good,NONE,0,Normal,0,0,9300,0x40000000,0x10000,0x0,0,0,215,v0002,0000,0000,00000000,0,0,0,0,141,4221,7844,980,0,
+02-15 13:18:44.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175924
+02-15 13:18:44.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:45.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175925
+02-15 13:18:45.233  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:45.537  1772  2380 E SDM     : ScalarConfig::GetAIScaleSettingsInfo: AI Scaler Config for display 68 is not present
+02-15 13:18:46.152  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:46.156  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175926156 lastDateWindow=1771118498000
+02-15 13:18:46.179  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:46.179  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:46.181  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:46.182  1842 30060 E ConversionHelperAidl: Function: parseAndSetVendorParameters Line: 94 Failed 
+02-15 13:18:46.227  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175926
+02-15 13:18:46.230  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:47.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175927
+02-15 13:18:47.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:48.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175928
+02-15 13:18:48.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:49.164  2832  3585 E WifiStaIfaceAidlImpl: getCachedScanData failed with service-specific exception: android.os.ServiceSpecificException:  (code 4)
+02-15 13:18:49.167  2832  3783 E SemWifiLinkQualityMonitor: Too old or invalid TMI: currentTime=1771175929167 lastDateWindow=1771118498000
+02-15 13:18:49.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175929
+02-15 13:18:49.231  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:50.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175930
+02-15 13:18:50.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100
+02-15 13:18:51.228  1855  1896 E HeatmapThread: ECT Thread time in milliseconds: 1771175931
+02-15 13:18:51.232  1855  1896 E HeatmapThread: !@ CAM New BSOH: 100

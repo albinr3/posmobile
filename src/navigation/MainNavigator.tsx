@@ -1,16 +1,19 @@
 import React from 'react';
-import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image } from 'react-native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { Text, Avatar, Icon } from 'react-native-paper';
+import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
+import { Text, Icon } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
 import { AppTopHeader } from '../components/AppTopHeader';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { POSScreen } from '../screens/sales/POSScreen';
+import { QuoteScreen } from '../screens/sales/QuoteScreen';
 import { CartScreen } from '../screens/sales/CartScreen';
+import { QuoteCartScreen } from '../screens/sales/QuoteCartScreen';
 import { ReceiptScreen } from '../screens/sales/ReceiptScreen';
 import { BarcodeScannerScreen } from '../screens/sales/BarcodeScannerScreen';
 import { SelectCustomerScreen } from '../screens/sales/SelectCustomerScreen';
@@ -24,6 +27,8 @@ import { CustomerDetailScreen } from '../screens/customers/CustomerDetailScreen'
 import { ARListScreen } from '../screens/ar/ARListScreen';
 import { RegisterPaymentScreen } from '../screens/ar/RegisterPaymentScreen';
 import { PrinterSettingsScreen } from '../screens/settings/PrinterSettingsScreen';
+import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
+import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
 
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
@@ -41,6 +46,17 @@ function SalesStack() {
       <Stack.Screen name="Cart" component={CartScreen} />
       <Stack.Screen name="SelectCustomer" component={SelectCustomerScreen} />
       <Stack.Screen name="Receipt" component={ReceiptScreen} options={{ headerLeft: () => null }} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+    </Stack.Navigator>
+  );
+}
+
+function QuotesStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="QuoteMain" component={QuoteScreen} />
+      <Stack.Screen name="QuoteCart" component={QuoteCartScreen} />
+      <Stack.Screen name="SelectQuoteCustomer" component={SelectCustomerScreen} initialParams={{ mode: 'QUOTE' }} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
@@ -81,6 +97,15 @@ function SettingsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="PrinterSettings" component={PrinterSettingsScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function ReturnsStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="CreateReturn" component={CreateReturnScreen} />
+      <Stack.Screen name="ReturnReceipt" component={ReturnReceiptScreen} />
     </Stack.Navigator>
   );
 }
@@ -142,29 +167,35 @@ function BottomTabs() {
       <Tab.Screen
         name="POS"
         component={SalesStack}
-        options={{
-          title: 'Ventas',
-          tabBarLabel: '',
-          tabBarItemStyle: { marginTop: -14 },
-          tabBarLabelStyle: { height: 0 },
-          tabBarIcon: ({ focused }) => (
-            <View
-              style={{
-                width: 66,
-                height: 66,
-                borderRadius: 33,
-                backgroundColor: ui.colors.primary,
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderWidth: 3,
-                borderColor: '#fff',
-                elevation: focused ? 9 : 5,
-                marginTop: 2,
-              }}
-            >
-              <Icon source="cash-register" color="#fff" size={30} />
-            </View>
-          ),
+        options={({ route }) => {
+          const nestedRoute = getFocusedRouteNameFromRoute(route) ?? 'POSMain';
+          const hideTabBar = ['Cart', 'SelectCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
+
+          return {
+            title: 'Ventas',
+            tabBarLabel: '',
+            tabBarItemStyle: { marginTop: -14 },
+            tabBarLabelStyle: { height: 0 },
+            tabBarStyle: hideTabBar ? { display: 'none' } : undefined,
+            tabBarIcon: ({ focused }) => (
+              <View
+                style={{
+                  width: 66,
+                  height: 66,
+                  borderRadius: 33,
+                  backgroundColor: ui.colors.primary,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderWidth: 3,
+                  borderColor: '#fff',
+                  elevation: focused ? 9 : 5,
+                  marginTop: 2,
+                }}
+              >
+                <Icon source="cash-register" color="#fff" size={30} />
+              </View>
+            ),
+          };
         }}
       />
       <Tab.Screen
@@ -215,6 +246,14 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       props.navigation.navigate('Customers' as never);
       return;
     }
+    if (key === 'quotes') {
+      props.navigation.navigate('Quotes' as never);
+      return;
+    }
+    if (key === 'returns') {
+      props.navigation.navigate('Returns' as never);
+      return;
+    }
     if (key === 'reports_menu') {
       props.navigation.navigate('Reports' as never);
       return;
@@ -240,7 +279,9 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       contentContainerStyle={[styles.drawerContainer, { paddingTop: topInset }]}
     >
       <View style={styles.drawerHeader}>
-        <Avatar.Text size={52} label="MO" style={styles.drawerAvatar} labelStyle={styles.drawerAvatarLabel} />
+        <View style={styles.logoWrap}>
+          <Image source={require('../../assets/movoLogo.png')} style={styles.logoImage} resizeMode="contain" />
+        </View>
         <View>
           <Text style={styles.drawerTitle}>MOVOpos</Text>
           <Text style={styles.drawerSubtitle}>Panel principal</Text>
@@ -252,6 +293,8 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
           const selected =
             (item.key === 'dashboard' && currentRoute === 'Home') ||
             (item.key === 'customers' && currentRoute === 'Customers') ||
+            (item.key === 'quotes' && currentRoute === 'Quotes') ||
+            (item.key === 'returns' && currentRoute === 'Returns') ||
             (item.key === 'reports_menu' && currentRoute === 'Reports') ||
             (item.key === 'settings_menu' && currentRoute === 'Settings') ||
             (item.key === 'products' && currentRoute === 'InventoryMenu') ||
@@ -315,6 +358,8 @@ export function MainNavigator() {
     >
       <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />
       <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />
+      <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
+      <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
       <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
       <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
       <Drawer.Screen name="Reports" component={DashboardScreen} options={{ title: 'Reportes' }} />
@@ -335,8 +380,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  drawerAvatar: { backgroundColor: ui.colors.primary },
-  drawerAvatarLabel: { color: '#fff', fontWeight: '700' },
+  logoWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 12,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  logoImage: { width: 44, height: 26 },
   drawerTitle: { color: ui.colors.text, fontSize: 18, fontWeight: '800' },
   drawerSubtitle: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
   drawerList: { marginTop: 12, paddingHorizontal: 10 },

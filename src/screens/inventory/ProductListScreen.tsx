@@ -1,9 +1,9 @@
 import React, { useState, useCallback } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Image } from 'react-native';
-import { Searchbar, Text, FAB, Chip, IconButton } from 'react-native-paper';
+import { Searchbar, Text, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
+import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
 import { syncService } from '../../services/sync/SyncService';
@@ -17,7 +17,6 @@ interface ProductListScreenProps {
 }
 
 export function ProductListScreen({ navigation }: ProductListScreenProps) {
-  const insets = useSafeAreaInsets();
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -194,7 +193,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
             value={searchQuery}
             style={styles.searchbar}
             inputStyle={styles.searchInput}
-            placeholderTextColor="#bbb3cf"
+            placeholderTextColor="#B8B2C8"
           />
           <IconButton icon="barcode-scan" size={19} iconColor={ui.colors.primary} onPress={() => navigation.navigate('BarcodeScanner')} />
           <View style={styles.viewToggle}>
@@ -229,7 +228,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
         }
       />
 
-      <FAB icon="plus" color="#fff" style={[styles.fab, { bottom: Math.max(insets.bottom, 12) + 8 }]} onPress={() => navigation.navigate('AddProduct')} />
+      <SafeFab icon="plus" color="#fff" style={styles.fab} bottomOffset={8} rightOffset={18} onPress={() => navigation.navigate('AddProduct')} />
     </SafeAreaView>
   );
 }
@@ -341,8 +340,6 @@ const styles = StyleSheet.create({
   emptyContainer: { paddingVertical: 50, alignItems: 'center' },
   emptyText: { color: ui.colors.textMuted },
   fab: {
-    position: 'absolute',
-    right: 18,
     backgroundColor: ui.colors.primary,
     shadowColor: ui.colors.primary,
     shadowOpacity: 0.35,

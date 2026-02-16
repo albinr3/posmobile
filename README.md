@@ -83,6 +83,15 @@ src/
 └── utils/             # Utilidades y helpers
 ```
 
+## 📐 Regla de Layout Inferior (Android)
+
+Para evitar que botones inferiores choquen con la barra nativa de 3 botones:
+
+- Usa siempre `BottomDock` para acciones fijas en la parte inferior.
+- `BottomDock` ya aplica un inset seguro en Android (incluyendo fallback), aun cuando alguien intente reducirlo.
+- El área reservada para los botones nativos se pinta en blanco (`#FFFFFF`) desde `BottomDock`.
+- Si el contenido es scrolleable, deja `paddingBottom` suficiente para que la última sección no quede tapada por el dock.
+
 ## 🔧 Configuración
 
 ### Variables de Entorno

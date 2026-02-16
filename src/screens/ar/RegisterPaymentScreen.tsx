@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { TextInput, Button, Text, Surface, Divider, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId, generateReceiptCode, formatCurrency } from '../../utils/helpers';
@@ -19,7 +19,6 @@ interface RegisterPaymentScreenProps {
 }
 
 export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScreenProps) {
-  const insets = useSafeAreaInsets();
   const arId = route?.params?.arId || '';
   const [arItem, setARItem] = useState<AccountReceivable | null>(null);
   const [amount, setAmount] = useState('');
@@ -242,7 +241,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
       </ScrollView>
 
-      <View style={[styles.stickyFooter, { bottom: insets.bottom - 20 }]}>
+      <BottomDock style={styles.stickyFooter}>
         <Button
           mode="contained"
           buttonColor={ui.colors.primary}
@@ -256,7 +255,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
         >
           Registrar Pago
         </Button>
-      </View>
+      </BottomDock>
     </SafeAreaView>
   );
 }
@@ -386,10 +385,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   stickyFooter: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 6,
     backgroundColor: 'transparent',
     paddingHorizontal: 12,
     paddingTop: 8,

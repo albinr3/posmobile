@@ -15,8 +15,12 @@ interface ARListScreenProps {
   navigation: any;
 }
 
+interface ARListItem extends AccountReceivable {
+  invoiceCode?: string | null;
+}
+
 export function ARListScreen({ navigation }: ARListScreenProps) {
-  const [arItems, setARItems] = useState<AccountReceivable[]>([]);
+  const [arItems, setARItems] = useState<ARListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'partial' | 'overdue'>('all');
@@ -38,6 +42,14 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
          ORDER BY due_date ASC`
       );
       const mapped = result.map((row) => ({
+        invoiceCode: (() => {
+          try {
+            const parsed = row.data ? JSON.parse(row.data) : null;
+            return parsed?.sale?.invoiceCode || parsed?.invoiceCode || null;
+          } catch {
+            return null;
+          }
+        })(),
         localId: row.local_id,
         serverId: row.server_id,
         customerId: row.customer_id,
@@ -77,7 +89,10 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const isOverdue = (dueDate?: number) => !!dueDate && dueDate < Date.now();
 
   const filteredItems = arItems.filter((item) => {
-    const matchesSearch = item.customerName.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    const q = searchQuery.toLowerCase().trim();
+    const matchesSearch =
+      item.customerName.toLowerCase().includes(q) ||
+      (item.invoiceCode || '').toLowerCase().includes(q);
     if (!matchesSearch) return false;
     if (filter === 'pending') return item.status === 'PENDIENTE';
     if (filter === 'partial') return item.status === 'PARCIAL';
@@ -93,7 +108,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
     return ui.colors.primary;
   };
 
-  const renderARItem = ({ item }: { item: AccountReceivable }) => {
+  const renderARItem = ({ item }: { item: ARListItem }) => {
     const statusColor = getStatusColor(item.status, item.dueDate);
     const paidPercent = item.totalCents > 0 ? Math.round((item.paidCents / item.totalCents) * 100) : 0;
 
@@ -105,6 +120,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
             {isOverdue(item.dueDate) ? 'Vencida' : item.status}
           </Chip>
         </View>
+        <Text style={styles.invoiceText}>Factura: {item.invoiceCode || 'N/A'}</Text>
 
         <Text style={styles.progressText}>Progreso de pago: {paidPercent}%</Text>
         <View style={styles.progressBarBg}>
@@ -258,6 +274,7 @@ const styles = StyleSheet.create({
   customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flex: 1, marginRight: 8 },
   statusChip: { height: 28 },
   statusChipText: { fontSize: 11, fontWeight: '700' },
+  invoiceText: { color: ui.colors.textMuted, fontSize: 12, marginBottom: 6 },
   progressText: { color: ui.colors.textMuted, fontSize: 11, marginBottom: 5 },
   progressBarBg: { height: 8, borderRadius: 8, backgroundColor: '#EEEAF6', overflow: 'hidden' },
   progressBarFill: { height: '100%', backgroundColor: ui.colors.success, borderRadius: 8 },

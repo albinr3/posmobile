@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, ViewProps, StyleProp, ViewStyle, Platform, StatusBar } from 'react-native';
 import { Edge, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getBottomSafeInset } from '../utils/safeArea';
 
 interface SafeAreaViewProps extends ViewProps {
   edges?: Edge[];
@@ -14,11 +15,7 @@ export function SafeAreaView({ edges = ALL_EDGES, style, children, ...rest }: Sa
   const insets = useSafeAreaInsets();
   const androidStatusBarHeight = Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0;
   const topInset = edges.includes('top') ? (insets.top > 0 ? insets.top : androidStatusBarHeight) : 0;
-  const bottomInset = edges.includes('bottom')
-    ? Platform.OS === 'android'
-      ? Math.max(insets.bottom, 12)
-      : insets.bottom
-    : 0;
+  const bottomInset = edges.includes('bottom') ? getBottomSafeInset(insets.bottom) : 0;
 
   const insetStyle: ViewStyle = {
     paddingTop: topInset,

@@ -1,47 +1,36 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image } from 'react-native';
-import { Text, Icon, Searchbar, Menu, IconButton } from 'react-native-paper';
+import { Text, Icon, Searchbar, IconButton } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useCartStore } from '../../store/cartStore';
+import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { db } from '../../database/Database';
 import { Product } from '../../types';
-import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
-interface POSScreenProps {
+interface QuoteScreenProps {
   navigation: any;
 }
 
-interface POSProduct extends Product {
+interface QuoteProduct extends Product {
   isActive: boolean;
   parsedData?: any;
 }
 
-type SaleType = 'CONTADO' | 'CREDITO';
 type ViewMode = 'LISTA' | 'IMAGENES';
+const VIEW_MODE_STORAGE_KEY = 'quote_view_mode';
 
-const PAYMENT_OPTIONS = [
-  { label: 'Efectivo', value: 'EFECTIVO' },
-  { label: 'Tarjeta', value: 'TARJETA' },
-  { label: 'Transferencia', value: 'TRANSFERENCIA' },
-];
-const VIEW_MODE_STORAGE_KEY = 'pos_view_mode';
-
-export function POSScreen({ navigation }: POSScreenProps) {
+export function QuoteScreen({ navigation }: QuoteScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [products, setProducts] = useState<POSProduct[]>([]);
+  const [products, setProducts] = useState<QuoteProduct[]>([]);
   const [loading, setLoading] = useState(true);
-  const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const insets = useSafeAreaInsets();
 
-  const { addItem, getTotal, getItemCount, customerId, customerName, setPaymentMethod, paymentMethod, items } = useCartStore();
-
-  const saleType: SaleType = paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO';
+  const { addItem, getTotal, getItemCount, customerId, customerName, items } = useQuoteCartStore();
 
   useEffect(() => {
     let mounted = true;
@@ -53,7 +42,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
           setViewMode(savedViewMode);
         }
       } catch (error) {
-        console.error('Error cargando vista de POS:', error);
+        console.error('Error cargando vista de Cotizaciones:', error);
       }
     };
 
@@ -65,7 +54,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
 
   useEffect(() => {
     AsyncStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode).catch((error) => {
-      console.error('Error guardando vista de POS:', error);
+      console.error('Error guardando vista de Cotizaciones:', error);
     });
   }, [viewMode]);
 
@@ -115,7 +104,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
     }
   };
 
-  const getProductImage = (item: POSProduct) => {
+  const getProductImage = (item: QuoteProduct) => {
     const fromParsed = Array.isArray(item.parsedData?.imageUrls) ? item.parsedData.imageUrls[0] : null;
     const fromLocalPending = item.parsedData?.imageUri ? String(item.parsedData.imageUri) : null;
     return fromParsed || fromLocalPending || item.imageUrl || null;
@@ -141,7 +130,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
     return map;
   }, [items]);
 
-  const handleProductPress = (product: POSProduct) => {
+  const handleProductPress = (product: QuoteProduct) => {
     if (!product.synced || !product.serverId || !product.isActive) {
       Alert.alert('Producto no disponible', 'Este producto no esta activo o no ha sido sincronizado.');
       return;
@@ -159,14 +148,6 @@ export function POSScreen({ navigation }: POSScreenProps) {
     });
   };
 
-  const setSaleType = (type: SaleType) => {
-    if (type === 'CREDITO') {
-      setPaymentMethod('CREDITO');
-    } else if (paymentMethod === 'CREDITO') {
-      setPaymentMethod('EFECTIVO');
-    }
-  };
-
   const renderCreateProductCard = () => (
     <TouchableOpacity
       style={[styles.createCard, viewMode === 'LISTA' && styles.createCardList]}
@@ -179,7 +160,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
     </TouchableOpacity>
   );
 
-  const renderProduct = ({ item }: { item: POSProduct }) => {
+  const renderProduct = ({ item }: { item: QuoteProduct }) => {
     const isOut = item.stock <= 0;
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
@@ -246,54 +227,14 @@ export function POSScreen({ navigation }: POSScreenProps) {
       <View style={styles.mainContent}>
         <View style={styles.saleCard}>
           <View style={styles.saleHeader}>
-            <Text style={styles.saleTitle}>Venta</Text>
+            <Text style={styles.saleTitle}>Cotización</Text>
           </View>
 
           <Text style={styles.label}>Cliente</Text>
-          <TouchableOpacity style={styles.selectLike} onPress={() => navigation.navigate('SelectCustomer')}>
+          <TouchableOpacity style={styles.selectLike} onPress={() => navigation.navigate('SelectQuoteCustomer')}>
             <Text style={styles.selectLikeText}>{customerName || '(General) Cliente general'}</Text>
             <Icon source="chevron-right" size={18} color="#6B7280" />
           </TouchableOpacity>
-
-          <Text style={styles.label}>Tipo de venta</Text>
-          <View style={styles.typeToggle}>
-            <TouchableOpacity style={[styles.typeBtn, saleType === 'CONTADO' && styles.typeBtnOn]} onPress={() => setSaleType('CONTADO')}>
-              <Text style={[styles.typeBtnText, saleType === 'CONTADO' && styles.typeBtnTextOn]}>Contado</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.typeBtn, saleType === 'CREDITO' && styles.typeBtnOn]} onPress={() => setSaleType('CREDITO')}>
-              <Text style={[styles.typeBtnText, saleType === 'CREDITO' && styles.typeBtnTextOn]}>Crédito</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.label}>Método de pago</Text>
-          <Menu
-            visible={paymentMenuVisible}
-            onDismiss={() => setPaymentMenuVisible(false)}
-            anchor={
-              <TouchableOpacity
-                style={[styles.selectLike, saleType === 'CREDITO' && styles.selectDisabled]}
-                onPress={() => {
-                  if (saleType !== 'CREDITO') setPaymentMenuVisible(true);
-                }}
-              >
-                <Text style={[styles.selectLikeText, saleType === 'CREDITO' && styles.selectDisabledText]}>
-                  {saleType === 'CREDITO' ? 'Crédito' : PAYMENT_OPTIONS.find((m) => m.value === paymentMethod)?.label || 'Efectivo'}
-                </Text>
-                <Icon source="chevron-down" size={18} color="#6B7280" />
-              </TouchableOpacity>
-            }
-          >
-            {PAYMENT_OPTIONS.map((option) => (
-              <Menu.Item
-                key={option.value}
-                title={option.label}
-                onPress={() => {
-                  setPaymentMethod(option.value);
-                  setPaymentMenuVisible(false);
-                }}
-              />
-            ))}
-          </Menu>
         </View>
 
         <View style={styles.searchWrap}>
@@ -365,7 +306,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
         }
       />
 
-      <BottomDock containerStyle={styles.bottomDockContainer} style={styles.bottomBar}>
+      <BottomDock style={styles.bottomBar}>
         <View style={styles.bottomTop}>
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
@@ -375,10 +316,10 @@ export function POSScreen({ navigation }: POSScreenProps) {
         </View>
         <TouchableOpacity
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
-          onPress={() => navigation.navigate('Cart', { customerId, customerName })}
+          onPress={() => navigation.navigate('QuoteCart', { customerId, customerName })}
           disabled={getItemCount() === 0}
         >
-          <Text style={styles.chargeButtonText}>Facturar</Text>
+          <Text style={styles.chargeButtonText}>Cotizar</Text>
           <Icon source="arrow-right" size={18} color="#fff" />
         </TouchableOpacity>
       </BottomDock>
@@ -409,7 +350,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 4,
     gap: 4,
-   
+    marginBottom: 8,
   },
   viewButton: { borderRadius: 8 },
   viewButtonActive: { backgroundColor: '#fff' },
@@ -427,17 +368,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   selectLikeText: { color: '#111827', fontSize: 14 },
-  selectDisabled: { backgroundColor: '#F3F4F6' },
-  selectDisabledText: { color: '#9CA3AF' },
-  typeToggle: { flexDirection: 'row', backgroundColor: '#F3F4F6', padding: 4, borderRadius: 8, gap: 4 },
-  typeBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 9, borderRadius: 6 },
-  typeBtnOn: { backgroundColor: ui.colors.primary },
-  typeBtnText: { color: '#6B7280', fontWeight: '700', fontSize: 13 },
-  typeBtnTextOn: { color: '#fff' },
   row: { paddingHorizontal: 14, justifyContent: 'space-between', marginBottom: 12 },
   listRow: { paddingHorizontal: 14, marginBottom: 12 },
   createCard: {
-    marginTop: 8,
     width: '48.4%',
     minHeight: 208,
     borderWidth: 2,
@@ -566,20 +499,19 @@ const styles = StyleSheet.create({
   emptyWrap: { alignItems: 'center', paddingVertical: 30 },
   emptyText: { color: '#6B7280' },
   bottomBar: {
-    backgroundColor: 'rgba(255,255,255,0.52)',
+    backgroundColor: 'rgba(255,255,255,0.72)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(229,231,235,0.45)',
+    borderTopColor: 'rgba(229,231,235,0.65)',
     paddingHorizontal: 14,
-    paddingTop: 6,
-    paddingBottom: 28,
+    paddingTop: 12,
   },
-  bottomTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
-  totalLabel: { color: '#6B7280', fontWeight: '700', fontSize: 12 },
+  bottomTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 12 },
+  totalLabel: { color: '#6B7280', fontWeight: '700' },
   totalInfo: { alignItems: 'flex-end' },
-  totalAmount: { color: '#111827', fontSize: 17, fontWeight: '800', lineHeight: 19 },
-  itemsText: { color: '#6B7280', fontSize: 11, lineHeight: 13 },
+  totalAmount: { color: '#111827', fontSize: 23, fontWeight: '800', lineHeight: 25 },
+  itemsText: { color: '#6B7280', fontSize: 12 },
   chargeButton: {
-    height: 46,
+    height: 50,
     borderRadius: 12,
     backgroundColor: ui.colors.primary,
     flexDirection: 'row',
@@ -589,7 +521,4 @@ const styles = StyleSheet.create({
   },
   chargeButtonDisabled: { backgroundColor: '#C4B5FD' },
   chargeButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
-  bottomDockContainer: {
-    backgroundColor: 'transparent',
-  },
 });

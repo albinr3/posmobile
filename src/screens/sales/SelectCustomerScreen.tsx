@@ -5,9 +5,15 @@ import { Searchbar, Surface, Text, Button } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { db } from '../../database/Database';
 import { useCartStore } from '../../store/cartStore';
+import { useQuoteCartStore } from '../../store/quoteCartStore';
 
 interface SelectCustomerScreenProps {
   navigation: any;
+  route?: {
+    params?: {
+      mode?: 'SALE' | 'QUOTE';
+    };
+  };
 }
 
 interface CustomerRow {
@@ -16,11 +22,13 @@ interface CustomerRow {
   phone?: string;
 }
 
-export function SelectCustomerScreen({ navigation }: SelectCustomerScreenProps) {
+export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [customers, setCustomers] = useState<CustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const { setCustomer } = useCartStore();
+  const { setCustomer: setSaleCustomer } = useCartStore();
+  const { setCustomer: setQuoteCustomer } = useQuoteCartStore();
+  const mode = route?.params?.mode === 'QUOTE' ? 'QUOTE' : 'SALE';
 
   useFocusEffect(
     useCallback(() => {
@@ -48,7 +56,11 @@ export function SelectCustomerScreen({ navigation }: SelectCustomerScreenProps) 
   });
 
   const handleSelectCustomer = (customerId: string | null, customerName: string | null) => {
-    setCustomer(customerId, customerName);
+    if (mode === 'QUOTE') {
+      setQuoteCustomer(customerId, customerName);
+    } else {
+      setSaleCustomer(customerId, customerName);
+    }
     navigation.goBack();
   };
 
@@ -57,6 +69,7 @@ export function SelectCustomerScreen({ navigation }: SelectCustomerScreenProps) 
       <View style={styles.header}>
         <Searchbar
           placeholder="Buscar cliente..."
+          placeholderTextColor="#B8B2C8"
           value={searchQuery}
           onChangeText={setSearchQuery}
         />

@@ -1,21 +1,37 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, ScrollView, Share, Alert } from 'react-native';
 import { Text, Surface, Button, Divider } from 'react-native-paper';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { Asset } from 'expo-asset';
 import { SafeAreaView } from '../../components/SafeAreaView';
-import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
-import { Sale, SaleItem } from '../../types';
 import { ui } from '../../theme/ui';
 
-interface ReceiptScreenProps {
+interface ReturnReceiptItem {
+  productName: string;
+  qty: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
+}
+
+interface ReturnReceiptPayload {
+  returnId?: string;
+  returnCode: string;
+  returnedAt: number;
+  invoiceCode: string;
+  customerName: string;
+  totalCents: number;
+  notes?: string | null;
+  items: ReturnReceiptItem[];
+}
+
+interface ReturnReceiptScreenProps {
   navigation: any;
   route?: {
     params?: {
-      saleId?: string;
-      invoiceCode?: string;
+      receipt?: ReturnReceiptPayload;
+      autoPrint?: boolean;
     };
   };
 }
@@ -28,34 +44,20 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
-const buildReceiptHtml = (params: {
-  invoiceCode: string;
-  createdAt: number;
-  customerName?: string | null;
-  paymentMethod?: string | null;
-  totalCents: number;
-  items: SaleItem[];
-  logoUri: string;
-}) => {
-  const { invoiceCode, createdAt, customerName, paymentMethod, totalCents, items, logoUri } = params;
-
-  const itemsRows = (items || [])
+const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) => {
+  const itemsRows = (receipt.items || [])
     .map(
       (item) => `
         <div class="item">
           <div class="item-name">${escapeHtml(item.productName)}</div>
           <div class="item-line">
-            <span>${item.quantity} x ${formatCurrency(item.priceCents)}</span>
-            <span class="item-total">${formatCurrency(item.totalCents)}</span>
+            <span>${item.qty} x ${formatCurrency(item.unitPriceCents)}</span>
+            <span class="item-total">${formatCurrency(item.lineTotalCents)}</span>
           </div>
         </div>
       `
     )
     .join('');
-
-  const subtotalCents = Math.round(totalCents / 1.18);
-  const itbisCents = totalCents - subtotalCents;
-  const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
 
   return `
     <html>
@@ -67,6 +69,7 @@ const buildReceiptHtml = (params: {
           .ticket { width: 80mm; margin: 0 auto; padding: 10px 10px 14px; font-size: 14px; line-height: 1.25; }
           .brand { text-align: center; margin-bottom: 6px; }
           .logo { height: 28px; width: auto; }
+          .title { text-align: center; font-size: 16px; font-weight: 800; margin-bottom: 6px; }
           .sep { border-top: 1px dashed #444; border-bottom: 1px dashed #444; padding: 7px 0; margin: 7px 0; }
           .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
           .item { border-bottom: 1px dashed #c4c4c4; padding-bottom: 7px; margin-bottom: 7px; }
@@ -74,6 +77,7 @@ const buildReceiptHtml = (params: {
           .item-line { display: flex; justify-content: space-between; margin-top: 4px; }
           .item-total { font-weight: 700; }
           .total { border-top: 1px dashed #444; padding-top: 7px; margin-top: 6px; font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; }
+          .notes { margin-top: 8px; font-size: 12px; }
           .thanks { text-align: center; margin-top: 10px; font-weight: 600; }
         </style>
       </head>
@@ -82,83 +86,43 @@ const buildReceiptHtml = (params: {
           <div class="brand">
             <img src="${escapeHtml(logoUri)}" class="logo" />
           </div>
+          <div class="title">COMPROBANTE DE DEVOLUCION</div>
           <div class="sep">
-            <div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div>
-            <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div>
-            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName || '(General) Cliente general')}</div>
-            <div style="margin-top:4px;"><strong>Tipo de venta:</strong> ${escapeHtml(saleTypeLabel)}</div>
-            <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethod || '-')}</div>
+            <div class="row"><span>Devolucion:</span><span><strong>${escapeHtml(receipt.returnCode)}</strong></span></div>
+            <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(receipt.returnedAt))}</span></div>
+            <div class="row"><span>Factura:</span><span>${escapeHtml(receipt.invoiceCode || '-')}</span></div>
+            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(receipt.customerName || 'Cliente general')}</div>
           </div>
           <div>${itemsRows}</div>
-          <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-          <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
-          <div class="total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
-          <div class="thanks">Gracias por su compra</div>
+          <div class="total"><span>TOTAL DEVUELTO</span><span>${formatCurrency(receipt.totalCents)}</span></div>
+          ${receipt.notes ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(receipt.notes)}</div>` : ''}
+          <div class="thanks">Movimiento registrado</div>
         </div>
       </body>
     </html>
   `;
 };
 
-export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
-  const saleId = route?.params?.saleId || '';
-  const routeInvoiceCode = route?.params?.invoiceCode || '';
+export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenProps) {
+  const receipt = route?.params?.receipt;
+  const autoPrint = route?.params?.autoPrint === true;
   const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
-  const [sale, setSale] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [autoPrintDone, setAutoPrintDone] = useState(false);
 
-  useEffect(() => {
-    loadSale();
-  }, []);
+  const html = useMemo(() => (receipt ? buildReturnReceiptHtml(receipt, logoUri) : ''), [receipt, logoUri]);
 
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
-      const actionType = event?.data?.action?.type;
-      if (actionType === 'GO_BACK' || actionType === 'POP') {
-        event.preventDefault();
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'POSMain' }],
-        });
-      }
-    });
-
-    return unsubscribe;
-  }, [navigation]);
-
-  const loadSale = async () => {
+  const handlePrint = useCallback(async () => {
+    if (!html) return;
     try {
-      const result = await db.queryFirst<any>(
-        'SELECT * FROM sales WHERE local_id = ?',
-        [saleId]
-      );
-      if (result) {
-        const saleData = JSON.parse(result.data);
-        setSale({
-          ...result,
-          ...saleData,
-        });
-      }
+      await Print.printAsync({ html });
     } catch (error) {
-      console.error('Error cargando venta:', error);
-    } finally {
-      setLoading(false);
+      console.error('Error imprimiendo devolución:', error);
+      Alert.alert('Error', 'No se pudo abrir la vista de impresión.');
     }
-  };
+  }, [html]);
 
-  const handleShare = async () => {
-    if (!sale) return;
-    const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
-    const html = buildReceiptHtml({
-      invoiceCode: displayInvoiceCode,
-      createdAt: sale.createdAt,
-      customerName: sale.customerName,
-      paymentMethod: sale.paymentMethod,
-      totalCents: sale.totalCents,
-      items: sale.items || [],
-      logoUri,
-    });
-
+  const handleShare = useCallback(async () => {
+    if (!html || !receipt) return;
     try {
       const pdf = await Print.printToFileAsync({ html });
       const sharingAvailable = await Sharing.isAvailableAsync();
@@ -166,72 +130,37 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       if (sharingAvailable) {
         await Sharing.shareAsync(pdf.uri, {
           mimeType: 'application/pdf',
-          dialogTitle: `Factura ${displayInvoiceCode}`,
+          dialogTitle: `Devolución ${receipt.returnCode}`,
           UTI: 'com.adobe.pdf',
         });
       } else {
         await Share.share({
-          title: `Factura ${displayInvoiceCode}`,
-          message: `Factura ${displayInvoiceCode}`,
+          title: `Devolución ${receipt.returnCode}`,
+          message: `Devolución ${receipt.returnCode}`,
           url: pdf.uri,
         });
       }
     } catch (error) {
-      console.error('Error compartiendo:', error);
+      console.error('Error compartiendo devolución:', error);
       Alert.alert('Error', 'No se pudo abrir el menú para compartir.');
     }
-  };
+  }, [html, receipt]);
 
-  const handlePrint = async () => {
-    if (!sale) return;
+  useEffect(() => {
+    if (!autoPrint || autoPrintDone || !html) return;
+    setAutoPrintDone(true);
+    void handlePrint();
+  }, [autoPrint, autoPrintDone, html, handlePrint]);
 
-    const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
-    const html = buildReceiptHtml({
-      invoiceCode: displayInvoiceCode,
-      createdAt: sale.createdAt,
-      customerName: sale.customerName,
-      paymentMethod: sale.paymentMethod,
-      totalCents: sale.totalCents,
-      items: sale.items || [],
-      logoUri,
-    });
-
-    try {
-      await Print.printAsync({ html });
-    } catch (error) {
-      console.error('Error imprimiendo:', error);
-      Alert.alert('Error', 'No se pudo abrir la vista de impresión.');
-    }
-  };
-
-  const handleNewSale = () => {
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'POS' }],
-    });
-  };
-
-  if (loading) {
+  if (!receipt) {
     return (
       <SafeAreaView style={styles.container} edges={['bottom']}>
         <View style={styles.loadingContainer}>
-          <Text>Cargando...</Text>
+          <Text>Comprobante no disponible</Text>
         </View>
       </SafeAreaView>
     );
   }
-
-  if (!sale) {
-    return (
-      <SafeAreaView style={styles.container} edges={['bottom']}>
-        <View style={styles.loadingContainer}>
-          <Text>Venta no encontrada</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -240,86 +169,81 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
           <View style={styles.successIcon}>
             <Text style={styles.checkmark}>✓</Text>
           </View>
-          
-          <Text style={styles.successText}>¡Venta Completada!</Text>
+
+          <Text style={styles.successText}>¡Devolución Registrada!</Text>
 
           <Divider style={styles.divider} />
 
           <View style={styles.infoRow}>
+            <Text style={styles.label}>Devolución:</Text>
+            <Text style={styles.value}>{receipt.returnCode}</Text>
+          </View>
+
+          <View style={styles.infoRow}>
             <Text style={styles.label}>Factura:</Text>
-            <Text style={styles.value}>{displayInvoiceCode}</Text>
+            <Text style={styles.value}>{receipt.invoiceCode || '-'}</Text>
           </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.label}>Fecha:</Text>
-            <Text style={styles.value}>{formatDateTime(sale.createdAt)}</Text>
+            <Text style={styles.value}>{formatDateTime(receipt.returnedAt)}</Text>
           </View>
-
-          {sale.customerName && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Cliente:</Text>
-              <Text style={styles.value}>{sale.customerName}</Text>
-            </View>
-          )}
 
           <View style={styles.infoRow}>
-            <Text style={styles.label}>Método de Pago:</Text>
-            <Text style={styles.value}>{sale.paymentMethod}</Text>
+            <Text style={styles.label}>Cliente:</Text>
+            <Text style={styles.value}>{receipt.customerName || 'Cliente general'}</Text>
           </View>
+
+          {receipt.notes ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Notas:</Text>
+              <Text style={styles.value}>{receipt.notes}</Text>
+            </View>
+          ) : null}
 
           <Divider style={styles.divider} />
 
           <Text style={styles.sectionTitle}>Productos</Text>
-          {sale.items?.map((item: SaleItem, index: number) => (
-            <View key={index} style={styles.itemRow}>
+          {(receipt.items || []).map((item, index) => (
+            <View key={`${item.productName}-${index}`} style={styles.itemRow}>
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.productName}</Text>
-                <Text style={styles.itemQty}>x{item.quantity} @ {formatCurrency(item.priceCents)}</Text>
+                <Text style={styles.itemQty}>
+                  x{item.qty} @ {formatCurrency(item.unitPriceCents)}
+                </Text>
               </View>
-              <Text style={styles.itemTotal}>{formatCurrency(item.totalCents)}</Text>
+              <Text style={styles.itemTotal}>{formatCurrency(item.lineTotalCents)}</Text>
             </View>
           ))}
 
           <Divider style={styles.divider} />
 
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total</Text>
-            <Text style={styles.totalValue}>{formatCurrency(sale.totalCents)}</Text>
+            <Text style={styles.totalLabel}>Total devuelto</Text>
+            <Text style={styles.totalValue}>{formatCurrency(receipt.totalCents)}</Text>
           </View>
         </Surface>
 
         <View style={styles.actions}>
-          <Button
-            mode="outlined"
-            icon="share-variant"
-            onPress={handleShare}
-            style={styles.actionButton}
-            textColor={ui.colors.primary}
-          >
+          <Button mode="outlined" icon="share-variant" onPress={handleShare} style={styles.actionButton} textColor={ui.colors.primary}>
             Compartir
           </Button>
 
-          <Button
-            mode="outlined"
-            icon="printer"
-            onPress={handlePrint}
-            style={styles.actionButton}
-            textColor={ui.colors.primary}
-          >
+          <Button mode="outlined" icon="printer" onPress={handlePrint} style={styles.actionButton} textColor={ui.colors.primary}>
             Imprimir
           </Button>
         </View>
 
         <Button
           mode="contained"
-          icon="plus"
-          onPress={handleNewSale}
-          style={styles.newSaleButton}
-          contentStyle={styles.newSaleButtonContent}
+          icon="arrow-left"
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
+          contentStyle={styles.backButtonContent}
           buttonColor={ui.colors.primary}
           textColor="#fff"
         >
-          Nueva Venta
+          Volver a devoluciones
         </Button>
       </ScrollView>
     </SafeAreaView>
@@ -376,6 +300,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginBottom: 8,
+    gap: 12,
   },
   label: {
     fontSize: 14,
@@ -385,6 +310,8 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     color: ui.colors.text,
+    textAlign: 'right',
+    flexShrink: 1,
   },
   sectionTitle: {
     fontSize: 16,
@@ -439,10 +366,10 @@ const styles = StyleSheet.create({
     flex: 1,
     borderColor: ui.colors.primary,
   },
-  newSaleButton: {
+  backButton: {
     marginTop: 16,
   },
-  newSaleButtonContent: {
+  backButtonContent: {
     paddingVertical: 8,
   },
 });

@@ -63,6 +63,21 @@ class DatabaseService {
       );
     `);
 
+    // Tabla de cotizaciones
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS quotes (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        quote_code TEXT NOT NULL,
+        customer_id TEXT,
+        total_cents INTEGER NOT NULL,
+        status TEXT DEFAULT 'draft',
+        created_at INTEGER NOT NULL,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
     // Tabla de productos
     await this.db.execAsync(`
       CREATE TABLE IF NOT EXISTS products (
@@ -131,6 +146,7 @@ class DatabaseService {
     // Índices para búsquedas rápidas
     await this.db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_sales_synced ON sales(synced);
+      CREATE INDEX IF NOT EXISTS idx_quotes_synced ON quotes(synced);
       CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
       CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
       CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);

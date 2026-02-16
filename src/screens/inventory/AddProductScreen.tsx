@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image } from 'react-native';
 import { TextInput, Button, Text, Icon, Menu } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
+import { BottomDock } from '../../components/BottomDock';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
@@ -549,7 +550,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
       </ScrollView>
 
-      <View style={[styles.bottomAction, { paddingBottom: Math.max(insets.bottom, 10) }]}>
+      <BottomDock style={styles.bottomAction}>
         <Button
           mode="contained"
           icon="content-save"
@@ -562,7 +563,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         >
           Guardar Producto
         </Button>
-      </View>
+      </BottomDock>
     </SafeAreaView>
   );
 }
@@ -720,10 +721,6 @@ const styles = StyleSheet.create({
   taxChipText: { color: ui.colors.text, fontWeight: '600' },
   taxChipTextOn: { color: ui.colors.primary, fontWeight: '800' },
   bottomAction: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
     paddingHorizontal: 14,
     paddingTop: 10,
     backgroundColor: 'rgba(247,246,248,0.94)',
