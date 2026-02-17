@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Image } from 'react-native';
 import { Searchbar, Text, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -22,14 +22,52 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const syncingOnFocusRef = useRef(false);
   const { getToken } = useAuth();
   const { subUserToken } = useAuthStore();
 
   useFocusEffect(
     useCallback(() => {
-      loadProducts();
+      let active = true;
+      const syncOnEnter = async () => {
+        await loadProducts();
+        if (syncingOnFocusRef.current) return;
+        syncingOnFocusRef.current = true;
+        try {
+          await syncProducts(false);
+          if (active) await loadProducts();
+        } finally {
+          syncingOnFocusRef.current = false;
+        }
+      };
+      syncOnEnter();
+      return () => {
+        active = false;
+      };
     }, [])
   );
+
+  const syncProducts = async (showSessionAlert: boolean) => {
+    const clerkToken = await getToken();
+    if (!clerkToken || !subUserToken) {
+      if (showSessionAlert) {
+        Alert.alert('Sincronización', 'No hay sesión activa para sincronizar.');
+      }
+      return false;
+    }
+
+    // Reintentar productos que quedaron en error en cola (ej: imagen no subida).
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET status = 'pending', retry_count = 0
+       WHERE entity_type = 'product' AND action IN ('create', 'update') AND status = 'error'`
+    );
+
+    syncService.setGetTokenFunction(getToken);
+    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    await syncService.fullSync(clerkToken);
+    return true;
+  };
 
   const loadProducts = async () => {
     try {
@@ -75,23 +113,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      const clerkToken = await getToken();
-      if (!clerkToken || !subUserToken) {
-        Alert.alert('Sincronización', 'No hay sesión activa para sincronizar.');
-        await loadProducts();
-        return;
-      }
-
-      // Reintentar productos que quedaron en error en cola (ej: imagen no subida).
-      await db.runAsync(
-        `UPDATE sync_queue
-         SET status = 'pending', retry_count = 0
-         WHERE entity_type = 'product' AND action IN ('create', 'update') AND status = 'error'`
-      );
-
-      syncService.setGetTokenFunction(getToken);
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-      await syncService.fullSync(clerkToken);
+      await syncProducts(true);
     } catch (error) {
       console.error('Error sincronizando productos:', error);
     }

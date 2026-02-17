@@ -25,6 +25,7 @@ interface POSScreenProps {
 interface POSProduct extends Product {
   isActive: boolean;
   parsedData?: any;
+  reference?: string | null;
 }
 
 type SaleType = 'CONTADO' | 'CREDITO';
@@ -45,6 +46,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const insets = useSafeAreaInsets();
   const hydratedEditSaleRef = useRef<string | null>(null);
+  const internalNavigationRef = useRef(false);
 
   const {
     addItem,
@@ -58,6 +60,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     loadInvoiceForEdit,
     editingSaleLocalId,
     editingInvoiceCode,
+    clear,
   } = useCartStore();
 
   const saleType: SaleType = paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO';
@@ -94,6 +97,21 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
       loadProducts();
     }, [])
   );
+
+  useEffect(() => {
+    const unsubscribeBlur = navigation.addListener?.('blur', () => {
+      if (internalNavigationRef.current) {
+        internalNavigationRef.current = false;
+        return;
+      }
+      clear();
+      setSearchQuery('');
+      setPaymentMenuVisible(false);
+      hydratedEditSaleRef.current = null;
+      navigation.setParams?.({ editSaleLocalId: undefined, editNonce: undefined });
+    });
+    return unsubscribeBlur;
+  }, [navigation, clear]);
 
   useEffect(() => {
     const saleLocalId = route?.params?.editSaleLocalId;
@@ -199,6 +217,14 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         serverId: row.server_id,
         name: row.name,
         sku: row.sku,
+        reference: (() => {
+          try {
+            const parsed = row.data ? JSON.parse(row.data) : null;
+            return parsed?.reference ? String(parsed.reference) : null;
+          } catch {
+            return null;
+          }
+        })(),
         priceCents: row.price_cents,
         stock: row.stock,
         imageUrl: row.image_url,
@@ -236,7 +262,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         .filter(
           (product) =>
             product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase()))
+            (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
+            (product.reference && product.reference.toLowerCase().includes(searchQuery.toLowerCase()))
         ),
     [products, searchQuery]
   );
@@ -262,6 +289,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   };
 
   const handleScanBarcode = () => {
+    internalNavigationRef.current = true;
     navigation.navigate('BarcodeScanner', {
       onScan: (barcode: string) => setSearchQuery(barcode),
     });
@@ -294,25 +322,30 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
     if (viewMode === 'LISTA') {
       return (
-        <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
-          {selectedQty > 0 ? (
-            <View style={styles.qtyBadge}>
-              <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+        <View style={styles.listItemWrap}>
+          <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
+            {selectedQty > 0 ? (
+              <View style={styles.qtyBadge}>
+                <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+              </View>
+            ) : null}
+            <View style={styles.productInfoListOnly}>
+              <View style={styles.listTopRow}>
+                <Text style={styles.productNameList} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
+              </View>
+              <View style={styles.listBottomRow}>
+                <Text style={styles.skuTextList}>
+                  {item.sku ? `SKU ${item.sku}` : 'Sin SKU'}
+                  {item.reference ? ` | Ref ${item.reference}` : ''}
+                </Text>
+                <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+              </View>
             </View>
-          ) : null}
-          <View style={styles.productInfoListOnly}>
-            <View style={styles.listTopRow}>
-              <Text style={styles.productNameList} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
-            </View>
-            <View style={styles.listBottomRow}>
-              <Text style={styles.skuTextList}>{item.sku ? `SKU ${item.sku}` : 'Sin SKU'}</Text>
-              <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
       );
     }
 
@@ -342,6 +375,11 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <Text style={styles.productName} numberOfLines={2}>
             {item.name}
           </Text>
+          {item.reference ? (
+            <Text style={styles.referenceText} numberOfLines={1}>
+              Ref: {item.reference}
+            </Text>
+          ) : null}
           <Text style={styles.productPrice}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
           <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
         </View>
@@ -358,7 +396,13 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           </View>
 
           <Text style={styles.label}>Cliente</Text>
-          <TouchableOpacity style={styles.selectLike} onPress={() => navigation.navigate('SelectCustomer')}>
+          <TouchableOpacity
+            style={styles.selectLike}
+            onPress={() => {
+              internalNavigationRef.current = true;
+              navigation.navigate('SelectCustomer');
+            }}
+          >
             <Text style={styles.selectLikeText}>{customerName || '(General) Cliente general'}</Text>
             <Icon source="chevron-right" size={18} color="#6B7280" />
           </TouchableOpacity>
@@ -483,7 +527,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         </View>
         <TouchableOpacity
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
-          onPress={() => navigation.navigate('Cart', { customerId, customerName, editSaleLocalId: editingSaleLocalId })}
+          onPress={() => {
+            internalNavigationRef.current = true;
+            navigation.navigate('Cart', { customerId, customerName, editSaleLocalId: editingSaleLocalId });
+          }}
           disabled={getItemCount() === 0}
         >
           <Text style={styles.chargeButtonText}>{editingSaleLocalId ? 'Guardar Cambios' : 'Facturar'}</Text>
@@ -584,8 +631,12 @@ const styles = StyleSheet.create({
   },
   productCardList: {
     width: '100%',
-    minHeight: 56,
+    minHeight: 72,
     flexDirection: 'row',
+    marginBottom: 2,
+  },
+  listItemWrap: {
+    paddingHorizontal: 14,
   },
   qtyBadge: {
     position: 'absolute',
@@ -638,7 +689,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 2,
+    paddingVertical: 8,
   },
   listTopRow: {
     flexDirection: 'row',
@@ -667,6 +718,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontSize: 12,
   },
+  referenceText: { color: '#6B7280', fontSize: 11, marginTop: 4 },
   productName: { textAlign: 'center', color: '#111827', fontWeight: '600', fontSize: 13 },
   productPrice: { color: ui.colors.primary, marginTop: 8, fontWeight: '800' },
   stockText: { color: '#6B7280', fontSize: 11, marginTop: 4 },

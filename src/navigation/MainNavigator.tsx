@@ -15,6 +15,7 @@ import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
 import { POSScreen } from '../screens/sales/POSScreen';
 import { QuoteScreen } from '../screens/sales/QuoteScreen';
+import { QuoteListScreen } from '../screens/sales/QuoteListScreen';
 import { CartScreen } from '../screens/sales/CartScreen';
 import { QuoteCartScreen } from '../screens/sales/QuoteCartScreen';
 import { ReceiptScreen } from '../screens/sales/ReceiptScreen';
@@ -68,6 +69,14 @@ function QuotesStack() {
       <Stack.Screen name="QuoteCart" component={QuoteCartScreen} />
       <Stack.Screen name="SelectQuoteCustomer" component={SelectCustomerScreen} initialParams={{ mode: 'QUOTE' }} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+    </Stack.Navigator>
+  );
+}
+
+function QuoteListStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="QuoteListMain" component={QuoteListScreen} />
     </Stack.Navigator>
   );
 }
@@ -266,6 +275,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     { key: 'dashboard', label: 'Dashboard', icon: 'chart-bar' },
     { key: 'billing', label: 'Lista de Facturas', icon: 'card-text-outline' },
     { key: 'quotes', label: 'Cotizaciones', icon: 'file-document-outline' },
+    { key: 'quotes_list', label: 'Lista de Cotizaciones', icon: 'file-document-multiple-outline' },
     { key: 'returns', label: 'Devoluciones', icon: 'backup-restore' },
     { key: 'customers', label: 'Clientes', icon: 'account-group-outline' },
     { key: 'products', label: 'Productos', icon: 'package-variant-closed' },
@@ -300,6 +310,10 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     }
     if (key === 'quotes') {
       (props.navigation as any).navigate('Quotes', { screen: 'QuoteMain' });
+      return;
+    }
+    if (key === 'quotes_list') {
+      (props.navigation as any).navigate('QuoteListMenu', { screen: 'QuoteListMain' });
       return;
     }
     if (key === 'returns') {
@@ -381,6 +395,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'dashboard' && currentRoute === 'Home') ||
             (item.key === 'customers' && currentRoute === 'Customers') ||
             (item.key === 'quotes' && currentRoute === 'Quotes') ||
+            (item.key === 'quotes_list' && currentRoute === 'QuoteListMenu') ||
             (item.key === 'returns' && currentRoute === 'Returns') ||
             (item.key === 'reports_menu' && currentRoute === 'Reports') ||
             (item.key === 'settings_menu' && currentRoute === 'Settings') ||
@@ -455,6 +470,7 @@ export function MainNavigator() {
       <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />
       <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />
       <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
+      <Drawer.Screen name="QuoteListMenu" component={QuoteListStack} options={{ title: 'Lista de Cotizaciones' }} />
       <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
       <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
       <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />

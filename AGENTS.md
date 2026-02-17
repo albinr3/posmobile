@@ -2,3 +2,6 @@
 Si necesitas validar endpoints, contratos o lógica del backend, consulta este path local:
 
 `C:\Users\Albin Rodriguez\Documents\pos\src\app\api`
+
+si esa ruta no existe buscala en:
+`C:\Users\Albin Rodríguez\Videos\Nueva carpeta\tejada-pos\src\app\api`

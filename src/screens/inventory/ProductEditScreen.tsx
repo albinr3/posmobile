@@ -21,6 +21,7 @@ interface ProductEditScreenProps {
 interface OptionItem {
   id: string;
   name: string;
+  internalId?: string | null;
 }
 
 export function ProductEditScreen({ navigation, route }: ProductEditScreenProps) {
@@ -52,6 +53,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   const [loading, setLoading] = useState(false);
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const hasPendingImageSelectionRef = useRef(false);
+  const hydratedProductIdRef = useRef<string | null>(null);
 
   const loadCatalogOptions = useCallback(async () => {
     try {
@@ -88,7 +90,13 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       ]);
 
       const suppliersData = (suppliersRaw || []).map((s: any) => ({ id: String(s.id), name: String(s.name || '') }));
-      const categoriesData = (categoriesRaw || []).map((c: any) => ({ id: String(c.id), name: String(c.name || '') }));
+      const categoriesData = (categoriesRaw || [])
+        .map((c: any) => ({
+          id: String(c.id ?? c.categoryId ?? ''),
+          name: String(c.name || ''),
+          internalId: c.internalId ? String(c.internalId) : null,
+        }))
+        .filter((c: OptionItem) => !!c.id);
       setSuppliers(suppliersData);
       setCategories(categoriesData);
     } catch (error) {
@@ -141,10 +149,15 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
 
   useFocusEffect(
     useCallback(() => {
-      hasPendingImageSelectionRef.current = false;
-      loadProduct();
+      const shouldHydrate = hydratedProductIdRef.current !== productId;
+      if (shouldHydrate) {
+        hasPendingImageSelectionRef.current = false;
+        loadProduct().then(() => {
+          hydratedProductIdRef.current = productId;
+        });
+      }
       loadCatalogOptions();
-    }, [loadCatalogOptions, loadProduct])
+    }, [loadCatalogOptions, loadProduct, productId])
   );
 
   useEffect(() => {
@@ -155,8 +168,13 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
 
   useEffect(() => {
     if (!categoryId) return;
-    const category = categories.find((item) => item.id === categoryId);
-    if (category) setCategoryName(category.name);
+    const category = categories.find((item) => item.id === categoryId || item.internalId === categoryId);
+    if (!category) return;
+    if (category.id !== categoryId) {
+      // Migra ids legados (internalId UUID) al id publico actual que espera la API.
+      setCategoryId(category.id);
+    }
+    setCategoryName(category.name);
   }, [categoryId, categories]);
 
   const pickImage = async () => {

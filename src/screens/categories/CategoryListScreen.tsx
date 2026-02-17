@@ -15,6 +15,7 @@ interface CategoryListScreenProps {
 
 interface CategoryItem {
   id: string;
+  internalId?: string | null;
   name: string;
   description?: string | null;
 }
@@ -49,7 +50,8 @@ export function CategoryListScreen({ navigation }: CategoryListScreenProps) {
       });
 
       const rows = (response.data?.data || []).map((item: any) => ({
-        id: String(item.id),
+        id: String(item.id ?? item.categoryId ?? ''),
+        internalId: item.internalId ? String(item.internalId) : null,
         name: String(item.name || ''),
         description: item.description ? String(item.description) : null,
       }));
@@ -86,6 +88,7 @@ export function CategoryListScreen({ navigation }: CategoryListScreenProps) {
         <Avatar.Text size={42} label={item.name.substring(0, 2).toUpperCase()} style={styles.avatar} labelStyle={styles.avatarLabel} />
         <View style={styles.categoryDetails}>
           <Text style={styles.categoryName}>{item.name}</Text>
+          <Text style={styles.categoryId}>ID: {item.id}</Text>
           <Text style={styles.categoryDescription}>{item.description || 'Sin descripción'}</Text>
         </View>
       </View>
@@ -160,6 +163,7 @@ const styles = StyleSheet.create({
   avatarLabel: { color: ui.colors.primary, fontWeight: '700' },
   categoryDetails: { marginLeft: 10, flex: 1 },
   categoryName: { fontSize: 15, fontWeight: '700', color: ui.colors.text },
+  categoryId: { fontSize: 12, color: ui.colors.textMuted, marginTop: 2 },
   categoryDescription: { fontSize: 12, color: ui.colors.textMuted, marginTop: 2 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },

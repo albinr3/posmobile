@@ -45,7 +45,19 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
   const [loading, setLoading] = useState(false);
-  const { items, updateQuantity, removeItem, getTotal, customerId, customerName, clear, setCustomer } = useQuoteCartStore();
+  const {
+    items,
+    updateQuantity,
+    removeItem,
+    getTotal,
+    customerId,
+    customerName,
+    clear,
+    setCustomer,
+    editingQuoteLocalId,
+    editingQuoteServerId,
+    editingQuoteCode,
+  } = useQuoteCartStore();
   const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
 
   useFocusEffect(
@@ -64,12 +76,14 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
 
     setLoading(true);
     try {
-      const localId = generateLocalId();
-      const localQuoteCode = `LOCAL-${Date.now()}`;
       const now = Date.now();
+      const isEditing = !!editingQuoteLocalId;
+      const localId = editingQuoteLocalId || generateLocalId();
+      const localQuoteCode = editingQuoteCode || `LOCAL-${Date.now()}`;
 
       const quoteData = {
         localId,
+        id: editingQuoteServerId || undefined,
         quoteCode: localQuoteCode,
         customerId: customerId ?? null,
         customerName: customerName ?? null,
@@ -79,18 +93,74 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         createdAt: now,
       };
 
-      await db.insert('quotes', {
-        local_id: localId,
-        quote_code: localQuoteCode,
-        customer_id: quoteData.customerId,
-        total_cents: getTotal(),
-        status: 'pending',
-        created_at: now,
-        synced: 0,
-        data: JSON.stringify(quoteData),
-      });
+      if (isEditing) {
+        const existing = await db.queryFirst<{ local_id: string; server_id: string | null; quote_code: string; created_at: number }>(
+          'SELECT local_id, server_id, quote_code, created_at FROM quotes WHERE local_id = ?',
+          [localId]
+        );
+        if (!existing) {
+          throw new Error('No se encontró la cotización a editar.');
+        }
 
-      await syncService.queueOperation('quote', 'create', quoteData, localId);
+        const updatedQuoteData = {
+          ...quoteData,
+          quoteCode: existing.quote_code || quoteData.quoteCode,
+          createdAt: Number(existing.created_at || quoteData.createdAt),
+          id: existing.server_id || quoteData.id || undefined,
+        };
+
+        await db.update('quotes', localId, {
+          customer_id: updatedQuoteData.customerId,
+          total_cents: updatedQuoteData.totalCents,
+          status: 'pending',
+          synced: 0,
+          data: JSON.stringify(updatedQuoteData),
+        });
+
+        if (existing.server_id) {
+          await syncService.queueOperation(
+            'quote',
+            'update',
+            { ...updatedQuoteData, id: existing.server_id },
+            localId
+          );
+        } else {
+          const pendingCreate = await db.queryFirst<{ id: number }>(
+            `SELECT id
+             FROM sync_queue
+             WHERE entity_type = 'quote'
+               AND entity_local_id = ?
+               AND action = 'create'
+               AND status = 'pending'
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [localId]
+          );
+          if (pendingCreate?.id) {
+            await db.update(
+              'sync_queue',
+              String(pendingCreate.id),
+              { data: JSON.stringify(updatedQuoteData), created_at: Date.now() },
+              'id'
+            );
+          } else {
+            await syncService.queueOperation('quote', 'create', updatedQuoteData, localId);
+          }
+        }
+      } else {
+        await db.insert('quotes', {
+          local_id: localId,
+          quote_code: localQuoteCode,
+          customer_id: quoteData.customerId,
+          total_cents: getTotal(),
+          status: 'pending',
+          created_at: now,
+          synced: 0,
+          data: JSON.stringify(quoteData),
+        });
+
+        await syncService.queueOperation('quote', 'create', quoteData, localId);
+      }
 
       const itemsRows = quoteData.items
         .map(
@@ -244,7 +314,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
             style={styles.completeButton}
             contentStyle={styles.completeButtonContent}
           >
-            Confirmar Cotización
+            {editingQuoteLocalId ? 'Guardar cambios' : 'Confirmar Cotización'}
           </Button>
 
           <Button mode="text" onPress={clear}>

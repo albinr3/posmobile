@@ -9,7 +9,8 @@ WebBrowser.maybeCompleteAuthSession();
 if (__DEV__) {
   // Emitted by @react-navigation/stack on React Native 0.83+.
   LogBox.ignoreLogs([
-    'InteractionManager has been deprecated and will be removed in a future release.',
+    'InteractionManager has been deprecated',
+    "Please refactor long tasks into smaller ones, and use 'requestIdleCallback' instead.",
   ]);
 }
 

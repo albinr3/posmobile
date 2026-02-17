@@ -50,7 +50,7 @@ export function AddCategoryScreen({ navigation, route }: AddCategoryScreenProps)
             ...(accountId ? { 'X-Account-Id': accountId } : {}),
           };
           const response = await axios.get(`${API_URL}/api/categories/${categoryId}`, { headers });
-          const item = response.data || {};
+          const item = response.data?.data || response.data || {};
           if (!isActive) return;
           setName(String(item.name || ''));
           setDescription(String(item.description || ''));

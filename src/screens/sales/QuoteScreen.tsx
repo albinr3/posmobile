@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image } from 'react-native';
 import { Text, Icon, Searchbar, IconButton } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,6 +13,12 @@ import { ui } from '../../theme/ui';
 
 interface QuoteScreenProps {
   navigation: any;
+  route?: {
+    params?: {
+      editQuoteLocalId?: string;
+      editNonce?: number;
+    };
+  };
 }
 
 interface QuoteProduct extends Product {
@@ -23,14 +29,27 @@ interface QuoteProduct extends Product {
 type ViewMode = 'LISTA' | 'IMAGENES';
 const VIEW_MODE_STORAGE_KEY = 'quote_view_mode';
 
-export function QuoteScreen({ navigation }: QuoteScreenProps) {
+export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<QuoteProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const insets = useSafeAreaInsets();
+  const lastLoadedEditKeyRef = useRef<string | null>(null);
+  const internalNavigationRef = useRef(false);
 
-  const { addItem, getTotal, getItemCount, customerId, customerName, items } = useQuoteCartStore();
+  const {
+    addItem,
+    getTotal,
+    getItemCount,
+    customerId,
+    customerName,
+    items,
+    loadDraft,
+    clearEditing,
+    editingQuoteLocalId,
+    editingQuoteCode,
+  } = useQuoteCartStore();
 
   useEffect(() => {
     let mounted = true;
@@ -62,8 +81,79 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
     useCallback(() => {
       setLoading(true);
       loadProducts();
-    }, [])
+      const quoteLocalId = route?.params?.editQuoteLocalId;
+      const editNonce = route?.params?.editNonce || 0;
+      const editKey = quoteLocalId ? `${quoteLocalId}:${editNonce}` : null;
+      if (quoteLocalId && editKey && lastLoadedEditKeyRef.current !== editKey) {
+        lastLoadedEditKeyRef.current = editKey;
+        loadQuoteDraft(quoteLocalId);
+      }
+    }, [route?.params?.editQuoteLocalId, route?.params?.editNonce])
   );
+
+  const loadQuoteDraft = async (quoteLocalId: string) => {
+    try {
+      const quoteRow = await db.queryFirst<any>('SELECT * FROM quotes WHERE local_id = ?', [quoteLocalId]);
+      if (!quoteRow) {
+        Alert.alert('Cotización', 'No se encontró la cotización para editar.');
+        return;
+      }
+
+      let parsedData: any = null;
+      try {
+        parsedData = quoteRow.data ? JSON.parse(quoteRow.data) : null;
+      } catch {
+        parsedData = null;
+      }
+
+      const rawItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      const mappedItems = await Promise.all(
+        rawItems.map(async (item: any) => {
+          const incomingProductId = String(item.productId || '');
+          if (!incomingProductId) return null;
+          const productRow = await db.queryFirst<{ local_id: string }>(
+            'SELECT local_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [incomingProductId, incomingProductId]
+          );
+          const localProductId = productRow?.local_id || incomingProductId;
+          const quantity = Number(item.quantity ?? item.qty ?? 1);
+          const priceCents = Number(item.priceCents ?? item.unitPriceCents ?? 0);
+          if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(priceCents) || priceCents <= 0) return null;
+          return {
+            productId: localProductId,
+            productName: String(item.productName || 'Producto'),
+            quantity,
+            priceCents,
+            totalCents: quantity * priceCents,
+          };
+        })
+      );
+
+      loadDraft({
+        items: mappedItems.filter(Boolean),
+        customerId: parsedData?.customerId ? String(parsedData.customerId) : null,
+        customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+        editingQuoteLocalId: String(quoteRow.local_id),
+        editingQuoteServerId: quoteRow.server_id ? String(quoteRow.server_id) : null,
+        editingQuoteCode: String(quoteRow.quote_code || parsedData?.quoteCode || ''),
+      });
+      navigation.setParams?.({ editQuoteLocalId: undefined, editNonce: undefined });
+    } catch (error) {
+      console.error('Error cargando borrador de cotización:', error);
+      Alert.alert('Cotización', 'No se pudo cargar la cotización para edición.');
+    }
+  };
+
+  useEffect(() => {
+    const unsubscribeBlur = navigation.addListener?.('blur', () => {
+      if (internalNavigationRef.current) {
+        internalNavigationRef.current = false;
+        return;
+      }
+      clearEditing();
+    });
+    return unsubscribeBlur;
+  }, [navigation, clearEditing]);
 
   const loadProducts = async () => {
     try {
@@ -143,6 +233,7 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
   };
 
   const handleScanBarcode = () => {
+    internalNavigationRef.current = true;
     navigation.navigate('BarcodeScanner', {
       onScan: (barcode: string) => setSearchQuery(barcode),
     });
@@ -167,25 +258,27 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
 
     if (viewMode === 'LISTA') {
       return (
-        <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
-          {selectedQty > 0 ? (
-            <View style={styles.qtyBadge}>
-              <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+        <View style={styles.listItemWrap}>
+          <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
+            {selectedQty > 0 ? (
+              <View style={styles.qtyBadge}>
+                <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+              </View>
+            ) : null}
+            <View style={styles.productInfoListOnly}>
+              <View style={styles.listTopRow}>
+                <Text style={styles.productNameList} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
+              </View>
+              <View style={styles.listBottomRow}>
+                <Text style={styles.skuTextList}>{item.sku ? `SKU ${item.sku}` : 'Sin SKU'}</Text>
+                <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+              </View>
             </View>
-          ) : null}
-          <View style={styles.productInfoListOnly}>
-            <View style={styles.listTopRow}>
-              <Text style={styles.productNameList} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
-            </View>
-            <View style={styles.listBottomRow}>
-              <Text style={styles.skuTextList}>{item.sku ? `SKU ${item.sku}` : 'Sin SKU'}</Text>
-              <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
-            </View>
-          </View>
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
       );
     }
 
@@ -227,11 +320,20 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
       <View style={styles.mainContent}>
         <View style={styles.saleCard}>
           <View style={styles.saleHeader}>
-            <Text style={styles.saleTitle}>Cotización</Text>
+            <Text style={styles.saleTitle}>{editingQuoteLocalId ? 'Editar cotización' : 'Cotización'}</Text>
           </View>
+          {editingQuoteLocalId ? (
+            <Text style={styles.editModeText}>Editando: {editingQuoteCode || editingQuoteLocalId}</Text>
+          ) : null}
 
           <Text style={styles.label}>Cliente</Text>
-          <TouchableOpacity style={styles.selectLike} onPress={() => navigation.navigate('SelectQuoteCustomer')}>
+          <TouchableOpacity
+            style={styles.selectLike}
+            onPress={() => {
+              internalNavigationRef.current = true;
+              navigation.navigate('SelectQuoteCustomer');
+            }}
+          >
             <Text style={styles.selectLikeText}>{customerName || '(General) Cliente general'}</Text>
             <Icon source="chevron-right" size={18} color="#6B7280" />
           </TouchableOpacity>
@@ -306,7 +408,7 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
         }
       />
 
-      <BottomDock style={styles.bottomBar}>
+      <BottomDock containerStyle={styles.bottomDockContainer} style={styles.bottomBar} maxBottomInset={8}>
         <View style={styles.bottomTop}>
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
@@ -316,7 +418,10 @@ export function QuoteScreen({ navigation }: QuoteScreenProps) {
         </View>
         <TouchableOpacity
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
-          onPress={() => navigation.navigate('QuoteCart', { customerId, customerName })}
+          onPress={() => {
+            internalNavigationRef.current = true;
+            navigation.navigate('QuoteCart', { customerId, customerName });
+          }}
           disabled={getItemCount() === 0}
         >
           <Text style={styles.chargeButtonText}>Cotizar</Text>
@@ -343,6 +448,7 @@ const styles = StyleSheet.create({
   },
   saleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
   saleTitle: { fontSize: 20, color: '#111827', fontWeight: '700' },
+  editModeText: { color: '#4B5563', fontSize: 12, marginBottom: 6, fontWeight: '700' },
   viewToggle: {
     alignSelf: 'flex-end',
     flexDirection: 'row',
@@ -350,7 +456,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 4,
     gap: 4,
-    marginBottom: 8,
   },
   viewButton: { borderRadius: 8 },
   viewButtonActive: { backgroundColor: '#fff' },
@@ -371,6 +476,7 @@ const styles = StyleSheet.create({
   row: { paddingHorizontal: 14, justifyContent: 'space-between', marginBottom: 12 },
   listRow: { paddingHorizontal: 14, marginBottom: 12 },
   createCard: {
+    marginTop: 8,
     width: '48.4%',
     minHeight: 208,
     borderWidth: 2,
@@ -409,8 +515,12 @@ const styles = StyleSheet.create({
   },
   productCardList: {
     width: '100%',
-    minHeight: 56,
+    minHeight: 72,
     flexDirection: 'row',
+    marginBottom: 2,
+  },
+  listItemWrap: {
+    paddingHorizontal: 14,
   },
   qtyBadge: {
     position: 'absolute',
@@ -463,7 +573,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 2,
+    paddingVertical: 8,
   },
   listTopRow: {
     flexDirection: 'row',
@@ -499,19 +609,20 @@ const styles = StyleSheet.create({
   emptyWrap: { alignItems: 'center', paddingVertical: 30 },
   emptyText: { color: '#6B7280' },
   bottomBar: {
-    backgroundColor: 'rgba(255,255,255,0.72)',
+    backgroundColor: 'rgba(255,255,255,0.52)',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(229,231,235,0.65)',
+    borderTopColor: 'rgba(229,231,235,0.45)',
     paddingHorizontal: 14,
-    paddingTop: 12,
+    paddingTop: 6,
+    paddingBottom: 10,
   },
-  bottomTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 12 },
-  totalLabel: { color: '#6B7280', fontWeight: '700' },
+  bottomTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
+  totalLabel: { color: '#6B7280', fontWeight: '700', fontSize: 12 },
   totalInfo: { alignItems: 'flex-end' },
-  totalAmount: { color: '#111827', fontSize: 23, fontWeight: '800', lineHeight: 25 },
-  itemsText: { color: '#6B7280', fontSize: 12 },
+  totalAmount: { color: '#111827', fontSize: 17, fontWeight: '800', lineHeight: 19 },
+  itemsText: { color: '#6B7280', fontSize: 11, lineHeight: 13 },
   chargeButton: {
-    height: 50,
+    height: 46,
     borderRadius: 12,
     backgroundColor: ui.colors.primary,
     flexDirection: 'row',
@@ -521,4 +632,7 @@ const styles = StyleSheet.create({
   },
   chargeButtonDisabled: { backgroundColor: '#C4B5FD' },
   chargeButtonText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  bottomDockContainer: {
+    backgroundColor: 'transparent',
+  },
 });

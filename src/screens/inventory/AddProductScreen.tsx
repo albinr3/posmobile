@@ -20,6 +20,7 @@ interface AddProductScreenProps {
 interface OptionItem {
   id: string;
   name: string;
+  internalId?: string | null;
 }
 
 export function AddProductScreen({ navigation }: AddProductScreenProps) {
@@ -190,7 +191,13 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       ]);
 
       const suppliersData = (suppliersRaw || []).map((s: any) => ({ id: String(s.id), name: String(s.name || '') }));
-      const categoriesData = (categoriesRaw || []).map((c: any) => ({ id: String(c.id), name: String(c.name || '') }));
+      const categoriesData = (categoriesRaw || [])
+        .map((c: any) => ({
+          id: String(c.id ?? c.categoryId ?? ''),
+          name: String(c.name || ''),
+          internalId: c.internalId ? String(c.internalId) : null,
+        }))
+        .filter((c: OptionItem) => !!c.id);
       setSuppliers(suppliersData);
       setCategories(categoriesData);
     } catch (error) {

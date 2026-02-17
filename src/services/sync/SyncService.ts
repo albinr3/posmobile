@@ -28,6 +28,13 @@ function summarizeError(error: any) {
   };
 }
 
+function normalizeCategoryIdForApi(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return String(parsed);
+}
+
 // Helper para obtener token de autenticación
 // Nota: Esta función debe ser llamada desde un contexto donde Clerk esté disponible
 // En componentes React, usar useAuth().getToken() directamente
@@ -531,7 +538,7 @@ class SyncService {
           sku: data.sku || null,
           reference: data.reference || null,
           supplierId: data.supplierId || null,
-          categoryId: data.categoryId || null,
+          categoryId: normalizeCategoryIdForApi(data.categoryId),
           priceCents: data.priceCents || Math.round((data.price || 0) * 100),
           costCents: data.costCents || Math.round((data.cost || 0) * 100),
           stock: data.stock || 0,
@@ -1031,6 +1038,178 @@ class SyncService {
             local_id: `server_${customer.id}`,
             server_id: customer.id,
             ...customerData,
+          });
+        }
+      }
+
+      // Descargar ventas/facturas
+      const salesResponse = await axios.get(`${API_URL}/api/sales`, {
+        headers,
+      });
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() sales status', {
+          status: salesResponse.status,
+          count: (salesResponse.data?.data || salesResponse.data || []).length,
+        });
+      }
+
+      const sales = salesResponse.data?.data || salesResponse.data || [];
+
+      for (const sale of sales) {
+        const saleId = String(sale?.id || '');
+        if (!saleId) continue;
+
+        let saleDetail: any = null;
+        try {
+          const detailResponse = await axios.get(`${API_URL}/api/sales/${saleId}`, { headers });
+          saleDetail = detailResponse.data || null;
+        } catch (error) {
+          if (SYNC_DEBUG) {
+            console.warn('[SyncService] No se pudo descargar detalle de factura', {
+              saleId,
+              error: summarizeError(error),
+            });
+          }
+        }
+
+        const customerId = saleDetail?.customerId || sale?.customerId || null;
+        const customerName = saleDetail?.customerName || sale?.customerName || null;
+        const soldAtRaw = saleDetail?.soldAt || sale?.soldAt || null;
+        const createdAt =
+          soldAtRaw && !Number.isNaN(new Date(soldAtRaw).getTime())
+            ? new Date(soldAtRaw).getTime()
+            : Date.now();
+        const cancelledAtRaw = saleDetail?.cancelledAt || sale?.cancelledAt || null;
+        const status = cancelledAtRaw ? 'cancelled' : 'completed';
+
+        const items = Array.isArray(saleDetail?.items)
+          ? saleDetail.items.map((item: any) => ({
+              productId: String(item?.productId || ''),
+              productName: String(item?.productName || 'Producto'),
+              quantity: Number(item?.qty || 0),
+              priceCents: Number(item?.unitPriceCents || 0),
+              totalCents: Number(item?.lineTotalCents || 0),
+            }))
+          : [];
+
+        const saleData = {
+          id: saleId,
+          invoiceCode: String(saleDetail?.invoiceCode || sale?.invoiceCode || '-'),
+          customerId,
+          customerName,
+          paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || 'EFECTIVO'),
+          type: String(saleDetail?.type || sale?.type || 'CONTADO'),
+          items,
+          subtotalCents: Number(saleDetail?.subtotalCents || sale?.subtotalCents || 0),
+          itbisCents: Number(saleDetail?.itbisCents || sale?.itbisCents || 0),
+          shippingCents: Number(saleDetail?.shippingCents || sale?.shippingCents || 0),
+          totalCents: Number(saleDetail?.totalCents || sale?.totalCents || 0),
+          status,
+          cancelledAt: cancelledAtRaw,
+          createdAt,
+        };
+
+        const saleRow = {
+          invoice_code: saleData.invoiceCode,
+          customer_id: customerId,
+          total_cents: saleData.totalCents,
+          status,
+          created_at: createdAt,
+          synced: 1,
+          data: JSON.stringify(saleData),
+        };
+
+        const exists = await db.queryFirst<any>('SELECT local_id FROM sales WHERE server_id = ?', [saleId]);
+        if (exists) {
+          await db.update('sales', saleId, saleRow, 'server_id');
+        } else {
+          await db.insert('sales', {
+            local_id: `server_sale_${saleId}`,
+            server_id: saleId,
+            ...saleRow,
+          });
+        }
+      }
+
+      // Descargar cotizaciones
+      const quotesResponse = await axios.get(`${API_URL}/api/quotes`, {
+        headers,
+      });
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() quotes status', {
+          status: quotesResponse.status,
+          count: (quotesResponse.data?.data || quotesResponse.data || []).length,
+        });
+      }
+
+      const quotes = quotesResponse.data?.data || quotesResponse.data || [];
+
+      for (const quote of quotes) {
+        const quoteId = String(quote?.id || '');
+        if (!quoteId) continue;
+
+        let quoteDetail: any = null;
+        try {
+          const detailResponse = await axios.get(`${API_URL}/api/quotes/${quoteId}`, { headers });
+          quoteDetail = detailResponse.data || null;
+        } catch (error) {
+          if (SYNC_DEBUG) {
+            console.warn('[SyncService] No se pudo descargar detalle de cotizacion', {
+              quoteId,
+              error: summarizeError(error),
+            });
+          }
+        }
+
+        const customerId = quoteDetail?.customerId || quote?.customerId || null;
+        const customerName = quoteDetail?.customerName || quote?.customerName || null;
+        const quotedAtRaw = quoteDetail?.quotedAt || quote?.quotedAt || null;
+        const createdAt =
+          quotedAtRaw && !Number.isNaN(new Date(quotedAtRaw).getTime())
+            ? new Date(quotedAtRaw).getTime()
+            : Date.now();
+
+        const items = Array.isArray(quoteDetail?.items)
+          ? quoteDetail.items.map((item: any) => ({
+              productId: String(item?.productId || ''),
+              productName: String(item?.productName || 'Producto'),
+              quantity: Number(item?.qty || 0),
+              priceCents: Number(item?.unitPriceCents || 0),
+              totalCents: Number(item?.lineTotalCents || 0),
+            }))
+          : [];
+
+        const quoteData = {
+          id: quoteId,
+          quoteCode: String(quoteDetail?.quoteCode || quote?.quoteCode || '-'),
+          customerId,
+          customerName,
+          items,
+          totalCents: Number(quoteDetail?.totalCents || quote?.totalCents || 0),
+          status: 'synced',
+          createdAt,
+          validUntil: quoteDetail?.validUntil || quote?.validUntil || null,
+          notes: quoteDetail?.notes || quote?.notes || null,
+        };
+
+        const quoteRow = {
+          quote_code: quoteData.quoteCode,
+          customer_id: customerId,
+          total_cents: quoteData.totalCents,
+          status: 'synced',
+          created_at: createdAt,
+          synced: 1,
+          data: JSON.stringify(quoteData),
+        };
+
+        const exists = await db.queryFirst<any>('SELECT local_id FROM quotes WHERE server_id = ?', [quoteId]);
+        if (exists) {
+          await db.update('quotes', quoteId, quoteRow, 'server_id');
+        } else {
+          await db.insert('quotes', {
+            local_id: `server_quote_${quoteId}`,
+            server_id: quoteId,
+            ...quoteRow,
           });
         }
       }

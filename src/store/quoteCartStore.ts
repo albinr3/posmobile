@@ -5,10 +5,22 @@ interface QuoteCartState {
   items: SaleItem[];
   customerId: string | null;
   customerName: string | null;
+  editingQuoteLocalId: string | null;
+  editingQuoteServerId: string | null;
+  editingQuoteCode: string | null;
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   setCustomer: (customerId: string | null, customerName: string | null) => void;
+  loadDraft: (draft: {
+    items: SaleItem[];
+    customerId: string | null;
+    customerName: string | null;
+    editingQuoteLocalId: string;
+    editingQuoteServerId: string | null;
+    editingQuoteCode: string | null;
+  }) => void;
+  clearEditing: () => void;
   clear: () => void;
   getTotal: () => number;
   getItemCount: () => number;
@@ -18,6 +30,9 @@ export const useQuoteCartStore = create<QuoteCartState>((set, get) => ({
   items: [],
   customerId: null,
   customerName: null,
+  editingQuoteLocalId: null,
+  editingQuoteServerId: null,
+  editingQuoteCode: null,
 
   addItem: (product: Product, quantity: number = 1) => {
     set((state) => {
@@ -81,11 +96,33 @@ export const useQuoteCartStore = create<QuoteCartState>((set, get) => ({
     set({ customerId, customerName });
   },
 
+  loadDraft: (draft) => {
+    set({
+      items: draft.items,
+      customerId: draft.customerId,
+      customerName: draft.customerName,
+      editingQuoteLocalId: draft.editingQuoteLocalId,
+      editingQuoteServerId: draft.editingQuoteServerId,
+      editingQuoteCode: draft.editingQuoteCode,
+    });
+  },
+
+  clearEditing: () => {
+    set({
+      editingQuoteLocalId: null,
+      editingQuoteServerId: null,
+      editingQuoteCode: null,
+    });
+  },
+
   clear: () => {
     set({
       items: [],
       customerId: null,
       customerName: null,
+      editingQuoteLocalId: null,
+      editingQuoteServerId: null,
+      editingQuoteCode: null,
     });
   },
 
