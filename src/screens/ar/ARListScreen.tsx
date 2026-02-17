@@ -1,10 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import { Text, Chip, Button, Searchbar } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
+import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { AccountReceivable } from '../../types';
@@ -27,11 +28,55 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const { getToken } = useAuth();
   const { subUserToken } = useAuthStore();
+  const { isOnline } = useSyncStore();
+  const isSyncingOnFocusRef = useRef(false);
+
+  const syncARBestEffort = useCallback(async () => {
+    if (!isOnline) return false;
+    const clerkToken = await getToken();
+    if (!clerkToken || !subUserToken) return false;
+    syncService.setGetTokenFunction(getToken);
+    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    await syncService.fullSync(clerkToken);
+    return true;
+  }, [getToken, isOnline, subUserToken]);
 
   useFocusEffect(
     useCallback(() => {
-      loadARItems();
-    }, [])
+      if (isSyncingOnFocusRef.current) return;
+      isSyncingOnFocusRef.current = true;
+      let active = true;
+
+      const syncAndLoad = async () => {
+        setLoading(true);
+        await loadARItems();
+
+        if (!active || !isOnline) {
+          isSyncingOnFocusRef.current = false;
+          return;
+        }
+
+        syncARBestEffort()
+          .then(async (synced) => {
+            if (!active || !synced) return;
+            await loadARItems();
+          })
+          .catch((error) => {
+            console.error('Error sincronizando AR al abrir pantalla:', error);
+          })
+          .finally(() => {
+            if (active) {
+              isSyncingOnFocusRef.current = false;
+            }
+          });
+      };
+
+      syncAndLoad();
+      return () => {
+        active = false;
+        isSyncingOnFocusRef.current = false;
+      };
+    }, [isOnline, syncARBestEffort])
   );
 
   const loadARItems = async () => {
@@ -74,11 +119,8 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      const clerkToken = await getToken();
-      if (clerkToken && subUserToken) {
-        syncService.setGetTokenFunction(getToken);
-        syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-        await syncService.fullSync(clerkToken);
+      if (isOnline) {
+        await syncARBestEffort();
       }
     } catch (error) {
       console.error('Error sincronizando AR:', error);

@@ -1,6 +1,14 @@
 import { create } from 'zustand';
 import { User } from '../types';
 import * as SecureStore from 'expo-secure-store';
+import { db } from '../database/Database';
+
+const AUTH_DEBUG = false;
+
+function shortToken(token: string | null | undefined): string {
+  if (!token) return 'null';
+  return `${token.slice(0, 12)}...(${token.length})`;
+}
 
 interface SubUser {
   id: string;
@@ -41,6 +49,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   biometricEnabled: false,
 
   setUser: (user: User | null) => {
+    if (AUTH_DEBUG) {
+      console.log('[AuthStore] setUser()', {
+        userId: user?.id || null,
+        email: user?.email || null,
+      });
+    }
     set({
       user,
       // isAuthenticated se actualiza cuando se establece el subusuario
@@ -51,16 +65,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setSubUser: async (subUser: SubUser | null, token: string | null, accountId: string | null) => {
+    if (AUTH_DEBUG) {
+      console.log('[AuthStore] setSubUser() input', {
+        username: subUser?.username || null,
+        subUserId: subUser?.id || null,
+        accountId,
+        token: shortToken(token),
+      });
+    }
     if (subUser && token && accountId) {
       // Guardar en SecureStore
       await SecureStore.setItemAsync(SUBUSER_TOKEN_KEY, token);
       await SecureStore.setItemAsync(SUBUSER_DATA_KEY, JSON.stringify(subUser));
       await SecureStore.setItemAsync(ACCOUNT_ID_KEY, accountId);
+      await db.setAccountScope(accountId);
+      if (AUTH_DEBUG) console.log('[AuthStore] setSubUser() -> db.setAccountScope(accountId) OK', { accountId });
     } else {
       // Limpiar
       await SecureStore.deleteItemAsync(SUBUSER_TOKEN_KEY);
       await SecureStore.deleteItemAsync(SUBUSER_DATA_KEY);
       await SecureStore.deleteItemAsync(ACCOUNT_ID_KEY);
+      await db.setAccountScope(null);
+      if (AUTH_DEBUG) console.log('[AuthStore] setSubUser() -> db.setAccountScope(null) OK');
     }
 
     set({
@@ -70,6 +96,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       isAuthenticated: !!subUser && !!token && !!get().user,
       isLoading: false,
     });
+    if (AUTH_DEBUG) {
+      console.log('[AuthStore] setSubUser() state updated', {
+        isAuthenticated: !!subUser && !!token && !!get().user,
+        hasUser: !!get().user,
+        hasSubUser: !!subUser,
+      });
+    }
   },
 
   setLoading: (loading: boolean) => {
@@ -82,11 +115,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loadSubUserToken: async () => {
     try {
+      if (AUTH_DEBUG) console.log('[AuthStore] loadSubUserToken() start');
       const token = await SecureStore.getItemAsync(SUBUSER_TOKEN_KEY);
       const subUserData = await SecureStore.getItemAsync(SUBUSER_DATA_KEY);
       const accountId = await SecureStore.getItemAsync(ACCOUNT_ID_KEY);
+      if (AUTH_DEBUG) {
+        console.log('[AuthStore] loadSubUserToken() secure store', {
+          hasToken: !!token,
+          token: shortToken(token),
+          hasSubUserData: !!subUserData,
+          accountId,
+        });
+      }
 
       if (token && subUserData && accountId) {
+        await db.setAccountScope(accountId);
+        if (AUTH_DEBUG) console.log('[AuthStore] loadSubUserToken() -> db.setAccountScope(accountId) OK', { accountId });
         const subUser = JSON.parse(subUserData) as SubUser;
         set({
           subUser,
@@ -94,6 +138,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           accountId,
           isAuthenticated: !!get().user && !!subUser && !!token,
         });
+        if (AUTH_DEBUG) {
+          console.log('[AuthStore] loadSubUserToken() restored session', {
+            username: subUser?.username,
+            isAuthenticated: !!get().user && !!subUser && !!token,
+          });
+        }
+      } else {
+        await db.setAccountScope(null);
+        if (AUTH_DEBUG) console.log('[AuthStore] loadSubUserToken() sin datos, db.setAccountScope(null)');
       }
     } catch (error) {
       console.error('Error cargando token de subusuario:', error);
@@ -101,10 +154,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    if (AUTH_DEBUG) console.log('[AuthStore] logout() start');
     // Limpiar SecureStore
     await SecureStore.deleteItemAsync(SUBUSER_TOKEN_KEY);
     await SecureStore.deleteItemAsync(SUBUSER_DATA_KEY);
     await SecureStore.deleteItemAsync(ACCOUNT_ID_KEY);
+    await db.setAccountScope(null);
+    if (AUTH_DEBUG) console.log('[AuthStore] logout() secure store limpiado + db scope null');
 
     set({
       user: null,
@@ -114,5 +170,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       isAuthenticated: false,
       isLoading: false,
     });
+    if (AUTH_DEBUG) console.log('[AuthStore] logout() state cleared');
   },
 }));

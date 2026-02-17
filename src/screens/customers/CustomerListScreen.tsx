@@ -98,7 +98,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
   );
 
   const renderCustomer = ({ item }: { item: Customer }) => (
-    <TouchableOpacity style={styles.customerCard} onPress={() => navigation.navigate('CustomerDetail', { customerId: item.localId })}>
+    <TouchableOpacity style={styles.customerCard} onPress={() => navigation.navigate('AddCustomer', { customerId: item.localId })}>
       <View style={styles.customerInfo}>
         <Avatar.Text size={42} label={item.name.substring(0, 2).toUpperCase()} style={styles.avatar} labelStyle={styles.avatarLabel} />
         <View style={styles.customerDetails}>

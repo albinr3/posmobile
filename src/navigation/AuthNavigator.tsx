@@ -9,9 +9,14 @@ import { SubUserLoginScreen } from '../screens/auth/SubUserLoginScreen';
 
 const Stack = createStackNavigator();
 
-export function AuthNavigator() {
+interface AuthNavigatorProps {
+  initialRouteName?: 'Login' | 'SelectUser';
+}
+
+export function AuthNavigator({ initialRouteName = 'Login' }: AuthNavigatorProps) {
   return (
     <Stack.Navigator
+      initialRouteName={initialRouteName}
       screenOptions={{
         headerShown: false,
       }}

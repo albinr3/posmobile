@@ -2,6 +2,8 @@ import * as SQLite from 'expo-sqlite';
 
 class DatabaseService {
   private db: SQLite.SQLiteDatabase | null = null;
+  private currentAccountScope: string | null = null;
+  private currentDbName: string | null = null;
 
   private normalizeSqlValue(value: any): any {
     if (value === undefined) return null;
@@ -17,7 +19,39 @@ class DatabaseService {
   }
 
   async init(): Promise<void> {
-    this.db = await SQLite.openDatabaseAsync('movopos.db');
+    await this.openScopedDatabase(this.currentAccountScope);
+  }
+
+  async setAccountScope(accountId: string | null): Promise<void> {
+    const normalizedScope = accountId ? String(accountId) : null;
+    const targetDbName = this.buildDbName(normalizedScope);
+    if (this.db && this.currentDbName === targetDbName) {
+      this.currentAccountScope = normalizedScope;
+      return;
+    }
+    await this.openScopedDatabase(normalizedScope);
+  }
+
+  private buildDbName(accountId: string | null): string {
+    if (!accountId) return 'movopos.db';
+    const safe = accountId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `movopos_${safe}.db`;
+  }
+
+  private async openScopedDatabase(accountId: string | null): Promise<void> {
+    const dbName = this.buildDbName(accountId);
+
+    if (this.db) {
+      try {
+        await (this.db as any).closeAsync?.();
+      } catch (error) {
+        console.warn('No se pudo cerrar la base anterior:', error);
+      }
+    }
+
+    this.db = await SQLite.openDatabaseAsync(dbName);
+    this.currentAccountScope = accountId;
+    this.currentDbName = dbName;
     await this.createTables();
   }
 
@@ -232,6 +266,21 @@ class DatabaseService {
       console.error('SQLite runAsync error:', { sql, params: normalizedParams, error });
       throw error;
     }
+  }
+
+  async clearAllData(): Promise<void> {
+    if (!this.db) throw new Error('Database not initialized');
+
+    await this.db.execAsync(`
+      DELETE FROM sync_queue;
+      DELETE FROM sync_metadata;
+      DELETE FROM sales;
+      DELETE FROM quotes;
+      DELETE FROM products;
+      DELETE FROM customers;
+      DELETE FROM payments;
+      DELETE FROM accounts_receivable;
+    `);
   }
 }
 

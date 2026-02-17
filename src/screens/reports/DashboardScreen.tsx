@@ -32,7 +32,7 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
   });
   const [refreshing, setRefreshing] = useState(false);
   const [paymentBreakdown, setPaymentBreakdown] = useState<PaymentSlice[]>([]);
-  const { isOnline, pendingCount } = useSyncStore();
+  const { isOnline, pendingCount, syncBlockedReason } = useSyncStore();
   const tabBarHeight = useBottomTabBarHeight();
 
   useFocusEffect(
@@ -49,12 +49,16 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
 
       const salesResult = await db.queryFirst<any>(
         `SELECT COUNT(*) as count, COALESCE(SUM(total_cents), 0) as total
-         FROM sales WHERE created_at >= ?`,
+         FROM sales
+         WHERE created_at >= ?
+           AND LOWER(COALESCE(status, '')) != 'cancelled'`,
         [todayTimestamp]
       );
       const salesRows = await db.query<any>(
-        `SELECT total_cents, data
-         FROM sales WHERE created_at >= ?`,
+        `SELECT total_cents, status, data
+         FROM sales
+         WHERE created_at >= ?
+           AND LOWER(COALESCE(status, '')) != 'cancelled'`,
         [todayTimestamp]
       );
       const arResult = await db.queryFirst<any>(
@@ -79,9 +83,12 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
       let creditSalesCents = 0;
 
       for (const sale of salesRows) {
+        const statusRaw = String(sale?.status || '').toUpperCase();
+        if (statusRaw === 'CANCELLED' || statusRaw === 'CANCELADO') continue;
         let method = 'EFECTIVO';
         try {
           const parsed = sale?.data ? JSON.parse(sale.data) : null;
+          if (parsed?.cancelledAt) continue;
           method = parsed?.paymentMethod || parsed?.payment_method || 'EFECTIVO';
         } catch {
           method = 'EFECTIVO';
@@ -153,6 +160,12 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
             <Text style={styles.connectionText}>{isOnline ? 'En linea' : 'Sin conexion'}</Text>
             <Text style={styles.pendingText}>Pendientes: {pendingCount}</Text>
           </View>
+          {syncBlockedReason ? (
+            <View style={styles.syncAlertBox}>
+              <Text style={styles.syncAlertTitle}>Sincronizacion pausada</Text>
+              <Text style={styles.syncAlertText}>{syncBlockedReason}</Text>
+            </View>
+          ) : null}
         </View>
 
         <View style={styles.highlightCard}>
@@ -281,6 +294,17 @@ const styles = StyleSheet.create({
   },
   connectionText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   pendingText: { color: '#fff', fontSize: 12 },
+  syncAlertBox: {
+    marginTop: 10,
+    backgroundColor: 'rgba(255, 205, 107, 0.25)',
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 222, 156, 0.75)',
+  },
+  syncAlertTitle: { color: '#FFF8E6', fontWeight: '800', fontSize: 12 },
+  syncAlertText: { color: '#FFF8E6', fontSize: 11, marginTop: 2 },
   highlightCard: {
     marginTop: 12,
     backgroundColor: ui.colors.surface,

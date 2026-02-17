@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert } from 'react-native';
 import { TextInput, Button, Text, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
 import { db } from '../../database/Database';
@@ -11,9 +12,12 @@ import { ui } from '../../theme/ui';
 
 interface AddCustomerScreenProps {
   navigation: any;
+  route: any;
 }
 
-export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
+export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps) {
+  const customerId = route?.params?.customerId;
+  const isEditMode = !!customerId;
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
@@ -22,7 +26,57 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
   const [creditDays, setCreditDays] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const [localId, setLocalId] = useState<string>('');
+  const [serverId, setServerId] = useState<string | null>(null);
   const { getToken } = useAuth();
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isEditMode) return;
+
+      let isActive = true;
+      const loadCustomer = async () => {
+        setLoadingCustomer(true);
+        try {
+          const row = await db.queryFirst<any>('SELECT * FROM customers WHERE local_id = ?', [customerId]);
+          if (!row) {
+            Alert.alert('Error', 'Cliente no encontrado', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+            return;
+          }
+
+          let parsed: any = null;
+          try {
+            parsed = row.data ? JSON.parse(row.data) : null;
+          } catch {
+            parsed = null;
+          }
+
+          if (!isActive) return;
+          setLocalId(String(row.local_id));
+          setServerId(row.server_id ? String(row.server_id) : null);
+          setName(String(row.name || parsed?.name || ''));
+          setPhone(String(row.phone || parsed?.phone || ''));
+          setEmail(String(parsed?.email || ''));
+          setAddress(String(parsed?.address || ''));
+          setCreditEnabled(Boolean(parsed?.creditEnabled));
+          setCreditDays(String(parsed?.creditDays ?? ''));
+          setNotes(String(parsed?.notes || ''));
+        } catch (error) {
+          if (!isActive) return;
+          console.error('Error cargando cliente para edición:', error);
+          Alert.alert('Error', 'No se pudo cargar el cliente');
+        } finally {
+          if (isActive) setLoadingCustomer(false);
+        }
+      };
+
+      loadCustomer();
+      return () => {
+        isActive = false;
+      };
+    }, [customerId, isEditMode, navigation])
+  );
 
   const handleSave = async () => {
     if (!name.trim()) {
@@ -32,11 +86,12 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
 
     setLoading(true);
     try {
-      const localId = generateLocalId();
+      const resolvedLocalId = isEditMode ? localId || customerId : generateLocalId();
       const creditDaysValue = creditDays ? parseInt(creditDays, 10) : 0;
 
       const customerData = {
-        localId,
+        id: serverId || undefined,
+        localId: resolvedLocalId,
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
@@ -47,33 +102,55 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
         createdAt: Date.now(),
       };
 
-      await db.insert('customers', {
-        local_id: localId,
-        name: customerData.name,
-        phone: customerData.phone || '',
-        synced: 0,
-        data: JSON.stringify(customerData),
-      });
+      if (isEditMode) {
+        await db.update(
+          'customers',
+          resolvedLocalId,
+          {
+            name: customerData.name,
+            phone: customerData.phone || '',
+            synced: 0,
+            data: JSON.stringify(customerData),
+          },
+          'local_id'
+        );
+      } else {
+        await db.insert('customers', {
+          local_id: resolvedLocalId,
+          name: customerData.name,
+          phone: customerData.phone || '',
+          synced: 0,
+          data: JSON.stringify(customerData),
+        });
+      }
 
       syncService.setGetTokenFunction(getToken);
       syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-      await syncService.queueOperation('customer', 'create', customerData, localId);
+      if (isEditMode) {
+        await db.runAsync(
+          "DELETE FROM sync_queue WHERE entity_type = 'customer' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
+          [resolvedLocalId]
+        );
+        await syncService.queueOperation('customer', 'update', customerData, resolvedLocalId);
+      } else {
+        await syncService.queueOperation('customer', 'create', customerData, resolvedLocalId);
+      }
 
-      const savedCustomer = await db.queryFirst<{ server_id?: string }>('SELECT server_id FROM customers WHERE local_id = ?', [localId]);
+      const savedCustomer = await db.queryFirst<{ server_id?: string }>('SELECT server_id FROM customers WHERE local_id = ?', [resolvedLocalId]);
       if (savedCustomer?.server_id) {
-        Alert.alert('Éxito', 'Cliente guardado y sincronizado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+        Alert.alert('Éxito', isEditMode ? 'Cliente actualizado correctamente' : 'Cliente guardado y sincronizado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
       } else {
         const clerkToken = await getToken();
         const currentSubUserToken = useAuthStore.getState().subUserToken;
         if (clerkToken && currentSubUserToken) {
-          Alert.alert('Éxito', 'Cliente guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+          Alert.alert('Éxito', isEditMode ? 'Cliente actualizado correctamente' : 'Cliente guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
         } else {
-          Alert.alert('Pendiente de sincronización', 'El cliente se guardó localmente pero no se pudo subir a la web todavía.');
+          Alert.alert('Pendiente de sincronización', isEditMode ? 'El cliente se actualizó localmente pero no se pudo subir a la web todavía.' : 'El cliente se guardó localmente pero no se pudo subir a la web todavía.');
         }
       }
     } catch (error) {
-      console.error('Error guardando cliente:', error);
-      Alert.alert('Error', 'No se pudo guardar el cliente');
+      console.error(isEditMode ? 'Error actualizando cliente:' : 'Error guardando cliente:', error);
+      Alert.alert('Error', isEditMode ? 'No se pudo actualizar el cliente' : 'No se pudo guardar el cliente');
     } finally {
       setLoading(false);
     }
@@ -83,8 +160,8 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Nuevo Cliente</Text>
-          <Text style={styles.headerSubtitle}>Ingresa los datos del cliente</Text>
+          <Text style={styles.headerTitle}>{isEditMode ? 'Editar Cliente' : 'Nuevo Cliente'}</Text>
+          <Text style={styles.headerSubtitle}>{isEditMode ? 'Modifica los datos del cliente' : 'Ingresa los datos del cliente'}</Text>
         </View>
 
         <View style={styles.card}>
@@ -114,8 +191,16 @@ export function AddCustomerScreen({ navigation }: AddCustomerScreenProps) {
           <TextInput label="Notas adicionales" value={notes} onChangeText={setNotes} mode="outlined" multiline numberOfLines={3} style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
         </View>
 
-        <Button mode="contained" onPress={handleSave} loading={loading} disabled={loading} buttonColor={ui.colors.primary} style={styles.saveButton} contentStyle={styles.saveButtonContent}>
-          Guardar Cliente
+        <Button
+          mode="contained"
+          onPress={handleSave}
+          loading={loading}
+          disabled={loading || loadingCustomer}
+          buttonColor={ui.colors.primary}
+          style={styles.saveButton}
+          contentStyle={styles.saveButtonContent}
+        >
+          {isEditMode ? 'Guardar Cambios' : 'Guardar Cliente'}
         </Button>
       </ScrollView>
     </SafeAreaView>

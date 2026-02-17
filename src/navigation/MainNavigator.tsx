@@ -4,12 +4,15 @@ import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentP
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
+import { useAuth } from '@clerk/clerk-expo';
 import { Text, Icon } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
 import { AppTopHeader } from '../components/AppTopHeader';
+import { useAuthStore } from '../store/authStore';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
+import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
 import { POSScreen } from '../screens/sales/POSScreen';
 import { QuoteScreen } from '../screens/sales/QuoteScreen';
 import { CartScreen } from '../screens/sales/CartScreen';
@@ -21,6 +24,12 @@ import { ProductListScreen } from '../screens/inventory/ProductListScreen';
 import { AddProductScreen } from '../screens/inventory/AddProductScreen';
 import { ProductDetailScreen } from '../screens/inventory/ProductDetailScreen';
 import { ProductEditScreen } from '../screens/inventory/ProductEditScreen';
+import { CategoryListScreen } from '../screens/categories/CategoryListScreen';
+import { AddCategoryScreen } from '../screens/categories/AddCategoryScreen';
+import { SupplierListScreen } from '../screens/suppliers/SupplierListScreen';
+import { AddSupplierScreen } from '../screens/suppliers/AddSupplierScreen';
+import { PurchaseListScreen } from '../screens/purchases/PurchaseListScreen';
+import { AddPurchaseScreen } from '../screens/purchases/AddPurchaseScreen';
 import { CustomerListScreen } from '../screens/customers/CustomerListScreen';
 import { AddCustomerScreen } from '../screens/customers/AddCustomerScreen';
 import { CustomerDetailScreen } from '../screens/customers/CustomerDetailScreen';
@@ -29,6 +38,7 @@ import { RegisterPaymentScreen } from '../screens/ar/RegisterPaymentScreen';
 import { PrinterSettingsScreen } from '../screens/settings/PrinterSettingsScreen';
 import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
 import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
+import { InvoiceListScreen } from '../screens/billing/InvoiceListScreen';
 
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
@@ -74,6 +84,33 @@ function InventoryStack() {
   );
 }
 
+function CategoriesStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="CategoryList" component={CategoryListScreen} />
+      <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function SuppliersStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="SupplierList" component={SupplierListScreen} />
+      <Stack.Screen name="AddSupplier" component={AddSupplierScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function PurchasesStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="PurchaseList" component={PurchaseListScreen} />
+      <Stack.Screen name="AddPurchase" component={AddPurchaseScreen} />
+    </Stack.Navigator>
+  );
+}
+
 function CustomersStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
@@ -110,10 +147,19 @@ function ReturnsStack() {
   );
 }
 
+function BillingStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
+    </Stack.Navigator>
+  );
+}
+
 function DashboardStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="DashboardMain" component={DashboardScreen} />
+      <Stack.Screen name="DailyClose" component={DailyCloseScreen} />
     </Stack.Navigator>
   );
 }
@@ -211,11 +257,14 @@ function BottomTabs() {
 }
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
+  const { signOut } = useAuth();
+  const { logout } = useAuthStore();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, StatusBar.currentHeight || 0) + 6;
   const currentRoute = props.state.routeNames[props.state.index] || 'Home';
   const entries = [
     { key: 'dashboard', label: 'Dashboard', icon: 'chart-bar' },
+    { key: 'billing', label: 'Lista de Facturas', icon: 'card-text-outline' },
     { key: 'quotes', label: 'Cotizaciones', icon: 'file-document-outline' },
     { key: 'returns', label: 'Devoluciones', icon: 'backup-restore' },
     { key: 'customers', label: 'Clientes', icon: 'account-group-outline' },
@@ -228,7 +277,6 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
     { key: 'shipping_labels', label: 'Etiquetas de envío', icon: 'truck-outline' },
     { key: 'operating_expenses', label: 'Gastos operativos', icon: 'currency-usd' },
-    { key: 'billing', label: 'Facturación', icon: 'card-text-outline' },
     { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
     { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
   ];
@@ -238,20 +286,24 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       (props.navigation as any).navigate('Home', { screen: 'Dashboard' });
       return;
     }
+    if (key === 'daily_closing') {
+      (props.navigation as any).navigate('Home', { screen: 'Dashboard', params: { screen: 'DailyClose' } });
+      return;
+    }
     if (key === 'sell') {
       (props.navigation as any).navigate('Home', { screen: 'POS' });
       return;
     }
     if (key === 'customers') {
-      props.navigation.navigate('Customers' as never);
+      (props.navigation as any).navigate('Customers', { screen: 'CustomerList' });
       return;
     }
     if (key === 'quotes') {
-      props.navigation.navigate('Quotes' as never);
+      (props.navigation as any).navigate('Quotes', { screen: 'QuoteMain' });
       return;
     }
     if (key === 'returns') {
-      props.navigation.navigate('Returns' as never);
+      (props.navigation as any).navigate('Returns', { screen: 'CreateReturn' });
       return;
     }
     if (key === 'reports_menu') {
@@ -259,18 +311,53 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       return;
     }
     if (key === 'settings_menu') {
-      props.navigation.navigate('Settings' as never);
+      (props.navigation as any).navigate('Settings', { screen: 'PrinterSettings' });
       return;
     }
     if (key === 'products') {
-      props.navigation.navigate('InventoryMenu' as never);
+      (props.navigation as any).navigate('InventoryMenu', { screen: 'ProductList' });
+      return;
+    }
+    if (key === 'categories') {
+      (props.navigation as any).navigate('CategoriesMenu', { screen: 'CategoryList' });
+      return;
+    }
+    if (key === 'suppliers') {
+      (props.navigation as any).navigate('SuppliersMenu', { screen: 'SupplierList' });
+      return;
+    }
+    if (key === 'purchases') {
+      (props.navigation as any).navigate('PurchasesMenu', { screen: 'PurchaseList' });
+      return;
+    }
+    if (key === 'billing') {
+      (props.navigation as any).navigate('BillingMenu', { screen: 'InvoiceList' });
       return;
     }
     if (key === 'ar') {
-      props.navigation.navigate('ARMenu' as never);
+      (props.navigation as any).navigate('ARMenu', { screen: 'ARList' });
       return;
     }
     (props.navigation as any).navigate('FeaturePlaceholder', { title: label });
+  };
+
+  const handleLogout = () => {
+    Alert.alert('Cerrar sesión', '¿Seguro que deseas cerrar sesión?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Cerrar sesión',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await logout();
+            await signOut();
+          } catch (error) {
+            console.error('Error cerrando sesión:', error);
+            Alert.alert('Sesión', 'No se pudo cerrar sesión. Intenta de nuevo.');
+          }
+        },
+      },
+    ]);
   };
 
   return (
@@ -298,6 +385,10 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'reports_menu' && currentRoute === 'Reports') ||
             (item.key === 'settings_menu' && currentRoute === 'Settings') ||
             (item.key === 'products' && currentRoute === 'InventoryMenu') ||
+            (item.key === 'categories' && currentRoute === 'CategoriesMenu') ||
+            (item.key === 'suppliers' && currentRoute === 'SuppliersMenu') ||
+            (item.key === 'purchases' && currentRoute === 'PurchasesMenu') ||
+            (item.key === 'billing' && currentRoute === 'BillingMenu') ||
             (item.key === 'ar' && currentRoute === 'ARMenu');
 
           return (
@@ -339,6 +430,11 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         <Text style={styles.whatsAppText}>Ayuda por WhatsApp</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+        <Icon source="logout" size={22} color="#DC2626" />
+        <Text style={styles.logoutText}>Cerrar sesión</Text>
+      </TouchableOpacity>
+
       <View style={styles.drawerFooter}>
         <Text style={styles.drawerFooterText}>Local (1 PC) · RD$ · ITBIS incluido</Text>
       </View>
@@ -361,6 +457,10 @@ export function MainNavigator() {
       <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
       <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
       <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
+      <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />
+      <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
+      <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
+      <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
       <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
       <Drawer.Screen name="Reports" component={DashboardScreen} options={{ title: 'Reportes' }} />
       <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
@@ -436,6 +536,24 @@ const styles = StyleSheet.create({
     color: ui.colors.text,
     fontSize: 15,
     fontWeight: '700',
+  },
+  logoutButton: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  logoutText: {
+    color: '#DC2626',
+    fontSize: 15,
+    fontWeight: '800',
   },
   placeholderContainer: {
     flex: 1,

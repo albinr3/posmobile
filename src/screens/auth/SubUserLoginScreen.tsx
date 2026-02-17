@@ -9,6 +9,12 @@ import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+const SUBUSER_LOGIN_DEBUG = false;
+
+function shortToken(token: string | null | undefined): string {
+  if (!token) return 'null';
+  return `${token.slice(0, 12)}...(${token.length})`;
+}
 
 export function SubUserLoginScreen({ navigation, route }: any) {
   const username = route?.params?.username || '';
@@ -29,7 +35,16 @@ export function SubUserLoginScreen({ navigation, route }: any) {
     setLoading(true);
     setError(null);
     try {
+      if (SUBUSER_LOGIN_DEBUG) {
+        console.log('[SubUserLogin] intento login', {
+          username,
+          accountIdFromRoute: accountId || null,
+        });
+      }
       const clerkToken = await getToken();
+      if (SUBUSER_LOGIN_DEBUG) {
+        console.log('[SubUserLogin] clerkToken obtenido', { clerkToken: shortToken(clerkToken) });
+      }
       if (!clerkToken) {
         setError('No hay token de autenticación');
         return;
@@ -48,10 +63,26 @@ export function SubUserLoginScreen({ navigation, route }: any) {
       );
 
       if (response.data.success && response.data.token && response.data.user) {
+        if (SUBUSER_LOGIN_DEBUG) {
+          console.log('[SubUserLogin] login API success', {
+            apiUserId: response.data.user?.id || null,
+            apiUsername: response.data.user?.username || null,
+            apiAccountId: response.data.user?.accountId || null,
+            subUserToken: shortToken(response.data.token),
+          });
+        }
         await setSubUser(response.data.user, response.data.token, accountId || response.data.user.accountId);
         try {
           syncService.setGetTokenFunction(getToken);
-          syncService.setGetSubUserTokenFunction(async () => response.data.token);
+          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          if (SUBUSER_LOGIN_DEBUG) {
+            const state = useAuthStore.getState();
+            console.log('[SubUserLogin] estado tras setSubUser', {
+              stateAccountId: state.accountId,
+              stateUsername: state.subUser?.username || null,
+              stateToken: shortToken(state.subUserToken),
+            });
+          }
           await syncService.fullSync(clerkToken);
         } catch (syncError: any) {
           console.error('Error en sincronización inicial:', syncError);

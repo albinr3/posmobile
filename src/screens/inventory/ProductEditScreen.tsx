@@ -5,6 +5,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
 import { db } from '../../database/Database';
@@ -51,7 +52,6 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   const [loading, setLoading] = useState(false);
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const hasPendingImageSelectionRef = useRef(false);
-  const initializedProductRef = useRef<string | null>(null);
 
   const loadCatalogOptions = useCallback(async () => {
     try {
@@ -139,13 +139,13 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
     }
   }, [navigation, productId]);
 
-  useEffect(() => {
-    if (initializedProductRef.current === productId) return;
-    initializedProductRef.current = productId;
-    hasPendingImageSelectionRef.current = false;
-    loadProduct();
-    loadCatalogOptions();
-  }, [productId, loadCatalogOptions, loadProduct]);
+  useFocusEffect(
+    useCallback(() => {
+      hasPendingImageSelectionRef.current = false;
+      loadProduct();
+      loadCatalogOptions();
+    }, [loadCatalogOptions, loadProduct])
+  );
 
   useEffect(() => {
     if (!supplierId) return;

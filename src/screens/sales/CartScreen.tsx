@@ -20,6 +20,7 @@ interface CartScreenProps {
     params?: {
       customerId?: string | null;
       customerName?: string | null;
+      editSaleLocalId?: string | null;
     };
   };
 }
@@ -51,7 +52,20 @@ const formatDateOnly = (timestamp: number) =>
 export function CartScreen({ navigation, route }: CartScreenProps) {
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
-  const { items, updateQuantity, removeItem, getTotal, customerId, customerName, paymentMethod, setPaymentMethod, clear } = useCartStore();
+  const {
+    items,
+    updateQuantity,
+    removeItem,
+    getTotal,
+    customerId,
+    customerName,
+    paymentMethod,
+    setPaymentMethod,
+    clear,
+    editingSaleLocalId,
+    editingInvoiceCode,
+    clearEditContext,
+  } = useCartStore();
   const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
   const [loading, setLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
@@ -67,6 +81,41 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
     }, [route?.params?.customerId, route?.params?.customerName, setCustomer])
   );
+
+  const resolveLocalProductId = async (rawProductId: string): Promise<string | null> => {
+    if (!rawProductId) return null;
+    const row = await db.queryFirst<{ local_id: string }>(
+      'SELECT local_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+      [rawProductId, rawProductId]
+    );
+    return row?.local_id || null;
+  };
+
+  const queueSaleUpdateForEdit = async (saleLocalId: string, salePayload: any) => {
+    const serverRow = await db.queryFirst<{ server_id?: string }>(
+      'SELECT server_id FROM sales WHERE local_id = ?',
+      [saleLocalId]
+    );
+
+    if (serverRow?.server_id) {
+      await syncService.queueOperation('sale', 'update', { ...salePayload, id: serverRow.server_id }, saleLocalId);
+      return;
+    }
+
+    // Si no tiene server_id aún, actualizar el pending create existente para evitar PUT inválido.
+    const pendingCreate = await db.queryFirst<{ id: number }>(
+      `SELECT id
+       FROM sync_queue
+       WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      ['sale', saleLocalId, 'create', 'pending']
+    );
+
+    if (pendingCreate?.id) {
+      await db.update('sync_queue', String(pendingCreate.id), { data: JSON.stringify(salePayload) }, 'id');
+    }
+  };
 
   const paymentMethods = [
     { label: 'Efectivo', value: 'EFECTIVO' },
@@ -109,50 +158,133 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
     setLoading(true);
     try {
-      const localId = generateLocalId();
-      const invoiceCode = generateInvoiceCode();
+      let localId = generateLocalId();
+      let invoiceCode = generateInvoiceCode();
       const now = Date.now();
+      let createdAt = now;
+      let resolvedInvoiceCode = invoiceCode;
 
-      const saleData = {
-        localId,
-        invoiceCode,
+      const basePayload = {
         customerId,
         customerName,
-        items,
+        items: items.map((item) => ({
+          productId: item.productId,
+          productName: item.productName,
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          unitPriceCents: item.priceCents,
+          totalCents: item.totalCents,
+          wasPriceOverridden: false,
+        })),
         totalCents: getTotal(),
         paymentMethod,
+        type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
+        shippingCents: 0,
         status: 'completed',
-        createdAt: now,
       };
 
-      // Guardar venta en SQLite
-      await db.insert('sales', {
-        local_id: localId,
-        invoice_code: invoiceCode,
-        customer_id: customerId,
-        total_cents: getTotal(),
-        status: 'completed',
-        created_at: now,
-        synced: 0,
-        data: JSON.stringify(saleData),
-      });
+      if (editingSaleLocalId) {
+        localId = editingSaleLocalId;
+        const existing = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [editingSaleLocalId]);
+        if (!existing) {
+          Alert.alert('Factura', 'No se encontró la factura que estás editando.');
+          setLoading(false);
+          return;
+        }
 
-      // Agregar a cola de sincronización y disparar procesamiento si hay internet
-      await syncService.queueOperation('sale', 'create', saleData, localId);
+        resolvedInvoiceCode = String(existing.invoice_code || editingInvoiceCode || '-');
+        invoiceCode = resolvedInvoiceCode;
+        createdAt = Number(existing.created_at || now);
 
-      // Si la API ya respondió en esta ejecución, usar el código oficial de factura
-      const syncedSale = await db.queryFirst<{ invoice_code?: string }>(
-        'SELECT invoice_code FROM sales WHERE local_id = ?',
-        [localId]
-      );
-      const resolvedInvoiceCode = syncedSale?.invoice_code || invoiceCode;
+        let existingData: any = null;
+        try {
+          existingData = existing.data ? JSON.parse(existing.data) : null;
+        } catch {
+          existingData = null;
+        }
 
-      // Actualizar stock localmente
-      for (const item of items) {
-        await db.runAsync(
-          'UPDATE products SET stock = stock - ? WHERE local_id = ?',
-          [item.quantity, item.productId]
+        const oldItems = Array.isArray(existingData?.items) ? existingData.items : [];
+
+        // Revertir stock anterior
+        for (const oldItem of oldItems) {
+          const qty = Number(oldItem?.quantity ?? oldItem?.qty ?? 0);
+          if (!Number.isFinite(qty) || qty <= 0) continue;
+          const localProductId = await resolveLocalProductId(String(oldItem?.productId || ''));
+          if (!localProductId) continue;
+          await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [qty, localProductId]);
+        }
+
+        // Aplicar stock nuevo
+        for (const item of items) {
+          await db.runAsync('UPDATE products SET stock = stock - ? WHERE local_id = ?', [item.quantity, item.productId]);
+        }
+
+        const updatedData = {
+          ...(existingData || {}),
+          localId: editingSaleLocalId,
+          invoiceCode: resolvedInvoiceCode,
+          createdAt,
+          ...basePayload,
+          editedAt: now,
+        };
+
+        await db.update('sales', editingSaleLocalId, {
+          customer_id: customerId,
+          total_cents: getTotal(),
+          status: 'completed',
+          synced: 0,
+          data: JSON.stringify(updatedData),
+        });
+
+        await queueSaleUpdateForEdit(editingSaleLocalId, {
+          customerId,
+          type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
+          paymentMethod,
+          items: items.map((item) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            unitPriceCents: item.priceCents,
+            price: item.priceCents / 100,
+            wasPriceOverridden: false,
+          })),
+          shippingCents: 0,
+          status: 'completed',
+        });
+      } else {
+        const saleData = {
+          localId,
+          invoiceCode,
+          customerId,
+          customerName,
+          items,
+          totalCents: getTotal(),
+          paymentMethod,
+          status: 'completed',
+          createdAt: now,
+        };
+
+        await db.insert('sales', {
+          local_id: localId,
+          invoice_code: invoiceCode,
+          customer_id: customerId,
+          total_cents: getTotal(),
+          status: 'completed',
+          created_at: now,
+          synced: 0,
+          data: JSON.stringify(saleData),
+        });
+
+        await syncService.queueOperation('sale', 'create', saleData, localId);
+
+        const syncedSale = await db.queryFirst<{ invoice_code?: string }>(
+          'SELECT invoice_code FROM sales WHERE local_id = ?',
+          [localId]
         );
+        resolvedInvoiceCode = syncedSale?.invoice_code || invoiceCode;
+
+        for (const item of items) {
+          await db.runAsync('UPDATE products SET stock = stock - ? WHERE local_id = ?', [item.quantity, item.productId]);
+        }
       }
 
       const itemsRows = items
@@ -170,25 +302,25 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         )
         .join('');
 
-      const subtotalCents = Math.round(saleData.totalCents / 1.18);
-      const itbisCents = saleData.totalCents - subtotalCents;
-      const saleTypeLabel = saleData.paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
+      const subtotalCents = Math.round(getTotal() / 1.18);
+      const itbisCents = getTotal() - subtotalCents;
+      const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
       const paymentMethodLabel =
-        saleData.paymentMethod === 'EFECTIVO'
+        paymentMethod === 'EFECTIVO'
           ? 'Efectivo'
-          : saleData.paymentMethod === 'TARJETA'
+          : paymentMethod === 'TARJETA'
             ? 'Tarjeta'
-            : saleData.paymentMethod === 'TRANSFERENCIA'
+            : paymentMethod === 'TRANSFERENCIA'
               ? 'Transferencia'
-              : saleData.paymentMethod === 'CREDITO'
+              : paymentMethod === 'CREDITO'
                 ? 'Crédito'
-                : saleData.paymentMethod;
+                : paymentMethod;
 
       let creditDays = 0;
-      if (saleData.paymentMethod === 'CREDITO' && saleData.customerId) {
+      if (paymentMethod === 'CREDITO' && customerId) {
         const customerRow = await db.queryFirst<{ data?: string }>(
           'SELECT data FROM customers WHERE local_id = ?',
-          [saleData.customerId]
+          [customerId]
         );
         try {
           const customerData = customerRow?.data ? JSON.parse(customerRow.data) : null;
@@ -201,8 +333,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           creditDays = 0;
         }
       }
-      const creditDueDate = now + (Math.max(creditDays, 0) * 24 * 60 * 60 * 1000);
-      const showCreditDueDate = saleData.paymentMethod === 'CREDITO';
+      const creditDueDate = createdAt + (Math.max(creditDays, 0) * 24 * 60 * 60 * 1000);
+      const showCreditDueDate = paymentMethod === 'CREDITO';
 
       const html = `
         <html>
@@ -306,8 +438,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
               <div class="sep">
                 <div class="row"><span>Factura:</span><span><strong>${escapeHtml(resolvedInvoiceCode)}</strong></span></div>
-                <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(now))}</span></div>
-                <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(saleData.customerName || '(General) Cliente general')}</div>
+                <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div>
+                <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName || '(General) Cliente general')}</div>
                 <div style="margin-top:4px;"><strong>Tipo de venta:</strong> ${escapeHtml(saleTypeLabel)}</div>
                 <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel)}</div>
               </div>
@@ -317,10 +449,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               <div class="totals">
                 <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
                 <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
-                <div class="row total"><span>TOTAL</span><span>${formatCurrency(saleData.totalCents)}</span></div>
+                <div class="row total"><span>TOTAL</span><span>${formatCurrency(getTotal())}</span></div>
               </div>
 
-              ${saleData.paymentMethod === 'CREDITO' ? `
+              ${paymentMethod === 'CREDITO' ? `
                 <div class="credit">
                   <div>VENTA A CREDITO</div>
                   ${showCreditDueDate ? `<div style="margin-top:2px;font-weight:500;">Vence: ${escapeHtml(formatDateOnly(creditDueDate))}</div>` : ''}
@@ -336,6 +468,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
       // Limpiar carrito
       clear();
+      clearEditContext();
 
       // Navegar a recibo
       navigation.navigate('Receipt', { saleId: localId, invoiceCode: resolvedInvoiceCode });
@@ -398,6 +531,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       {items.length > 0 && (
         <BottomDock>
           <Surface style={styles.summaryCard}>
+          {editingSaleLocalId ? (
+            <View style={styles.editingBanner}>
+              <Text style={styles.editingBannerText}>Editando factura {editingInvoiceCode || '-'}</Text>
+            </View>
+          ) : null}
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Cliente:</Text>
             <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
@@ -447,7 +585,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             style={styles.completeButton}
             contentStyle={styles.completeButtonContent}
           >
-            Completar Venta
+            {editingSaleLocalId ? 'Guardar Cambios' : 'Completar Venta'}
           </Button>
           </Surface>
         </BottomDock>
@@ -529,6 +667,18 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: ui.colors.border,
     elevation: 8,
+  },
+  editingBanner: {
+    backgroundColor: '#DBEAFE',
+    borderRadius: ui.radius.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    marginBottom: 10,
+  },
+  editingBannerText: {
+    color: '#1E40AF',
+    fontSize: 12,
+    fontWeight: '800',
   },
   summaryRow: {
     flexDirection: 'row',

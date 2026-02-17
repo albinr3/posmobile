@@ -6,11 +6,22 @@ interface CartState {
   customerId: string | null;
   customerName: string | null;
   paymentMethod: string;
+  editingSaleLocalId: string | null;
+  editingInvoiceCode: string | null;
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   setCustomer: (customerId: string | null, customerName: string | null) => void;
   setPaymentMethod: (method: string) => void;
+  loadInvoiceForEdit: (params: {
+    items: SaleItem[];
+    customerId: string | null;
+    customerName: string | null;
+    paymentMethod: string;
+    saleLocalId: string;
+    invoiceCode: string;
+  }) => void;
+  clearEditContext: () => void;
   clear: () => void;
   getTotal: () => number;
   getItemCount: () => number;
@@ -21,6 +32,8 @@ export const useCartStore = create<CartState>((set, get) => ({
   customerId: null,
   customerName: null,
   paymentMethod: 'EFECTIVO',
+  editingSaleLocalId: null,
+  editingInvoiceCode: null,
 
   addItem: (product: Product, quantity: number = 1) => {
     set((state) => {
@@ -88,12 +101,32 @@ export const useCartStore = create<CartState>((set, get) => ({
     set({ paymentMethod: method });
   },
 
+  loadInvoiceForEdit: ({ items, customerId, customerName, paymentMethod, saleLocalId, invoiceCode }) => {
+    set({
+      items,
+      customerId,
+      customerName,
+      paymentMethod: paymentMethod || 'EFECTIVO',
+      editingSaleLocalId: saleLocalId,
+      editingInvoiceCode: invoiceCode,
+    });
+  },
+
+  clearEditContext: () => {
+    set({
+      editingSaleLocalId: null,
+      editingInvoiceCode: null,
+    });
+  },
+
   clear: () => {
     set({
       items: [],
       customerId: null,
       customerName: null,
       paymentMethod: 'EFECTIVO',
+      editingSaleLocalId: null,
+      editingInvoiceCode: null,
     });
   },
 

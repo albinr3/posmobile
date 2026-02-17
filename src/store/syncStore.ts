@@ -5,10 +5,12 @@ interface SyncState {
   lastSyncTime: number | null;
   pendingCount: number;
   isOnline: boolean;
+  syncBlockedReason: string | null;
   setIsSyncing: (syncing: boolean) => void;
   setLastSyncTime: (time: number) => void;
   setPendingCount: (count: number) => void;
   setIsOnline: (online: boolean) => void;
+  setSyncBlockedReason: (reason: string | null) => void;
 }
 
 export const useSyncStore = create<SyncState>((set) => ({
@@ -16,6 +18,7 @@ export const useSyncStore = create<SyncState>((set) => ({
   lastSyncTime: null,
   pendingCount: 0,
   isOnline: true,
+  syncBlockedReason: null,
 
   setIsSyncing: (syncing: boolean) => {
     set({ isSyncing: syncing });
@@ -31,5 +34,9 @@ export const useSyncStore = create<SyncState>((set) => ({
 
   setIsOnline: (online: boolean) => {
     set({ isOnline: online });
+  },
+
+  setSyncBlockedReason: (reason: string | null) => {
+    set({ syncBlockedReason: reason });
   },
 }));

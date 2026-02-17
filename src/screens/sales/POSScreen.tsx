@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image } from 'react-native';
 import { Text, Icon, Searchbar, Menu, IconButton } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -8,12 +8,18 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCartStore } from '../../store/cartStore';
 import { db } from '../../database/Database';
-import { Product } from '../../types';
+import { Product, SaleItem } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
 interface POSScreenProps {
   navigation: any;
+  route?: {
+    params?: {
+      editSaleLocalId?: string;
+      editNonce?: number;
+    };
+  };
 }
 
 interface POSProduct extends Product {
@@ -31,15 +37,28 @@ const PAYMENT_OPTIONS = [
 ];
 const VIEW_MODE_STORAGE_KEY = 'pos_view_mode';
 
-export function POSScreen({ navigation }: POSScreenProps) {
+export function POSScreen({ navigation, route }: POSScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<POSProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const insets = useSafeAreaInsets();
+  const hydratedEditSaleRef = useRef<string | null>(null);
 
-  const { addItem, getTotal, getItemCount, customerId, customerName, setPaymentMethod, paymentMethod, items } = useCartStore();
+  const {
+    addItem,
+    getTotal,
+    getItemCount,
+    customerId,
+    customerName,
+    setPaymentMethod,
+    paymentMethod,
+    items,
+    loadInvoiceForEdit,
+    editingSaleLocalId,
+    editingInvoiceCode,
+  } = useCartStore();
 
   const saleType: SaleType = paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO';
 
@@ -75,6 +94,95 @@ export function POSScreen({ navigation }: POSScreenProps) {
       loadProducts();
     }, [])
   );
+
+  useEffect(() => {
+    const saleLocalId = route?.params?.editSaleLocalId;
+    if (!saleLocalId) return;
+    if (hydratedEditSaleRef.current === saleLocalId) return;
+    hydratedEditSaleRef.current = saleLocalId;
+
+    const loadInvoiceToCart = async () => {
+      try {
+        const sale = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [saleLocalId]);
+        if (!sale) {
+          Alert.alert('Factura', 'No se encontró la factura para editar.');
+          return;
+        }
+
+        const status = String(sale.status || '').toLowerCase();
+        if (status === 'cancelled') {
+          Alert.alert('Factura', 'No puedes editar una factura cancelada.');
+          return;
+        }
+
+        let parsedData: any = null;
+        try {
+          parsedData = sale.data ? JSON.parse(sale.data) : null;
+        } catch {
+          parsedData = null;
+        }
+
+        const rawItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
+        if (!rawItems.length) {
+          Alert.alert('Factura', 'Esta factura no tiene productos para editar.');
+          return;
+        }
+
+        const resolvedItems: SaleItem[] = [];
+        for (const rawItem of rawItems) {
+          const sourceId = String(rawItem?.productId || '');
+          if (!sourceId) continue;
+
+          const productRow = await db.queryFirst<{ local_id: string; name?: string }>(
+            'SELECT local_id, name FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [sourceId, sourceId]
+          );
+          if (!productRow?.local_id) continue;
+
+          const quantity = Number(rawItem?.quantity ?? rawItem?.qty ?? 0);
+          const unitPriceCents = Number(rawItem?.priceCents ?? rawItem?.unitPriceCents ?? 0);
+          if (!Number.isFinite(quantity) || quantity <= 0) continue;
+          if (!Number.isFinite(unitPriceCents) || unitPriceCents <= 0) continue;
+
+          resolvedItems.push({
+            productId: productRow.local_id,
+            productName: String(rawItem?.productName || productRow.name || 'Producto'),
+            quantity,
+            priceCents: unitPriceCents,
+            totalCents: Math.round(quantity * unitPriceCents),
+          });
+        }
+
+        if (!resolvedItems.length) {
+          Alert.alert('Factura', 'No se pudieron mapear los productos de la factura para edición.');
+          return;
+        }
+
+        const resolvedPaymentMethod = String(parsedData?.paymentMethod || 'EFECTIVO').toUpperCase();
+        loadInvoiceForEdit({
+          items: resolvedItems,
+          customerId: sale.customer_id ? String(sale.customer_id) : null,
+          customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+          paymentMethod:
+            resolvedPaymentMethod === 'CREDITO' ||
+            resolvedPaymentMethod === 'TARJETA' ||
+            resolvedPaymentMethod === 'TRANSFERENCIA'
+              ? resolvedPaymentMethod
+              : 'EFECTIVO',
+          saleLocalId,
+          invoiceCode: String(sale.invoice_code || parsedData?.invoiceCode || '-'),
+        });
+
+        setSearchQuery('');
+        navigation.setParams?.({ editSaleLocalId: undefined, editNonce: undefined });
+      } catch (error) {
+        console.error('Error preparando edición de factura en POS:', error);
+        Alert.alert('Error', 'No se pudo abrir la factura en modo edición.');
+      }
+    };
+
+    loadInvoiceToCart();
+  }, [route?.params?.editSaleLocalId, route?.params?.editNonce, loadInvoiceForEdit, navigation]);
 
   const loadProducts = async () => {
     try {
@@ -246,7 +354,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
       <View style={styles.mainContent}>
         <View style={styles.saleCard}>
           <View style={styles.saleHeader}>
-            <Text style={styles.saleTitle}>Venta</Text>
+            <Text style={styles.saleTitle}>{editingSaleLocalId ? `Editando ${editingInvoiceCode || 'factura'}` : 'Venta'}</Text>
           </View>
 
           <Text style={styles.label}>Cliente</Text>
@@ -365,7 +473,7 @@ export function POSScreen({ navigation }: POSScreenProps) {
         }
       />
 
-      <BottomDock containerStyle={styles.bottomDockContainer} style={styles.bottomBar}>
+      <BottomDock containerStyle={styles.bottomDockContainer} style={styles.bottomBar} maxBottomInset={8}>
         <View style={styles.bottomTop}>
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
@@ -375,10 +483,10 @@ export function POSScreen({ navigation }: POSScreenProps) {
         </View>
         <TouchableOpacity
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
-          onPress={() => navigation.navigate('Cart', { customerId, customerName })}
+          onPress={() => navigation.navigate('Cart', { customerId, customerName, editSaleLocalId: editingSaleLocalId })}
           disabled={getItemCount() === 0}
         >
-          <Text style={styles.chargeButtonText}>Facturar</Text>
+          <Text style={styles.chargeButtonText}>{editingSaleLocalId ? 'Guardar Cambios' : 'Facturar'}</Text>
           <Icon source="arrow-right" size={18} color="#fff" />
         </TouchableOpacity>
       </BottomDock>
@@ -571,7 +679,7 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(229,231,235,0.45)',
     paddingHorizontal: 14,
     paddingTop: 6,
-    paddingBottom: 28,
+    paddingBottom: 10,
   },
   bottomTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
   totalLabel: { color: '#6B7280', fontWeight: '700', fontSize: 12 },

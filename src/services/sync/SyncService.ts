@@ -6,6 +6,12 @@ import { useSyncStore } from '../../store/syncStore';
 import { useAuth } from '@clerk/clerk-expo';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+const SYNC_DEBUG = false;
+
+function shortToken(token: string | null | undefined): string {
+  if (!token) return 'null';
+  return `${token.slice(0, 12)}...(${token.length})`;
+}
 
 function summarizeError(error: any) {
   if (!error) return { message: 'Error desconocido' };
@@ -46,24 +52,30 @@ class SyncService {
   private unsubscribeNetInfo: (() => void) | null = null;
   private getTokenFn: (() => Promise<string | null>) | null = null;
   private getSubUserTokenFn: (() => Promise<string | null>) | null = null;
+  private backendAuthCooldownUntil = 0;
+  private lastAuthWaitLogAt = 0;
 
   // Método para establecer la función que obtiene el token de Clerk
   setTokenGetter(fn: () => Promise<string | null>) {
+    if (SYNC_DEBUG) console.log('[SyncService] setTokenGetter() configurado');
     this.getTokenFn = fn;
   }
 
   // Método para establecer la función que obtiene el token JWT del subusuario
   setSubUserTokenGetter(fn: () => Promise<string | null>) {
+    if (SYNC_DEBUG) console.log('[SyncService] setSubUserTokenGetter() configurado');
     this.getSubUserTokenFn = fn;
   }
 
   
   // Métodos públicos para configurar funciones de obtención de tokens
   public setGetTokenFunction(fn: () => Promise<string | null>) {
+    if (SYNC_DEBUG) console.log('[SyncService] setGetTokenFunction() configurado');
     this.getTokenFn = fn;
   }
 
   public setGetSubUserTokenFunction(fn: () => Promise<string | null>) {
+    if (SYNC_DEBUG) console.log('[SyncService] setGetSubUserTokenFunction() configurado');
     this.getSubUserTokenFn = fn;
   }
 
@@ -91,6 +103,7 @@ class SyncService {
 
   async fullSync(authToken: string) {
     if (this.isSyncing) return;
+    if (SYNC_DEBUG) console.log('[SyncService] fullSync() start', { authToken: shortToken(authToken) });
     this.isSyncing = true;
     useSyncStore.getState().setIsSyncing(true);
 
@@ -109,6 +122,7 @@ class SyncService {
     } catch (error) {
       console.error('Error en sincronización completa:', error);
     } finally {
+      if (SYNC_DEBUG) console.log('[SyncService] fullSync() end');
       this.isSyncing = false;
       useSyncStore.getState().setIsSyncing(false);
       await this.updatePendingCount();
@@ -128,6 +142,14 @@ class SyncService {
 
   async queueOperation(entityType: string, action: string, data: any, localId: string) {
     try {
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] queueOperation()', {
+          entityType,
+          action,
+          localId,
+          dataKeys: data ? Object.keys(data) : [],
+        });
+      }
       await db.insert('sync_queue', {
         entity_type: entityType,
         entity_local_id: localId,
@@ -143,7 +165,10 @@ class SyncService {
       // Intentar sincronizar si hay internet
       const { isOnline } = useSyncStore.getState();
       if (isOnline) {
-        await this.processQueue();
+        // No bloquear la UX por latencia/timeout de red: sincronizar en background.
+        this.processQueue().catch((error) => {
+          console.error('[SyncService] Error en processQueue background:', summarizeError(error));
+        });
       }
     } catch (error) {
       console.error('Error agregando a cola:', error);
@@ -152,6 +177,25 @@ class SyncService {
 
   private async processQueue() {
     if (this.isSyncing) return;
+
+    const now = Date.now();
+    if (now < this.backendAuthCooldownUntil) {
+      if (SYNC_DEBUG) console.log('[SyncService] processQueue() en cooldown', { msRemaining: this.backendAuthCooldownUntil - now });
+      return;
+    }
+
+    const authStatus = await this.getAuthStatus();
+    if (SYNC_DEBUG) console.log('[SyncService] processQueue() authStatus', authStatus);
+    const authReady = authStatus.ready;
+    if (!authReady) {
+      useSyncStore.getState().setSyncBlockedReason(authStatus.reason);
+      if (authStatus.reason) {
+        this.logAuthWait(authStatus.reason);
+      }
+      return;
+    }
+    useSyncStore.getState().setSyncBlockedReason(null);
+
     this.isSyncing = true;
 
     try {
@@ -159,9 +203,19 @@ class SyncService {
         'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
         ['pending']
       );
+      if (SYNC_DEBUG) console.log('[SyncService] processQueue() pending items', { count: pending.length });
 
       for (const item of pending) {
         try {
+          if (SYNC_DEBUG) {
+            console.log('[SyncService] processQueue() syncing item', {
+              queueId: item.id,
+              entityType: item.entity_type,
+              action: item.action,
+              entityLocalId: item.entity_local_id,
+              retryCount: item.retry_count,
+            });
+          }
           await this.syncItem(item);
           
           // Marcar como sincronizado
@@ -170,7 +224,11 @@ class SyncService {
             synced_at: Date.now(),
           }, 'id');
         } catch (error) {
-          await this.handleSyncError(item, error);
+          const stopProcessing = await this.handleSyncError(item, error);
+          if (stopProcessing) {
+            if (SYNC_DEBUG) console.log('[SyncService] processQueue() stopProcessing=true, cortando ciclo');
+            break;
+          }
         }
       }
     } finally {
@@ -214,6 +272,17 @@ class SyncService {
       throw new Error('No hay token de subusuario disponible. Por favor, selecciona un usuario.');
     }
 
+    if (SYNC_DEBUG) {
+      console.log('[SyncService] syncItem() auth context', {
+        queueId: item.id,
+        endpoint,
+        action: item.action,
+        accountId,
+        clerkToken: shortToken(clerkToken),
+        subUserToken: shortToken(subUserToken),
+      });
+    }
+
     if (
       item.entity_type === 'product' &&
       (item.action === 'create' || item.action === 'update') &&
@@ -242,11 +311,24 @@ class SyncService {
     if (item.action === 'update' && data.id) {
       url = `${url}/${data.id}`;
     }
+
+    if (SYNC_DEBUG) {
+      console.log('[SyncService] syncItem() request', {
+        queueId: item.id,
+        method: item.action === 'delete' ? 'DELETE' : item.action === 'update' ? 'PUT' : 'POST',
+        url,
+        accountId,
+        dataKeys: requestData ? Object.keys(requestData) : [],
+        saleStatus: requestData?.status,
+        saleCancel: requestData?.cancel,
+      });
+    }
     
     const response = await axios({
       method: item.action === 'delete' ? 'DELETE' : item.action === 'update' ? 'PUT' : 'POST',
       url,
       data: requestData,
+      timeout: 25000,
       headers: {
         'Authorization': `Bearer ${clerkToken}`,
         'X-Clerk-Authorization': `Bearer ${clerkToken}`,
@@ -473,6 +555,21 @@ class SyncService {
           notes: data.notes || null,
         };
       case 'sale':
+        {
+        const cancelRequested =
+          String(data?.status || '').toLowerCase() === 'cancelled' ||
+          String(data?.status || '').toUpperCase() === 'CANCELADA' ||
+          data?.cancel === true ||
+          Boolean(data?.cancelledAt);
+
+        if (action === 'update' && cancelRequested) {
+          return {
+            status: 'cancelled',
+            cancel: true,
+            cancelledAt: data?.cancelledAt || Date.now(),
+          };
+        }
+
         let resolvedCustomerId: string | null = null;
         if (data.customerId) {
           const customer = await db.queryFirst<{ server_id?: string }>(
@@ -531,6 +628,7 @@ class SyncService {
           items: saleItems,
           shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
         };
+        }
       case 'payment':
         let resolvedArId = data.arId || data.accountReceivableId || data.arServerId || null;
         if (resolvedArId) {
@@ -608,11 +706,19 @@ class SyncService {
     }
   }
 
-  private async handleSyncError(item: any, error: any) {
+  private async handleSyncError(item: any, error: any): Promise<boolean> {
+    if (SYNC_DEBUG) {
+      console.log('[SyncService] handleSyncError()', {
+        queueId: item?.id,
+        entityType: item?.entity_type,
+        action: item?.action,
+        summary: summarizeError(error),
+      });
+    }
     const dependencyError = typeof error?.message === 'string' && error.message.includes('Producto sin server_id');
     if (dependencyError) {
       console.warn(`Sync pendiente por dependencia (${item.entity_type} #${item.id}): ${error.message}`);
-      return;
+      return false;
     }
 
     const authNotReadyError =
@@ -620,15 +726,51 @@ class SyncService {
       (error.message.includes('No hay token de autenticación de Clerk disponible') ||
         error.message.includes('No hay token de subusuario disponible'));
     if (authNotReadyError) {
+      useSyncStore.getState().setSyncBlockedReason(
+        error.message.includes('subusuario')
+          ? 'Sync pausado: falta autenticacion de subusuario. Inicia sesion del usuario de caja.'
+          : 'Sync pausado: falta autenticacion principal (Clerk). Inicia sesion nuevamente.'
+      );
       console.warn(`Sync en espera de sesion (${item.entity_type} #${item.id}): ${error.message}`);
-      return;
+      return true;
     }
 
+    const backendErrorMessage = axios.isAxiosError(error)
+      ? String(error.response?.data?.error || error.response?.data?.message || '').toLowerCase()
+      : '';
+    const backendStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
     const backendAuthError =
       axios.isAxiosError(error) &&
-      typeof error.response?.data?.error === 'string' &&
-      error.response.data.error.toLowerCase().includes('no autenticado');
+      (backendStatus === 401 || backendStatus === 403);
     if (backendAuthError) {
+      this.backendAuthCooldownUntil = Date.now() + 60_000;
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] backendAuthError detectado', {
+          queueId: item?.id,
+          status: axios.isAxiosError(error) ? error.response?.status : null,
+          backendErrorMessage,
+          cooldownUntil: this.backendAuthCooldownUntil,
+        });
+      }
+      try {
+        const { useAuthStore } = await import('../../store/authStore');
+        const state = useAuthStore.getState();
+        if (state.subUserToken) {
+          if (SYNC_DEBUG) {
+            console.log('[SyncService] limpiando subusuario por backendAuthError', {
+              accountId: state.accountId,
+              subUser: state.subUser?.username,
+              subUserToken: shortToken(state.subUserToken),
+            });
+          }
+          await state.setSubUser(null, null, null);
+        }
+      } catch (clearSessionError) {
+        console.warn('No se pudo limpiar sesion de subusuario tras 401/403:', clearSessionError);
+      }
+      useSyncStore.getState().setSyncBlockedReason(
+        'Sync pausado: backend rechazo autenticacion. Debes volver a seleccionar usuario para continuar.'
+      );
       if (item.entity_type === 'customer') {
         await db.update(
           'sync_queue',
@@ -639,10 +781,27 @@ class SyncService {
         console.warn(
           `Sync detenido para customer #${item.id}: backend responde "No autenticado" en POST /customers.`
         );
-        return;
+        return true;
       }
       console.warn(`Sync en espera de autenticacion backend (${item.entity_type} #${item.id}).`);
-      return;
+      return true;
+    }
+
+    const backendAuthLikeMessage =
+      axios.isAxiosError(error) &&
+      (
+        backendErrorMessage.includes('no autenticado') ||
+        backendErrorMessage.includes('unauthorized') ||
+        backendErrorMessage.includes('not authenticated')
+      );
+    if (backendAuthLikeMessage && SYNC_DEBUG) {
+      console.warn('[SyncService] backend devolvió mensaje de auth con status no-auth estándar', {
+        queueId: item?.id,
+        entityType: item?.entity_type,
+        action: item?.action,
+        status: backendStatus,
+        backendErrorMessage,
+      });
     }
 
     const backendBusinessError =
@@ -661,7 +820,7 @@ class SyncService {
         'id'
       );
       console.warn(`Sync detenido por validacion de negocio (${item.entity_type} #${item.id}).`);
-      return;
+      return false;
     }
 
     const retryCount = item.retry_count + 1;
@@ -685,7 +844,7 @@ class SyncService {
         queueId: item.id,
         action: item.action,
       });
-      return;
+      return false;
     }
 
     console.error(`Error sincronizando ${item.entity_type}:`, {
@@ -693,6 +852,55 @@ class SyncService {
       queueId: item.id,
       action: item.action,
     });
+    return false;
+  }
+
+  private logAuthWait(message: string) {
+    const now = Date.now();
+    if (now - this.lastAuthWaitLogAt > 30_000) {
+      this.lastAuthWaitLogAt = now;
+      console.warn(message);
+    }
+  }
+
+  private async hasAuthContext(): Promise<boolean> {
+    const status = await this.getAuthStatus();
+    return status.ready;
+  }
+
+  private async getAuthStatus(): Promise<{ ready: boolean; reason: string | null }> {
+    // Si Clerk aun no inyecto getToken (arranque de app), no avisar error de sesion.
+    if (!this.getTokenFn) {
+      return { ready: false, reason: null };
+    }
+
+    let clerkToken: string | null = null;
+    clerkToken = await this.getTokenFn();
+    if (SYNC_DEBUG) console.log('[SyncService] getAuthStatus() clerkToken', shortToken(clerkToken));
+    if (!clerkToken) {
+      return {
+        ready: false,
+        reason: 'Sync pausado: no hay sesion principal activa. Inicia sesion para continuar.',
+      };
+    }
+
+    let subUserToken: string | null = null;
+    if (this.getSubUserTokenFn) {
+      subUserToken = await this.getSubUserTokenFn();
+    } else {
+      const { useAuthStore } = await import('../../store/authStore');
+      subUserToken = useAuthStore.getState().subUserToken || null;
+    }
+    if (SYNC_DEBUG) console.log('[SyncService] getAuthStatus() subUserToken', shortToken(subUserToken));
+
+    if (!subUserToken) {
+      return {
+        ready: false,
+        reason: 'Sync pausado: falta autenticacion de subusuario. Selecciona el usuario de caja.',
+      };
+    }
+
+    return { ready: true, reason: null };
   }
 
   private async downloadFromServer(authToken: string) {
@@ -730,6 +938,14 @@ class SyncService {
 
       if (!subUserToken) {
         throw new Error('No hay token de subusuario disponible. Por favor, selecciona un usuario.');
+      }
+
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() auth context', {
+          accountId,
+          clerkToken: shortToken(clerkToken),
+          subUserToken: shortToken(subUserToken),
+        });
       }
 
       console.log('📡 [SyncService] Descargando productos desde:', `${API_URL}/api/products`);
@@ -786,6 +1002,12 @@ class SyncService {
       const customersResponse = await axios.get(`${API_URL}/api/customers`, {
         headers,
       });
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() customers status', {
+          status: customersResponse.status,
+          count: (customersResponse.data?.data || customersResponse.data || []).length,
+        });
+      }
       
       const customers = customersResponse.data?.data || customersResponse.data || [];
       
@@ -817,10 +1039,18 @@ class SyncService {
       const arResponse = await axios.get(`${API_URL}/api/accounts-receivable`, {
         headers,
       });
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() AR status', {
+          status: arResponse.status,
+          count: (arResponse.data?.data || arResponse.data || []).length,
+        });
+      }
 
       const arItems = arResponse.data?.data || arResponse.data || [];
+      const serverOpenArIds = new Set<string>();
 
       for (const ar of arItems) {
+        serverOpenArIds.add(String(ar.id));
         const exists = await db.queryFirst(
           'SELECT * FROM accounts_receivable WHERE server_id = ?',
           [ar.id]
@@ -854,6 +1084,46 @@ class SyncService {
             ...arData,
           });
         }
+      }
+
+      // Cerrar AR locales que estaban abiertas pero ya no existen en la lista de AR abiertas del servidor.
+      // Esto cubre casos de facturas canceladas/pagadas fuera del móvil.
+      const localOpenAr = await db.query<any>(
+        `SELECT local_id, server_id, total_cents, data
+         FROM accounts_receivable
+         WHERE server_id IS NOT NULL
+           AND status IN ('PENDIENTE', 'PARCIAL')`
+      );
+
+      for (const localAr of localOpenAr) {
+        const serverId = String(localAr.server_id || '');
+        if (!serverId || serverOpenArIds.has(serverId)) continue;
+
+        let parsedData: any = null;
+        try {
+          parsedData = localAr.data ? JSON.parse(localAr.data) : null;
+        } catch {
+          parsedData = null;
+        }
+        const totalCents = Number(localAr.total_cents || parsedData?.totalCents || 0);
+
+        await db.update(
+          'accounts_receivable',
+          String(localAr.local_id),
+          {
+            status: 'PAGADO',
+            balance_cents: 0,
+            paid_cents: totalCents,
+            synced: 1,
+            data: JSON.stringify({
+              ...(parsedData || {}),
+              status: 'PAGADO',
+              balanceCents: 0,
+              paidCents: totalCents,
+              closedAt: Date.now(),
+            }),
+          }
+        );
       }
     } catch (error: any) {
       console.error('❌ [SyncService] Error descargando datos del servidor:', error);
