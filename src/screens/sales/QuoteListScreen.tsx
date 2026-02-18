@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
@@ -54,31 +54,46 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
   const { getToken } = useAuth();
   const { subUserToken } = useAuthStore();
   const { isOnline } = useSyncStore();
+  const getTokenRef = useRef(getToken);
+  const subUserTokenRef = useRef(subUserToken);
+  const isOnlineRef = useRef(isOnline);
+  const isSyncingOnFocusRef = useRef(false);
+  getTokenRef.current = getToken;
+  subUserTokenRef.current = subUserToken;
+  isOnlineRef.current = isOnline;
 
   useFocusEffect(
     useCallback(() => {
+      if (isSyncingOnFocusRef.current) return;
+      isSyncingOnFocusRef.current = true;
       let active = true;
       const syncAndLoad = async () => {
-        await loadQuotes();
-        if (!active || !isOnline) return;
         try {
-          const clerkToken = await getToken();
-          if (!clerkToken || !subUserToken) return;
-          syncService.setGetTokenFunction(getToken);
+          await loadQuotes();
+          if (!active || !isOnlineRef.current) return;
+
+          const clerkToken = await getTokenRef.current();
+          if (!clerkToken || !subUserTokenRef.current) return;
+          syncService.setGetTokenFunction(() => getTokenRef.current());
           syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-          await syncService.fullSync(clerkToken);
+          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           if (active) {
             await loadQuotes();
           }
         } catch (error) {
           console.error('Error sincronizando cotizaciones:', error);
+        } finally {
+          if (active) {
+            isSyncingOnFocusRef.current = false;
+          }
         }
       };
       syncAndLoad();
       return () => {
         active = false;
+        isSyncingOnFocusRef.current = false;
       };
-    }, [getToken, isOnline, subUserToken])
+    }, [])
   );
 
   const loadQuotes = async () => {

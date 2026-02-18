@@ -224,6 +224,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           localId: editingSaleLocalId,
           invoiceCode: resolvedInvoiceCode,
           createdAt,
+          soldAt: createdAt,
           ...basePayload,
           editedAt: now,
         };
@@ -240,6 +241,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           customerId,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
+          createdAt,
+          soldAt: createdAt,
           items: items.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
@@ -261,6 +264,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           paymentMethod,
           status: 'completed',
           createdAt: now,
+          soldAt: now,
         };
 
         await db.insert('sales', {

@@ -28,6 +28,30 @@ const escapeHtml = (value: string) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+const resolveSaleCreatedAt = (rowCreatedAt: unknown, saleData: any): number => {
+  const candidates = [
+    rowCreatedAt,
+    saleData?.createdAt,
+    saleData?.soldAt,
+    saleData?.date,
+  ];
+
+  for (const candidate of candidates) {
+    const asNumber = Number(candidate);
+    if (Number.isFinite(asNumber)) return asNumber;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      const asDate = new Date(candidate).getTime();
+      if (Number.isFinite(asDate)) return asDate;
+    }
+    if (candidate instanceof Date) {
+      const ts = candidate.getTime();
+      if (Number.isFinite(ts)) return ts;
+    }
+  }
+
+  return Date.now();
+};
+
 const buildReceiptHtml = (params: {
   invoiceCode: string;
   createdAt: number;
@@ -134,9 +158,12 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       );
       if (result) {
         const saleData = JSON.parse(result.data);
+        const createdAt = resolveSaleCreatedAt(result.created_at, saleData);
         setSale({
           ...result,
           ...saleData,
+          createdAt,
+          soldAt: saleData?.soldAt || createdAt,
         });
       }
     } catch (error) {
@@ -149,9 +176,10 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
   const handleShare = async () => {
     if (!sale) return;
     const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
+    const createdAt = resolveSaleCreatedAt(sale?.created_at, sale);
     const html = buildReceiptHtml({
       invoiceCode: displayInvoiceCode,
-      createdAt: sale.createdAt,
+      createdAt,
       customerName: sale.customerName,
       paymentMethod: sale.paymentMethod,
       totalCents: sale.totalCents,
@@ -186,9 +214,10 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
     if (!sale) return;
 
     const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
+    const createdAt = resolveSaleCreatedAt(sale?.created_at, sale);
     const html = buildReceiptHtml({
       invoiceCode: displayInvoiceCode,
-      createdAt: sale.createdAt,
+      createdAt,
       customerName: sale.customerName,
       paymentMethod: sale.paymentMethod,
       totalCents: sale.totalCents,
@@ -232,6 +261,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
   }
 
   const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
+  const displayCreatedAt = resolveSaleCreatedAt(sale?.created_at, sale);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -252,7 +282,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
 
           <View style={styles.infoRow}>
             <Text style={styles.label}>Fecha:</Text>
-            <Text style={styles.value}>{formatDateTime(sale.createdAt)}</Text>
+            <Text style={styles.value}>{formatDateTime(displayCreatedAt)}</Text>
           </View>
 
           {sale.customerName && (

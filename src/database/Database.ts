@@ -289,6 +289,32 @@ class DatabaseService {
       );
     `);
 
+    // Tabla de proveedores
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS suppliers (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        name TEXT NOT NULL,
+        discount_percent_bp INTEGER DEFAULT 0,
+        charges_itbis INTEGER DEFAULT 0,
+        itbis_rate_bp INTEGER,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    // Tabla de categorias
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS categories (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        name TEXT NOT NULL,
+        description TEXT,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
     // Tabla de pagos
     await this.db.execAsync(`
       CREATE TABLE IF NOT EXISTS payments (
@@ -334,6 +360,54 @@ class DatabaseService {
       );
     `);
 
+    // Tabla de compras
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS purchases (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        supplier_name TEXT,
+        total_cents INTEGER NOT NULL DEFAULT 0,
+        purchased_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    // Tabla de devoluciones
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS returns (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        return_code TEXT,
+        sale_local_id TEXT,
+        sale_server_id TEXT,
+        total_cents INTEGER NOT NULL DEFAULT 0,
+        notes TEXT,
+        returned_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    // Items de devolucion
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS return_items (
+        local_id TEXT PRIMARY KEY,
+        return_local_id TEXT NOT NULL,
+        sale_item_id TEXT NOT NULL,
+        product_local_id TEXT,
+        product_server_id TEXT,
+        product_name TEXT,
+        qty REAL NOT NULL,
+        unit_price_cents INTEGER NOT NULL,
+        line_total_cents INTEGER NOT NULL,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
     // Índices para búsquedas rápidas
     await this.db.execAsync(`
       CREATE INDEX IF NOT EXISTS idx_sales_synced ON sales(synced);
@@ -341,7 +415,12 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
       CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
       CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+      CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);
+      CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+      CREATE INDEX IF NOT EXISTS idx_purchases_purchased_at ON purchases(purchased_at);
       CREATE INDEX IF NOT EXISTS idx_operating_expenses_date ON operating_expenses(expense_date);
+      CREATE INDEX IF NOT EXISTS idx_returns_returned_at ON returns(returned_at);
+      CREATE INDEX IF NOT EXISTS idx_return_items_return_local_id ON return_items(return_local_id);
     `);
   }
 
@@ -456,9 +535,14 @@ class DatabaseService {
             DELETE FROM quotes;
             DELETE FROM products;
             DELETE FROM customers;
+            DELETE FROM suppliers;
+            DELETE FROM categories;
             DELETE FROM payments;
+            DELETE FROM purchases;
             DELETE FROM operating_expenses;
             DELETE FROM accounts_receivable;
+            DELETE FROM returns;
+            DELETE FROM return_items;
           `),
         'clearAllData'
       )

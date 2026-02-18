@@ -4,8 +4,11 @@ import { TextInput, Button, Text } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
+import { useSyncStore } from '../../store/syncStore';
+import { syncService } from '../../services/sync/SyncService';
+import { db } from '../../database/Database';
+import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
 interface AddCategoryScreenProps {
@@ -20,14 +23,16 @@ export function AddCategoryScreen({ navigation, route }: AddCategoryScreenProps)
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingCategory, setLoadingCategory] = useState(false);
+  const [localId, setLocalId] = useState<string>('');
+  const [serverId, setServerId] = useState<string | null>(null);
   const lastFocusLoadKeyRef = useRef<string | null>(null);
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
+  const { isOnline } = useSyncStore();
 
   useFocusEffect(
     useCallback(() => {
       if (!isEditMode) return;
-      const focusLoadKey = `${categoryId || ''}:${accountId || ''}:${subUserToken || ''}`;
+      const focusLoadKey = `${categoryId || ''}`;
 
       let isActive = true;
       const loadCategory = async () => {
@@ -36,29 +41,36 @@ export function AddCategoryScreen({ navigation, route }: AddCategoryScreenProps)
         lastFocusLoadKeyRef.current = focusLoadKey;
         setLoadingCategory(true);
         try {
-          const clerkToken = await getToken();
-          if (!clerkToken || !subUserToken) {
-            Alert.alert('Sesión', 'No hay sesión activa para editar categorías.');
+          const row = await db.queryFirst<any>(
+            'SELECT local_id, server_id, name, description, data FROM categories WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [categoryId, categoryId]
+          );
+          if (!row) {
+            Alert.alert('Error', 'Categoría no encontrada');
             navigation.goBack();
             return;
           }
-          const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-          const headers = {
-            Authorization: `Bearer ${clerkToken}`,
-            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-            'X-SubUser-Token': subUserToken,
-            ...(accountId ? { 'X-Account-Id': accountId } : {}),
-          };
-          const response = await axios.get(`${API_URL}/api/categories/${categoryId}`, { headers });
-          const item = response.data?.data || response.data || {};
+          let parsed: any = null;
+          try {
+            parsed = row?.data ? JSON.parse(row.data) : null;
+          } catch {
+            parsed = null;
+          }
           if (!isActive) return;
-          setName(String(item.name || ''));
-          setDescription(String(item.description || ''));
+          setLocalId(String(row.local_id));
+          setServerId(row.server_id ? String(row.server_id) : null);
+          setName(String(row.name || parsed?.name || ''));
+          setDescription(
+            typeof row.description === 'string'
+              ? row.description
+              : typeof parsed?.description === 'string'
+                ? parsed.description
+                : ''
+          );
         } catch (error: any) {
           if (!isActive) return;
           console.error('Error cargando categoría:', error);
-          const apiError = error?.response?.data?.error;
-          Alert.alert('Error', apiError ? String(apiError) : 'No se pudo cargar la categoría');
+          Alert.alert('Error', 'No se pudo cargar la categoría');
           navigation.goBack();
         } finally {
           if (isActive) setLoadingCategory(false);
@@ -70,7 +82,7 @@ export function AddCategoryScreen({ navigation, route }: AddCategoryScreenProps)
         lastFocusLoadKeyRef.current = null;
         isActive = false;
       };
-    }, [accountId, categoryId, isEditMode, navigation, subUserToken])
+    }, [categoryId, isEditMode, navigation])
   );
 
   const handleSave = async () => {
@@ -81,54 +93,75 @@ export function AddCategoryScreen({ navigation, route }: AddCategoryScreenProps)
 
     setLoading(true);
     try {
-      const clerkToken = await getToken();
-      if (!clerkToken || !subUserToken) {
-        Alert.alert('Sesión', 'No hay sesión activa para crear categorías.');
-        return;
-      }
-
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-      const headers = {
-        Authorization: `Bearer ${clerkToken}`,
-        'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-        'X-SubUser-Token': subUserToken,
-        ...(accountId ? { 'X-Account-Id': accountId } : {}),
-      };
+      const resolvedLocalId = isEditMode ? localId || String(categoryId || '') : generateLocalId();
+      const trimmedName = name.trim();
+      const trimmedDescription = description.trim() || null;
       const payload = {
-        name: name.trim(),
-        description: description.trim() || null,
+        id: serverId || undefined,
+        localId: resolvedLocalId,
+        serverId: serverId || undefined,
+        name: trimmedName,
+        description: trimmedDescription,
+        updatedAt: Date.now(),
       };
 
       if (isEditMode) {
-        await axios.put(`${API_URL}/api/categories/${categoryId}`, payload, { headers });
+        await db.update(
+          'categories',
+          resolvedLocalId,
+          {
+            name: trimmedName,
+            description: trimmedDescription,
+            synced: 0,
+            data: JSON.stringify(payload),
+          },
+          'local_id'
+        );
       } else {
-        const candidatePaths = ['/api/categories', '/api/category'];
-        let saved = false;
-        let lastError: any = null;
-
-        for (const path of candidatePaths) {
-          try {
-            await axios.post(`${API_URL}${path}`, payload, { headers });
-            saved = true;
-            break;
-          } catch (error: any) {
-            lastError = error;
-            if (error?.response?.status !== 404) {
-              throw error;
-            }
-          }
-        }
-
-        if (!saved) {
-          throw lastError || new Error('No se encontró endpoint para crear categorías');
-        }
+        await db.insert('categories', {
+          local_id: resolvedLocalId,
+          name: trimmedName,
+          description: trimmedDescription,
+          synced: 0,
+          data: JSON.stringify(payload),
+        });
       }
 
-      Alert.alert('Éxito', isEditMode ? 'Categoría actualizada correctamente' : 'Categoría creada correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      syncService.setGetTokenFunction(getToken);
+      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+
+      if (isEditMode) {
+        if (serverId) {
+          await db.runAsync(
+            "DELETE FROM sync_queue WHERE entity_type = 'category' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
+            [resolvedLocalId]
+          );
+          await syncService.queueOperation('category', 'update', payload, resolvedLocalId);
+        } else {
+          await db.runAsync(
+            "DELETE FROM sync_queue WHERE entity_type = 'category' AND entity_local_id = ? AND status IN ('pending','error')",
+            [resolvedLocalId]
+          );
+          await syncService.queueOperation('category', 'create', payload, resolvedLocalId);
+        }
+      } else {
+        await syncService.queueOperation('category', 'create', payload, resolvedLocalId);
+      }
+
+      Alert.alert(
+        isOnline ? 'Éxito' : 'Pendiente de sincronización',
+        isOnline
+          ? isEditMode
+            ? 'Categoría actualizada correctamente'
+            : 'Categoría creada correctamente'
+          : isEditMode
+            ? 'Categoría actualizada localmente. Se sincronizará cuando haya internet.'
+            : 'Categoría creada localmente. Se sincronizará cuando haya internet.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
+      );
     } catch (error: any) {
       console.error(isEditMode ? 'Error actualizando categoría:' : 'Error creando categoría:', error);
-      const apiError = error?.response?.data?.error;
-      Alert.alert('Error', apiError ? String(apiError) : isEditMode ? 'No se pudo actualizar la categoría' : 'No se pudo crear la categoría');
+      Alert.alert('Error', isEditMode ? 'No se pudo actualizar la categoría' : 'No se pudo crear la categoría');
     } finally {
       setLoading(false);
     }

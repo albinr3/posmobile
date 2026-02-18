@@ -11,6 +11,9 @@ interface DailyCloseMetrics {
   soldTotal: number;
   soldCash: number;
   soldCredit: number;
+  cashReturnsTotalCents: number;
+  soldCashNetCents: number;
+  soldTotalNetCents: number;
   collectedTotal: number;
   paymentsCount: number;
   salesCount: number;
@@ -44,6 +47,9 @@ export function DailyCloseScreen() {
     soldTotal: 0,
     soldCash: 0,
     soldCredit: 0,
+    cashReturnsTotalCents: 0,
+    soldCashNetCents: 0,
+    soldTotalNetCents: 0,
     collectedTotal: 0,
     paymentsCount: 0,
     salesCount: 0,
@@ -58,9 +64,15 @@ export function DailyCloseScreen() {
 
     setLoading(true);
     try {
-      const [salesRows, paymentRows] = await Promise.all([
+      const [salesRows, paymentRows, returnRows] = await Promise.all([
         db.query<any>('SELECT total_cents, status, data, created_at FROM sales WHERE created_at >= ? AND created_at <= ?', [fromTs, toTs]),
         db.query<any>('SELECT amount_cents, data FROM payments'),
+        db.query<any>(
+          `SELECT total_cents, returned_at, cancelled_at, data
+           FROM returns
+           WHERE returned_at >= ? AND returned_at <= ?`,
+          [fromTs, toTs]
+        ),
       ]);
 
       let soldTotal = 0;
@@ -86,6 +98,27 @@ export function DailyCloseScreen() {
         if (type === 'CREDITO') soldCredit += cents;
         else soldCash += cents;
       }
+
+      let cashReturnsTotalCents = 0;
+      for (const row of returnRows) {
+        let parsed: any = null;
+        try {
+          parsed = row.data ? JSON.parse(row.data) : null;
+        } catch {
+          parsed = null;
+        }
+        if (row.cancelled_at || parsed?.cancelledAt) continue;
+
+        const saleType = String(parsed?.sale?.type || parsed?.type || '').toUpperCase();
+        if (saleType !== 'CONTADO') continue;
+
+        const cents = Number(row.total_cents || parsed?.totalCents || 0);
+        if (!Number.isFinite(cents) || cents <= 0) continue;
+        cashReturnsTotalCents += cents;
+      }
+
+      const soldCashNetCents = soldCash - cashReturnsTotalCents;
+      const soldTotalNetCents = soldTotal - cashReturnsTotalCents;
 
       let collectedTotal = 0;
       let paymentsCount = 0;
@@ -119,6 +152,9 @@ export function DailyCloseScreen() {
         soldTotal,
         soldCash,
         soldCredit,
+        cashReturnsTotalCents,
+        soldCashNetCents,
+        soldTotalNetCents,
         collectedTotal,
         paymentsCount,
         salesCount,
@@ -130,6 +166,9 @@ export function DailyCloseScreen() {
         soldTotal: 0,
         soldCash: 0,
         soldCredit: 0,
+        cashReturnsTotalCents: 0,
+        soldCashNetCents: 0,
+        soldTotalNetCents: 0,
         collectedTotal: 0,
         paymentsCount: 0,
         salesCount: 0,
@@ -199,14 +238,16 @@ export function DailyCloseScreen() {
           <Card style={styles.metricCard}>
             <Card.Content>
               <Text style={styles.metricLabel}>Vendido hoy</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.soldTotal)}</Text>
+              <Text style={styles.metricValue}>{formatCurrency(metrics.soldTotalNetCents)}</Text>
               <Text style={styles.metricHint}>{metrics.salesCount} facturas</Text>
+              <Text style={styles.metricHint}>Bruto: {formatCurrency(metrics.soldTotal)}</Text>
             </Card.Content>
           </Card>
           <Card style={styles.metricCard}>
             <Card.Content>
               <Text style={styles.metricLabel}>Vendido contado</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.soldCash)}</Text>
+              <Text style={styles.metricValue}>{formatCurrency(metrics.soldCashNetCents)}</Text>
+              <Text style={styles.metricHint}>Bruto: {formatCurrency(metrics.soldCash)}</Text>
             </Card.Content>
           </Card>
           <Card style={styles.metricCard}>
@@ -220,6 +261,13 @@ export function DailyCloseScreen() {
               <Text style={styles.metricLabel}>Cobrado (abonos)</Text>
               <Text style={styles.metricValue}>{formatCurrency(metrics.collectedTotal)}</Text>
               <Text style={styles.metricHint}>{metrics.paymentsCount} pagos</Text>
+            </Card.Content>
+          </Card>
+          <Card style={styles.metricCard}>
+            <Card.Content>
+              <Text style={styles.metricLabel}>Devoluciones contado</Text>
+              <Text style={styles.metricDanger}>-{formatCurrency(metrics.cashReturnsTotalCents)}</Text>
+              <Text style={styles.metricHint}>Descontadas por fecha de devolucion</Text>
             </Card.Content>
           </Card>
         </View>
@@ -266,6 +314,7 @@ const styles = StyleSheet.create({
   metricCard: { borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
   metricLabel: { color: ui.colors.textMuted, fontSize: 13 },
   metricValue: { color: ui.colors.text, fontSize: 23, fontWeight: '800', marginTop: 4 },
+  metricDanger: { color: '#B91C1C', fontSize: 23, fontWeight: '800', marginTop: 4 },
   metricHint: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
   detailCard: { marginTop: 10, borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
   detailTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },

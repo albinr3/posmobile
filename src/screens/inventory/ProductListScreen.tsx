@@ -65,7 +65,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
 
     syncService.setGetTokenFunction(getToken);
     syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken);
+    await syncService.fullSync(clerkToken, { ignoreCooldown: true });
     return true;
   };
 

@@ -109,10 +109,10 @@ class SyncService {
     await this.updatePendingCount();
   }
 
-  async fullSync(authToken: string) {
+  async fullSync(authToken: string, options?: { ignoreCooldown?: boolean }) {
     if (this.isSyncing) return;
     const now = Date.now();
-    if (now - this.lastFullSyncAttemptAt < 15_000) {
+    if (!options?.ignoreCooldown && now - this.lastFullSyncAttemptAt < 15_000) {
       if (SYNC_DEBUG) console.log('[SyncService] fullSync() omitido por cooldown');
       return;
     }
@@ -125,11 +125,16 @@ class SyncService {
       // 1. Descargar datos del servidor
       await this.downloadFromServer(authToken);
       
-      // 2. Subir cambios locales pendientes
-      await this.uploadPendingChanges(authToken);
+      const pendingBeforeUpload = await this.getPendingQueueCount();
+      if (pendingBeforeUpload > 0) {
+        // 2. Subir cambios locales pendientes
+        await this.uploadPendingChanges(authToken);
 
-      // 3. Volver a descargar para reflejar en local lo aplicado en servidor
-      await this.downloadFromServer(authToken);
+        // 3. Volver a descargar para reflejar en local lo aplicado en servidor
+        await this.downloadFromServer(authToken);
+      } else if (SYNC_DEBUG) {
+        console.log('[SyncService] fullSync() sin pendientes, se omite segunda descarga');
+      }
       
       // 4. Actualizar timestamp
       useSyncStore.getState().setLastSyncTime(Date.now());
@@ -213,6 +218,13 @@ class SyncService {
     this.isSyncing = true;
 
     try {
+      // Reintentar devoluciones que quedaron en error por mapeo temporal de item ids
+      await db.runAsync(
+        `UPDATE sync_queue
+         SET status = 'pending', retry_count = 0
+         WHERE status = 'error' AND entity_type = 'return' AND action = 'create'`
+      );
+
       const pending = await db.query<any>(
         'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
         ['pending']
@@ -319,7 +331,11 @@ class SyncService {
     }
     
     // Preparar datos según el tipo de entidad
-    const requestData = await this.prepareRequestData(item.entity_type, data, item.action);
+    const requestData = await this.prepareRequestData(item.entity_type, data, item.action, {
+      clerkToken,
+      subUserToken,
+      accountId,
+    });
     
     const paymentCancelRequested =
       item.entity_type === 'payment' &&
@@ -431,7 +447,72 @@ class SyncService {
         ...(item.entity_type === 'product' && Array.isArray(data?.imageUrls)
           ? { data: JSON.stringify({ ...data, imageUrls: data.imageUrls }) }
           : {}),
+        ...(item.entity_type === 'purchase'
+          ? {
+              data: JSON.stringify({
+                ...(data || {}),
+                id: createdId,
+                serverId: createdId,
+              }),
+            }
+          : {}),
+        ...(item.entity_type === 'payment'
+          ? {
+              receipt_code:
+                response.data?.receiptCode ||
+                response.data?.data?.receiptCode ||
+                data?.receiptCode ||
+                null,
+              data: JSON.stringify({
+                ...(data || {}),
+                id: createdId,
+                serverId: createdId,
+                receiptNumber:
+                  response.data?.receiptNumber ||
+                  response.data?.data?.receiptNumber ||
+                  data?.receiptNumber ||
+                  null,
+                receiptCode:
+                  response.data?.receiptCode ||
+                  response.data?.data?.receiptCode ||
+                  data?.receiptCode ||
+                  null,
+                paidAt:
+                  response.data?.paidAt ||
+                  response.data?.data?.paidAt ||
+                  data?.paidAt ||
+                  data?.createdAt ||
+                  null,
+              }),
+            }
+          : {}),
+        ...(item.entity_type === 'return'
+          ? {
+              return_code:
+                response.data?.returnCode ||
+                response.data?.data?.returnCode ||
+                data?.returnCode ||
+                null,
+              data: JSON.stringify({
+                ...(data || {}),
+                id: createdId,
+                serverId: createdId,
+                returnCode:
+                  response.data?.returnCode ||
+                  response.data?.data?.returnCode ||
+                  data?.returnCode ||
+                  null,
+              }),
+            }
+          : {}),
       }, 'local_id');
+
+      if (item.entity_type === 'return') {
+        await db.runAsync(
+          'UPDATE return_items SET synced = 1 WHERE return_local_id = ?',
+          [item.entity_local_id]
+        );
+      }
     } else if (item.action === 'update') {
       const table = this.getTableName(item.entity_type);
       const updatePatch: any = {
@@ -444,6 +525,12 @@ class SyncService {
           status: 'cancelled',
           cancel: true,
           cancelledAt: now,
+        });
+      }
+      if (item.entity_type === 'purchase') {
+        updatePatch.data = JSON.stringify({
+          ...(data || {}),
+          ...(data?.id ? { serverId: data.id } : {}),
         });
       }
       await db.update(table, item.entity_local_id, {
@@ -566,7 +653,12 @@ class SyncService {
     }
   }
 
-  private async prepareRequestData(entityType: string, data: any, action: string): Promise<any> {
+  private async prepareRequestData(
+    entityType: string,
+    data: any,
+    action: string,
+    authContext?: { clerkToken: string; subUserToken: string; accountId: string | null }
+  ): Promise<any> {
     switch (entityType) {
       case 'product':
         return {
@@ -664,12 +756,26 @@ class SyncService {
           })
         );
 
+        const saleTimestampRaw = data?.soldAt ?? data?.createdAt ?? null;
+        let soldAtIso: string | null = null;
+        if (typeof saleTimestampRaw === 'number' && Number.isFinite(saleTimestampRaw)) {
+          soldAtIso = new Date(saleTimestampRaw).toISOString();
+        } else if (typeof saleTimestampRaw === 'string' && saleTimestampRaw.trim()) {
+          const parsed = new Date(saleTimestampRaw);
+          if (!Number.isNaN(parsed.getTime())) {
+            soldAtIso = parsed.toISOString();
+          }
+        } else if (saleTimestampRaw instanceof Date && !Number.isNaN(saleTimestampRaw.getTime())) {
+          soldAtIso = saleTimestampRaw.toISOString();
+        }
+
         return {
           customerId: resolvedCustomerId,
           type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
           paymentMethod: data.paymentMethod || null,
           items: saleItems,
           shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
+          ...(soldAtIso ? { soldAt: soldAtIso } : {}),
         };
         }
       case 'payment':
@@ -699,6 +805,67 @@ class SyncService {
           amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
           method: data.method || data.paymentMethod,
           note: data.note || null,
+        };
+        }
+      case 'purchase':
+        {
+        const supplierRawId = data?.supplierServerId || data?.supplierId || null;
+        let resolvedSupplierId: string | null = null;
+        if (supplierRawId) {
+          const supplier = await db.queryFirst<{ server_id?: string }>(
+            'SELECT server_id FROM suppliers WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [supplierRawId, supplierRawId]
+          );
+          resolvedSupplierId = supplier?.server_id || String(supplierRawId);
+        }
+
+        const purchaseItems = await Promise.all(
+          (data?.items || []).map(async (item: any) => {
+            const rawProductId = String(item?.productServerId || item?.productId || '');
+            if (!rawProductId) {
+              throw new Error('Producto sin server_id: (vacío)');
+            }
+
+            const product = await db.queryFirst<{ server_id?: string }>(
+              'SELECT server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+              [rawProductId, rawProductId]
+            );
+            if (!product?.server_id) {
+              throw new Error(`Producto sin server_id: ${rawProductId}`);
+            }
+
+            const qty = Number(item?.qty || 0);
+            const unitCostCents = Number(item?.unitCostCents || 0);
+            const payloadItem: any = {
+              productId: product.server_id,
+              qty,
+              unitCostCents,
+            };
+
+            if (Number.isFinite(Number(item?.discountPercentBp))) {
+              payloadItem.discountPercentBp = Number(item.discountPercentBp);
+            }
+            if (Number.isFinite(Number(item?.salePriceCents))) {
+              payloadItem.salePriceCents = Number(item.salePriceCents);
+            }
+            if (Number.isFinite(Number(item?.saleMarginBp))) {
+              payloadItem.saleMarginBp = Number(item.saleMarginBp);
+            }
+            if (typeof item?.purchaseIncludesItbis === 'boolean') {
+              payloadItem.purchaseIncludesItbis = item.purchaseIncludesItbis;
+            }
+
+            return payloadItem;
+          })
+        );
+
+        return {
+          supplierId: resolvedSupplierId,
+          supplierName: data?.supplierName ? String(data.supplierName).trim() : null,
+          notes: data?.notes ? String(data.notes).trim() : null,
+          updateProductCost: data?.updateProductCost !== false,
+          updateProductPrice: data?.updateProductPrice !== false,
+          items: purchaseItems,
         };
         }
       case 'quote':
@@ -774,6 +941,211 @@ class SyncService {
             notes: data?.notes ? String(data.notes).trim() : null,
           };
         }
+      case 'supplier':
+        {
+          if (action === 'delete') return {};
+          return {
+            name: String(data?.name || '').trim(),
+            contactName: data?.contactName ? String(data.contactName).trim() : null,
+            phone: data?.phone ? String(data.phone).trim() : null,
+            email: data?.email ? String(data.email).trim() : null,
+            address: data?.address ? String(data.address).trim() : null,
+            notes: data?.notes ? String(data.notes).trim() : null,
+            discountPercentBp: Number.isFinite(Number(data?.discountPercentBp))
+              ? Number(data.discountPercentBp)
+              : 0,
+            chargesItbis: Boolean(data?.chargesItbis),
+            itbisRateBp:
+              data?.chargesItbis
+                ? Math.min(10000, Math.max(0, Math.round(Number(data?.itbisRateBp ?? 1800))))
+                : null,
+          };
+        }
+      case 'category':
+        {
+          if (action === 'delete') return {};
+          return {
+            name: String(data?.name || '').trim(),
+            description: data?.description ? String(data.description).trim() : null,
+          };
+        }
+      case 'return':
+        {
+          if (action === 'delete') return {};
+
+          const saleRef = String(data?.saleServerId || data?.saleId || data?.saleLocalId || '').trim();
+          let saleLocalId: string | null = null;
+          let resolvedSaleId: string | null = null;
+          let saleItemsFromLocal: any[] = [];
+
+          if (saleRef) {
+            const sale = await db.queryFirst<{ local_id?: string; server_id?: string; data?: string }>(
+              'SELECT local_id, server_id, data FROM sales WHERE local_id = ? OR server_id = ? LIMIT 1',
+              [saleRef, saleRef]
+            );
+            saleLocalId = sale?.local_id ? String(sale.local_id) : null;
+            resolvedSaleId = sale?.server_id ? String(sale.server_id) : null;
+            try {
+              const parsed = sale?.data ? JSON.parse(sale.data) : null;
+              saleItemsFromLocal = Array.isArray(parsed?.items) ? parsed.items : [];
+            } catch {
+              saleItemsFromLocal = [];
+            }
+          }
+          if (!resolvedSaleId) {
+            resolvedSaleId = String(data?.saleServerId || data?.saleId || '').trim() || null;
+          }
+          if (!resolvedSaleId) {
+            throw new Error('Venta sin server_id para devolución');
+          }
+
+          const usedLocalSaleItems = new Set<string>();
+          const localSaleCatalog = await Promise.all(
+            saleItemsFromLocal.map(async (item: any) => {
+              const rawProductId = String(item?.productId || '').trim();
+              let productServerId = rawProductId;
+              if (rawProductId) {
+                const product = await db.queryFirst<{ server_id?: string }>(
+                  'SELECT server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+                  [rawProductId, rawProductId]
+                );
+                if (product?.server_id) productServerId = String(product.server_id);
+              }
+              return {
+                saleItemId: String(item?.saleItemId || item?.id || '').trim(),
+                productId: productServerId,
+                qty: Number(item?.qty || item?.quantity || 0),
+                unitPriceCents: Number(item?.unitPriceCents || item?.priceCents || 0),
+              };
+            })
+          );
+
+          let remoteSaleCatalog: Array<{
+            saleItemId: string;
+            productId: string;
+            availableQty: number;
+            unitPriceCents: number;
+          }> = [];
+
+          const resolveFromCatalog = (
+            item: any,
+            resolvedProductId: string,
+            preferRemote: boolean
+          ): string | null => {
+            const rawSaleItemId = String(item?.saleItemId || '').trim();
+            const qty = Number(item?.qty || 0);
+            const unitPriceCents = Number(item?.unitPriceCents || 0);
+
+            const selectCandidate = (catalog: any[], used: Set<string>) => {
+              if (!Array.isArray(catalog) || !catalog.length) return null;
+              const byId = rawSaleItemId
+                ? catalog.find((entry) => entry.saleItemId === rawSaleItemId)
+                : null;
+              if (byId && !used.has(byId.saleItemId)) {
+                return byId;
+              }
+
+              const candidates = catalog.filter((entry) => {
+                if (!entry?.saleItemId || used.has(entry.saleItemId)) return false;
+                const sameProduct = !resolvedProductId || entry.productId === resolvedProductId;
+                if (!sameProduct) return false;
+                const hasQty = Number(entry.availableQty ?? entry.qty ?? 0) >= qty;
+                if (!hasQty) return false;
+                if (unitPriceCents > 0 && Number(entry.unitPriceCents || 0) > 0) {
+                  return Number(entry.unitPriceCents) === unitPriceCents;
+                }
+                return true;
+              });
+              return candidates[0] || null;
+            };
+
+            if (preferRemote) {
+              const fromRemote = selectCandidate(remoteSaleCatalog, usedLocalSaleItems);
+              if (fromRemote) return fromRemote.saleItemId;
+              const fromLocal = selectCandidate(localSaleCatalog, usedLocalSaleItems);
+              if (fromLocal) return fromLocal.saleItemId;
+              return null;
+            }
+
+            const fromLocal = selectCandidate(localSaleCatalog, usedLocalSaleItems);
+            if (fromLocal) return fromLocal.saleItemId;
+            const fromRemote = selectCandidate(remoteSaleCatalog, usedLocalSaleItems);
+            if (fromRemote) return fromRemote.saleItemId;
+            return null;
+          };
+
+          const returnItems: Array<{
+            saleItemId: string;
+            productId: string;
+            qty: number;
+            unitPriceCents: number;
+          }> = [];
+
+          for (const item of data?.items || []) {
+            const rawProductId = String(item?.productId || '').trim();
+            let resolvedProductId = rawProductId || null;
+            if (resolvedProductId) {
+              const product = await db.queryFirst<{ server_id?: string }>(
+                'SELECT server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+                [resolvedProductId, resolvedProductId]
+              );
+              resolvedProductId = product?.server_id ? String(product.server_id) : resolvedProductId;
+            }
+
+            let resolvedSaleItemId = resolveFromCatalog(item, String(resolvedProductId || ''), false);
+            if (!resolvedSaleItemId && authContext && resolvedSaleId) {
+              try {
+                if (!remoteSaleCatalog.length) {
+                  const detailResponse = await axios.get(`${API_URL}/api/returns/sales/${resolvedSaleId}`, {
+                    timeout: 20000,
+                    headers: {
+                      Authorization: `Bearer ${authContext.clerkToken}`,
+                      'X-Clerk-Authorization': `Bearer ${authContext.clerkToken}`,
+                      'X-SubUser-Token': authContext.subUserToken,
+                      ...(authContext.accountId ? { 'X-Account-Id': authContext.accountId } : {}),
+                    },
+                  });
+                  const remoteItems = Array.isArray(detailResponse.data?.items) ? detailResponse.data.items : [];
+                  remoteSaleCatalog = remoteItems.map((entry: any) => ({
+                    saleItemId: String(entry?.saleItemId || entry?.id || '').trim(),
+                    productId: String(entry?.productId || '').trim(),
+                    availableQty: Number(entry?.availableQty ?? entry?.qty ?? 0),
+                    unitPriceCents: Number(entry?.unitPriceCents || 0),
+                  }));
+                }
+                resolvedSaleItemId = resolveFromCatalog(item, String(resolvedProductId || ''), true);
+              } catch (remoteSaleError) {
+                if (SYNC_DEBUG) {
+                  console.warn('[SyncService] No se pudo consultar detalle remoto de venta para return', {
+                    saleId: resolvedSaleId,
+                    error: summarizeError(remoteSaleError),
+                  });
+                }
+              }
+            }
+
+            if (!resolvedSaleItemId) {
+              throw new Error(`Item de venta sin server_id para producto ${rawProductId || '(vacio)'}`);
+            }
+            if (!resolvedProductId) {
+              throw new Error(`Producto sin server_id: ${rawProductId || '(vacio)'}`);
+            }
+
+            usedLocalSaleItems.add(resolvedSaleItemId);
+            returnItems.push({
+              saleItemId: resolvedSaleItemId,
+              productId: String(resolvedProductId),
+              qty: Number(item?.qty || 0),
+              unitPriceCents: Number(item?.unitPriceCents || 0),
+            });
+          }
+
+          return {
+            saleId: resolvedSaleId,
+            items: returnItems,
+            notes: data?.notes ? String(data.notes).trim() : null,
+          };
+        }
       default:
         return data;
     }
@@ -788,7 +1160,13 @@ class SyncService {
         summary: summarizeError(error),
       });
     }
-    const dependencyError = typeof error?.message === 'string' && error.message.includes('Producto sin server_id');
+    const dependencyError =
+      (typeof error?.message === 'string' &&
+        (error.message.includes('Producto sin server_id') ||
+          error.message.includes('Item de venta sin server_id') ||
+          error.message.includes('Venta sin server_id para devolución'))) ||
+      (axios.isAxiosError(error) &&
+        String(error.response?.data?.error || '').includes('Item de venta no encontrado'));
     if (dependencyError) {
       console.warn(`Sync pendiente por dependencia (${item.entity_type} #${item.id}): ${error.message}`);
       return false;
@@ -811,6 +1189,9 @@ class SyncService {
     const backendErrorMessage = axios.isAxiosError(error)
       ? String(error.response?.data?.error || error.response?.data?.message || '').toLowerCase()
       : '';
+    const backendErrorRaw = axios.isAxiosError(error)
+      ? String(error.response?.data?.error || error.response?.data?.message || error.message || '')
+      : String(error?.message || '');
     const backendStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
     const backendAuthError =
       axios.isAxiosError(error) &&
@@ -877,6 +1258,22 @@ class SyncService {
       });
     }
 
+    const isReturnCreate = item?.entity_type === 'return' && item?.action === 'create';
+    const returnBusinessRejected =
+      isReturnCreate &&
+      (
+        backendErrorMessage.includes('no permite devoluciones') ||
+        backendErrorMessage.includes('pagada totalmente') ||
+        backendErrorMessage.includes('balance pendiente') ||
+        backendErrorMessage.includes('cuenta por cobrar') ||
+        backendErrorMessage.includes('factura a credito') ||
+        backendErrorMessage.includes('factura a crédito')
+      );
+    if (returnBusinessRejected) {
+      await this.rejectReturnLocally(item, backendErrorRaw || 'Devolucion rechazada por backend');
+      return false;
+    }
+
     const backendBusinessError =
       axios.isAxiosError(error) &&
       typeof error.response?.data?.error === 'string' &&
@@ -926,6 +1323,115 @@ class SyncService {
       action: item.action,
     });
     return false;
+  }
+
+  private async rejectReturnLocally(item: any, rejectReason: string): Promise<void> {
+    const now = Date.now();
+    const returnLocalId = String(item?.entity_local_id || '').trim();
+
+    if (!returnLocalId) {
+      await db.update(
+        'sync_queue',
+        item.id,
+        { status: 'synced', synced_at: now, retry_count: item.retry_count + 1 },
+        'id'
+      );
+      return;
+    }
+
+    const queueData = (() => {
+      try {
+        return item?.data ? JSON.parse(item.data) : {};
+      } catch {
+        return {};
+      }
+    })();
+
+    const returnRow = await db.queryFirst<any>(
+      'SELECT local_id, total_cents, notes, data FROM returns WHERE local_id = ? LIMIT 1',
+      [returnLocalId]
+    );
+
+    if (returnRow) {
+      let parsedReturn: any = null;
+      try {
+        parsedReturn = returnRow.data ? JSON.parse(returnRow.data) : null;
+      } catch {
+        parsedReturn = null;
+      }
+
+      const existingNotes = String(returnRow.notes || parsedReturn?.notes || '').trim();
+      const rejectionTag = '[ANULADA POR RECHAZO API]';
+      const composedNote = existingNotes
+        ? `${existingNotes}\n${rejectionTag} ${rejectReason}`
+        : `${rejectionTag} ${rejectReason}`;
+
+      await db.update('returns', returnLocalId, {
+        cancelled_at: now,
+        notes: composedNote,
+        synced: 1,
+        data: JSON.stringify({
+          ...(parsedReturn || {}),
+          notes: composedNote,
+          cancelledAt: now,
+          syncRejected: true,
+          syncRejectedAt: now,
+          syncRejectedReason: rejectReason,
+        }),
+      });
+
+      await db.runAsync(
+        'UPDATE return_items SET synced = 1 WHERE return_local_id = ?',
+        [returnLocalId]
+      );
+
+      const arLocalId = String(queueData?.arLocalId || parsedReturn?.arLocalId || '').trim();
+      if (arLocalId) {
+        const arRow = await db.queryFirst<any>(
+          'SELECT total_cents, balance_cents, paid_cents, status, data FROM accounts_receivable WHERE local_id = ? LIMIT 1',
+          [arLocalId]
+        );
+
+        if (arRow) {
+          let parsedAr: any = null;
+          try {
+            parsedAr = arRow.data ? JSON.parse(arRow.data) : null;
+          } catch {
+            parsedAr = null;
+          }
+
+          const totalCents = Number(arRow.total_cents || parsedAr?.totalCents || 0);
+          const currentBalanceCents = Number(arRow.balance_cents || parsedAr?.balanceCents || 0);
+          const returnTotalCents = Number(returnRow.total_cents || parsedReturn?.totalCents || 0);
+          const nextBalanceCents = Math.min(totalCents, Math.max(0, currentBalanceCents + returnTotalCents));
+          const nextPaidCents = Math.max(0, totalCents - nextBalanceCents);
+          const nextStatus = nextBalanceCents <= 0 ? 'PAGADO' : nextBalanceCents === totalCents ? 'PENDIENTE' : 'PARCIAL';
+
+          await db.update('accounts_receivable', arLocalId, {
+            balance_cents: nextBalanceCents,
+            paid_cents: nextPaidCents,
+            status: nextStatus,
+            synced: 1,
+            data: JSON.stringify({
+              ...(parsedAr || {}),
+              balanceCents: nextBalanceCents,
+              paidCents: nextPaidCents,
+              status: nextStatus,
+            }),
+          });
+        }
+      }
+    }
+
+    await db.update(
+      'sync_queue',
+      item.id,
+      { status: 'synced', synced_at: now, retry_count: item.retry_count + 1 },
+      'id'
+    );
+    console.warn(
+      `Devolucion ${returnLocalId} anulada localmente por rechazo de backend: ${rejectReason}`
+    );
   }
 
   private logAuthWait(message: string) {
@@ -1108,6 +1614,97 @@ class SyncService {
         }
       }
 
+      // Descargar proveedores
+      const suppliersResponse = await axios.get(`${API_URL}/api/suppliers`, {
+        headers,
+      });
+      const suppliers = suppliersResponse.data?.data || suppliersResponse.data || [];
+      for (const supplier of suppliers) {
+        const supplierId = String(supplier?.id || '');
+        if (!supplierId) continue;
+
+        const supplierData = {
+          id: supplierId,
+          serverId: supplierId,
+          name: String(supplier?.name || ''),
+          contactName: supplier?.contactName ? String(supplier.contactName) : null,
+          phone: supplier?.phone ? String(supplier.phone) : null,
+          email: supplier?.email ? String(supplier.email) : null,
+          address: supplier?.address ? String(supplier.address) : null,
+          notes: supplier?.notes ? String(supplier.notes) : null,
+          discountPercentBp: Number(supplier?.discountPercentBp || 0),
+          chargesItbis: Boolean(supplier?.chargesItbis),
+          itbisRateBp:
+            supplier?.itbisRateBp === null || supplier?.itbisRateBp === undefined
+              ? null
+              : Number(supplier.itbisRateBp || 0),
+        };
+
+        const supplierRow = {
+          name: supplierData.name,
+          discount_percent_bp: supplierData.discountPercentBp,
+          charges_itbis: supplierData.chargesItbis ? 1 : 0,
+          itbis_rate_bp: supplierData.itbisRateBp,
+          synced: 1,
+          data: JSON.stringify(supplierData),
+        };
+
+        const exists = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM suppliers WHERE server_id = ?',
+          [supplierId]
+        );
+        if (exists?.local_id) {
+          await db.update('suppliers', supplierId, supplierRow, 'server_id');
+        } else {
+          await db.insert('suppliers', {
+            local_id: `server_supplier_${supplierId}`,
+            server_id: supplierId,
+            ...supplierRow,
+          });
+        }
+      }
+
+      // Descargar categorias
+      const categoriesResponse = await axios.get(`${API_URL}/api/categories`, {
+        headers,
+      });
+      const categories = categoriesResponse.data?.data || categoriesResponse.data || [];
+      for (const category of categories) {
+        const categoryServerId = String(category?.id || '');
+        if (!categoryServerId) continue;
+
+        const categoryData = {
+          id: categoryServerId,
+          serverId: categoryServerId,
+          internalId: category?.internalId ? String(category.internalId) : null,
+          name: String(category?.name || ''),
+          description: category?.description ? String(category.description) : null,
+          createdAt: category?.createdAt || null,
+          updatedAt: category?.updatedAt || null,
+        };
+
+        const categoryRow = {
+          name: categoryData.name,
+          description: categoryData.description,
+          synced: 1,
+          data: JSON.stringify(categoryData),
+        };
+
+        const exists = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM categories WHERE server_id = ?',
+          [categoryServerId]
+        );
+        if (exists?.local_id) {
+          await db.update('categories', categoryServerId, categoryRow, 'server_id');
+        } else {
+          await db.insert('categories', {
+            local_id: `server_category_${categoryServerId}`,
+            server_id: categoryServerId,
+            ...categoryRow,
+          });
+        }
+      }
+
       // Descargar ventas/facturas
       const salesResponse = await axios.get(`${API_URL}/api/sales`, {
         headers,
@@ -1150,6 +1747,7 @@ class SyncService {
 
         const items = Array.isArray(saleDetail?.items)
           ? saleDetail.items.map((item: any) => ({
+              saleItemId: String(item?.id || item?.saleItemId || ''),
               productId: String(item?.productId || ''),
               productName: String(item?.productName || 'Producto'),
               quantity: Number(item?.qty || 0),
@@ -1161,6 +1759,7 @@ class SyncService {
         const saleData = {
           id: saleId,
           invoiceCode: String(saleDetail?.invoiceCode || sale?.invoiceCode || '-'),
+          soldAt: createdAt,
           customerId,
           customerName,
           paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || 'EFECTIVO'),
@@ -1193,6 +1792,116 @@ class SyncService {
             local_id: `server_sale_${saleId}`,
             server_id: saleId,
             ...saleRow,
+          });
+        }
+      }
+
+      // Descargar devoluciones
+      const returnsResponse = await axios.get(`${API_URL}/api/returns`, {
+        headers,
+      });
+      const returnsRows = returnsResponse.data?.data || returnsResponse.data || [];
+      for (const ret of returnsRows) {
+        const returnServerId = String(ret?.id || '');
+        if (!returnServerId) continue;
+
+        const saleServerId = ret?.saleId ? String(ret.saleId) : null;
+        let saleLocalId: string | null = null;
+        if (saleServerId) {
+          const localSale = await db.queryFirst<{ local_id?: string }>(
+            'SELECT local_id FROM sales WHERE server_id = ? LIMIT 1',
+            [saleServerId]
+          );
+          saleLocalId = localSale?.local_id ? String(localSale.local_id) : null;
+        }
+
+        const returnedAtMs =
+          ret?.returnedAt && !Number.isNaN(new Date(ret.returnedAt).getTime())
+            ? new Date(ret.returnedAt).getTime()
+            : Date.now();
+        const cancelledAtMs =
+          ret?.cancelledAt && !Number.isNaN(new Date(ret.cancelledAt).getTime())
+            ? new Date(ret.cancelledAt).getTime()
+            : null;
+
+        const returnData = {
+          id: returnServerId,
+          serverId: returnServerId,
+          returnCode: String(ret?.returnCode || ''),
+          saleId: saleServerId,
+          saleLocalId,
+          totalCents: Number(ret?.totalCents || 0),
+          notes: ret?.notes ? String(ret.notes) : null,
+          returnedAt: returnedAtMs,
+          cancelledAt: cancelledAtMs,
+          sale: ret?.sale || null,
+          items: Array.isArray(ret?.items) ? ret.items : [],
+        };
+
+        const returnRow = {
+          return_code: returnData.returnCode || null,
+          sale_local_id: saleLocalId,
+          sale_server_id: saleServerId,
+          total_cents: returnData.totalCents,
+          notes: returnData.notes,
+          returned_at: returnedAtMs,
+          cancelled_at: cancelledAtMs,
+          synced: 1,
+          data: JSON.stringify(returnData),
+        };
+
+        const exists = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM returns WHERE server_id = ? LIMIT 1',
+          [returnServerId]
+        );
+
+        const returnLocalId = exists?.local_id
+          ? String(exists.local_id)
+          : `server_return_${returnServerId}`;
+
+        if (exists?.local_id) {
+          await db.update('returns', returnServerId, returnRow, 'server_id');
+        } else {
+          await db.insert('returns', {
+            local_id: returnLocalId,
+            server_id: returnServerId,
+            ...returnRow,
+          });
+        }
+
+        await db.runAsync('DELETE FROM return_items WHERE return_local_id = ?', [returnLocalId]);
+
+        for (const item of returnData.items) {
+          const returnItemServerId = item?.id ? String(item.id) : null;
+          const productServerId = item?.productId ? String(item.productId) : null;
+          let productLocalId: string | null = null;
+          if (productServerId) {
+            const localProduct = await db.queryFirst<{ local_id?: string }>(
+              'SELECT local_id FROM products WHERE server_id = ? LIMIT 1',
+              [productServerId]
+            );
+            productLocalId = localProduct?.local_id ? String(localProduct.local_id) : null;
+          }
+
+          const qty = Number(item?.qty || 0);
+          const unitPriceCents = Number(item?.unitPriceCents || 0);
+          const lineTotalCents = Number(item?.lineTotalCents || Math.round(qty * unitPriceCents));
+
+          await db.insert('return_items', {
+            local_id:
+              returnItemServerId
+                ? `server_return_item_${returnItemServerId}`
+                : `server_return_item_${returnLocalId}_${String(item?.saleItemId || '')}_${String(item?.productId || '')}`,
+            return_local_id: returnLocalId,
+            sale_item_id: String(item?.saleItemId || ''),
+            product_local_id: productLocalId,
+            product_server_id: productServerId,
+            product_name: item?.product?.name ? String(item.product.name) : 'Producto',
+            qty,
+            unit_price_cents: unitPriceCents,
+            line_total_cents: lineTotalCents,
+            synced: 1,
+            data: JSON.stringify(item),
           });
         }
       }
@@ -1280,18 +1989,127 @@ class SyncService {
         }
       }
 
-      // Descargar cuentas por cobrar
-      const arResponse = await axios.get(`${API_URL}/api/accounts-receivable`, {
-        headers,
-      });
-      if (SYNC_DEBUG) {
-        console.log('[SyncService] downloadFromServer() AR status', {
-          status: arResponse.status,
-          count: (arResponse.data?.data || arResponse.data || []).length,
-        });
+      // Descargar compras
+      const purchaseProductRows = await db.query<{ local_id: string; server_id?: string }>(
+        'SELECT local_id, server_id FROM products WHERE server_id IS NOT NULL'
+      );
+      const localProductByServerId = new Map<string, string>();
+      for (const row of purchaseProductRows) {
+        if (row.server_id) {
+          localProductByServerId.set(String(row.server_id), String(row.local_id));
+        }
       }
 
-      const arItems = arResponse.data?.data || arResponse.data || [];
+      const purchasesResponse = await axios.get(`${API_URL}/api/purchases`, {
+        headers,
+      });
+      const purchases = purchasesResponse.data?.data || purchasesResponse.data || [];
+
+      for (const purchase of purchases) {
+        const purchaseId = String(purchase?.id || '');
+        if (!purchaseId) continue;
+
+        const purchasedAtMs =
+          purchase?.purchasedAt && !Number.isNaN(new Date(purchase.purchasedAt).getTime())
+            ? new Date(purchase.purchasedAt).getTime()
+            : Date.now();
+        const cancelledAtMs =
+          purchase?.cancelledAt && !Number.isNaN(new Date(purchase.cancelledAt).getTime())
+            ? new Date(purchase.cancelledAt).getTime()
+            : null;
+
+        const normalizedItems = (Array.isArray(purchase?.items) ? purchase.items : []).map((item: any) => {
+          const productServerId = String(item?.productId || '');
+          const productLocalId = localProductByServerId.get(productServerId) || productServerId;
+          return {
+            id: item?.id ? String(item.id) : null,
+            productId: productLocalId,
+            productServerId,
+            productName: item?.productName ? String(item.productName) : '',
+            qty: Number(item?.qty || 0),
+            unitCostCents: Number(item?.unitCostCents || 0),
+            discountPercentBp: Number.isFinite(Number(item?.discountPercentBp))
+              ? Number(item.discountPercentBp)
+              : undefined,
+            netCostCents: Number(item?.netCostCents || 0),
+            salePriceCents: Number(item?.salePriceCents || 0),
+            saleMarginBp: Number.isFinite(Number(item?.saleMarginBp)) ? Number(item.saleMarginBp) : undefined,
+            purchaseIncludesItbis:
+              typeof item?.purchaseIncludesItbis === 'boolean' ? item.purchaseIncludesItbis : undefined,
+            appliedItbisRateBp:
+              Number.isFinite(Number(item?.appliedItbisRateBp)) ? Number(item.appliedItbisRateBp) : undefined,
+            lineTotalCents: Number(item?.lineTotalCents || 0),
+          };
+        });
+
+        const purchaseData = {
+          id: purchaseId,
+          serverId: purchaseId,
+          supplierName: purchase?.supplierName ? String(purchase.supplierName) : '',
+          notes: purchase?.notes ? String(purchase.notes) : null,
+          totalCents: Number(purchase?.totalCents || 0),
+          purchasedAt: purchasedAtMs,
+          cancelledAt: cancelledAtMs,
+          itemsCount: Number(purchase?.itemsCount || normalizedItems.length),
+          items: normalizedItems,
+          updateProductCost: true,
+          updateProductPrice: true,
+        };
+
+        const purchaseRow = {
+          supplier_name: purchaseData.supplierName || null,
+          total_cents: purchaseData.totalCents,
+          purchased_at: purchasedAtMs,
+          cancelled_at: cancelledAtMs,
+          synced: 1,
+          data: JSON.stringify(purchaseData),
+        };
+
+        const exists = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM purchases WHERE server_id = ?',
+          [purchaseId]
+        );
+        if (exists?.local_id) {
+          await db.update('purchases', purchaseId, purchaseRow, 'server_id');
+        } else {
+          await db.insert('purchases', {
+            local_id: `server_purchase_${purchaseId}`,
+            server_id: purchaseId,
+            ...purchaseRow,
+          });
+        }
+      }
+
+      // Descargar cuentas por cobrar (paginado para evitar truncar por take default del backend)
+      const arItems: any[] = [];
+      const arTake = 200;
+      let arSkip = 0;
+      while (true) {
+        const arResponse = await axios.get(`${API_URL}/api/accounts-receivable`, {
+          headers,
+          params: { skip: arSkip, take: arTake },
+        });
+        const batch = arResponse.data?.data || arResponse.data || [];
+        if (SYNC_DEBUG) {
+          console.log('[SyncService] downloadFromServer() AR page status', {
+            status: arResponse.status,
+            skip: arSkip,
+            take: arTake,
+            count: batch.length,
+          });
+        }
+        arItems.push(...batch);
+        if (!Array.isArray(batch) || batch.length < arTake) {
+          break;
+        }
+        arSkip += arTake;
+      }
+
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() AR total', {
+          count: arItems.length,
+        });
+      }
       const serverOpenArIds = new Set<string>();
 
       for (const ar of arItems) {
@@ -1523,12 +2341,17 @@ class SyncService {
     await this.processQueue();
   }
 
-  private async updatePendingCount() {
+  private async getPendingQueueCount(): Promise<number> {
     const result = await db.queryFirst<any>(
       'SELECT COUNT(*) as count FROM sync_queue WHERE status = ?',
       ['pending']
     );
-    useSyncStore.getState().setPendingCount(result?.count || 0);
+    return Number(result?.count || 0);
+  }
+
+  private async updatePendingCount() {
+    const count = await this.getPendingQueueCount();
+    useSyncStore.getState().setPendingCount(count);
   }
 
   private getEndpoint(entityType: string, action: string): string {
@@ -1537,7 +2360,11 @@ class SyncService {
       'quote': 'quotes',
       'product': 'products',
       'customer': 'customers',
+      'category': 'categories',
+      'supplier': 'suppliers',
+      'return': 'returns',
       'payment': 'payments',
+      'purchase': 'purchases',
       'operating_expense': 'operating-expenses',
     };
     return endpoints[entityType] || entityType;
@@ -1549,7 +2376,11 @@ class SyncService {
       'quote': 'quotes',
       'product': 'products',
       'customer': 'customers',
+      'category': 'categories',
+      'supplier': 'suppliers',
+      'return': 'returns',
       'payment': 'payments',
+      'purchase': 'purchases',
       'operating_expense': 'operating_expenses',
     };
     return tables[entityType] || entityType;

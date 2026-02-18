@@ -1,12 +1,14 @@
 import React, { useCallback, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Searchbar, Text, Avatar } from 'react-native-paper';
+import { Searchbar, Text, Avatar, Chip } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
+import { useSyncStore } from '../../store/syncStore';
+import { syncService } from '../../services/sync/SyncService';
+import { db } from '../../database/Database';
 import { ui } from '../../theme/ui';
 
 interface SupplierListScreenProps {
@@ -14,10 +16,12 @@ interface SupplierListScreenProps {
 }
 
 interface SupplierItem {
-  id: string;
+  localId: string;
+  serverId: string | null;
   name: string;
   contactName?: string | null;
   phone?: string | null;
+  synced: boolean;
 }
 
 export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
@@ -26,41 +30,67 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
+  const { isOnline } = useSyncStore();
+
+  const mapSupplierRows = useCallback((rows: any[]): SupplierItem[] => {
+    return rows.map((row) => {
+      let parsed: any = null;
+      try {
+        parsed = row?.data ? JSON.parse(row.data) : null;
+      } catch {
+        parsed = null;
+      }
+      return {
+        localId: String(row.local_id),
+        serverId: row.server_id ? String(row.server_id) : null,
+        name: String(row.name || parsed?.name || ''),
+        contactName:
+          typeof parsed?.contactName === 'string' && parsed.contactName.trim()
+            ? parsed.contactName
+            : null,
+        phone:
+          typeof parsed?.phone === 'string' && parsed.phone.trim()
+            ? parsed.phone
+            : null,
+        synced: row.synced === 1,
+      };
+    });
+  }, []);
+
+  const loadSuppliersFromDb = useCallback(async () => {
+    const rows = await db.query<any>(
+      'SELECT local_id, server_id, name, synced, data FROM suppliers ORDER BY name ASC'
+    );
+    setSuppliers(mapSupplierRows(rows));
+  }, [mapSupplierRows]);
 
   const loadSuppliers = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const clerkToken = await getToken();
-      if (!clerkToken || !subUserToken) {
-        setSuppliers([]);
-        return;
-      }
-
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-      const headers = {
-        Authorization: `Bearer ${clerkToken}`,
-        'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-        'X-SubUser-Token': subUserToken,
-        ...(accountId ? { 'X-Account-Id': accountId } : {}),
-      };
-
-      const response = await axios.get(`${API_URL}/api/suppliers`, { headers });
-      const rows = (response.data?.data || []).map((item: any) => ({
-        id: String(item.id),
-        name: String(item.name || ''),
-        contactName: item.contactName ? String(item.contactName) : null,
-        phone: item.phone ? String(item.phone) : null,
-      }));
-      setSuppliers(rows);
+      await loadSuppliersFromDb();
     } catch (error) {
       console.error('Error cargando proveedores:', error);
       setSuppliers([]);
     } finally {
       setLoading(false);
+    }
+
+    try {
+      if (!isOnline) return;
+      const clerkToken = await getToken();
+      const subUserToken = useAuthStore.getState().subUserToken;
+      if (!clerkToken || !subUserToken) return;
+
+      syncService.setGetTokenFunction(() => getToken());
+      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+      await loadSuppliersFromDb();
+    } catch (error) {
+      console.error('Error sincronizando proveedores:', error);
+    } finally {
       setRefreshing(false);
     }
-  }, [accountId, getToken, subUserToken]);
+  }, [getToken, isOnline, loadSuppliersFromDb]);
 
   useFocusEffect(
     useCallback(() => {
@@ -81,13 +111,19 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
   );
 
   const renderSupplier = ({ item }: { item: SupplierItem }) => (
-    <TouchableOpacity style={styles.supplierCard} onPress={() => navigation.navigate('AddSupplier', { supplierId: item.id })}>
+    <TouchableOpacity style={styles.supplierCard} onPress={() => navigation.navigate('AddSupplier', { supplierId: item.localId })}>
       <View style={styles.supplierInfo}>
         <Avatar.Text size={42} label={item.name.substring(0, 2).toUpperCase()} style={styles.avatar} labelStyle={styles.avatarLabel} />
         <View style={styles.supplierDetails}>
           <Text style={styles.supplierName}>{item.name}</Text>
+          <Text style={styles.supplierMeta}>ID: {item.serverId || item.localId}</Text>
           <Text style={styles.supplierMeta}>{item.contactName || 'Sin contacto'}</Text>
           <Text style={styles.supplierMeta}>{item.phone || 'Sin teléfono'}</Text>
+          {!item.synced ? (
+            <Chip compact style={styles.pendingChip} textStyle={styles.pendingChipText}>
+              Pendiente
+            </Chip>
+          ) : null}
         </View>
       </View>
     </TouchableOpacity>
@@ -112,7 +148,7 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
       <FlatList
         data={filteredSuppliers}
         renderItem={renderSupplier}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item) => item.localId}
         contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[ui.colors.primary]} tintColor={ui.colors.primary} />}
         ListEmptyComponent={
@@ -162,6 +198,8 @@ const styles = StyleSheet.create({
   supplierDetails: { marginLeft: 10, flex: 1 },
   supplierName: { fontSize: 15, fontWeight: '700', color: ui.colors.text },
   supplierMeta: { fontSize: 12, color: ui.colors.textMuted, marginTop: 2 },
+  pendingChip: { marginTop: 6, alignSelf: 'flex-start', backgroundColor: '#FFE8CC', height: 23 },
+  pendingChipText: { color: ui.colors.warning, fontSize: 10 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
   fab: { backgroundColor: ui.colors.primary },

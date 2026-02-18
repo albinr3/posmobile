@@ -13,6 +13,12 @@ import { useAuthStore } from '../store/authStore';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
+import { ReportsMenuScreen } from '../screens/reports/ReportsMenuScreen';
+import { SalesReportScreen } from '../screens/reports/SalesReportScreen';
+import { AccountsReceivableReportScreen } from '../screens/reports/AccountsReceivableReportScreen';
+import { ReceiptsReportScreen } from '../screens/reports/ReceiptsReportScreen';
+import { ProfitReportScreen } from '../screens/reports/ProfitReportScreen';
+import { InventoryReportScreen } from '../screens/reports/InventoryReportScreen';
 import { POSScreen } from '../screens/sales/POSScreen';
 import { QuoteScreen } from '../screens/sales/QuoteScreen';
 import { QuoteListScreen } from '../screens/sales/QuoteListScreen';
@@ -189,6 +195,19 @@ function DashboardStack() {
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="DashboardMain" component={DashboardScreen} />
       <Stack.Screen name="DailyClose" component={DailyCloseScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function ReportsStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="ReportsMenuMain" component={ReportsMenuScreen} />
+      <Stack.Screen name="SalesReport" component={SalesReportScreen} />
+      <Stack.Screen name="AccountsReceivableReport" component={AccountsReceivableReportScreen} />
+      <Stack.Screen name="ReceiptsReport" component={ReceiptsReportScreen} />
+      <Stack.Screen name="ProfitReport" component={ProfitReportScreen} />
+      <Stack.Screen name="InventoryReport" component={InventoryReportScreen} />
     </Stack.Navigator>
   );
 }
@@ -529,7 +548,7 @@ export function MainNavigator() {
       <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
       <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
       <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
-      <Drawer.Screen name="Reports" component={DashboardScreen} options={{ title: 'Reportes' }} />
+      <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
       <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
       <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreen} options={{ title: 'Próximamente' }} />
     </Drawer.Navigator>

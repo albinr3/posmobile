@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, Alert, ScrollView, Image } from 'react-native';
 import { Text, Surface, Searchbar, Button, IconButton, TextInput, Divider, ActivityIndicator } from 'react-native-paper';
-import axios from 'axios';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { SafeFab } from '../../components/SafeFab';
-import { useAuthStore } from '../../store/authStore';
-import { formatCurrency } from '../../utils/helpers';
+import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { db } from '../../database/Database';
+import { useSyncStore } from '../../store/syncStore';
+import { syncService } from '../../services/sync/SyncService';
+import { useAuthStore } from '../../store/authStore';
 
 interface CreateReturnScreenProps {
   navigation: any;
@@ -44,12 +45,21 @@ interface SaleDetailItem {
   } | null;
 }
 
+interface ReturnPolicy {
+  canCreateReturn: boolean;
+  blockedReason: string | null;
+  maxReturnCents: number | null;
+  currentBalanceCents: number | null;
+  arLocalId?: string | null;
+}
+
 interface SaleDetail {
   id: string;
   invoiceCode: string;
   soldAt: string | null;
   type: string;
   totalCents: number;
+  returnPolicy: ReturnPolicy;
   customer?: {
     id: string;
     name: string;
@@ -69,7 +79,7 @@ interface ReturnDraftItem {
 
 interface CustomerOption {
   localId: string;
-  serverId: string;
+  serverId: string | null;
   name: string;
   phone?: string | null;
 }
@@ -122,12 +132,33 @@ interface ReturnReceiptPayload {
 
 type ReturnScreenMode = 'LIST' | 'CREATE';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
 const EMPTY_SEARCH_IMAGE = require('../../../assets/lupa.png');
+
+function parseJsonSafe(value: any): any {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function toIsoString(value: any): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'string') {
+    const parsed = new Date(value).getTime();
+    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+    return null;
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const ts = num > 1_000_000_000_000 ? num : num * 1000;
+  return new Date(ts).toISOString();
+}
 
 export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
+  const { isOnline } = useSyncStore();
   const [screenMode, setScreenMode] = useState<ReturnScreenMode>('LIST');
 
   const [query, setQuery] = useState('');
@@ -151,6 +182,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     () => returnItems.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0),
     [returnItems]
   );
+  const maxReturnCents = selectedSale?.returnPolicy.maxReturnCents ?? null;
+  const isReturnBlocked = selectedSale ? !selectedSale.returnPolicy.canCreateReturn : false;
+  const exceedsCreditLimit = maxReturnCents !== null && totalCents > maxReturnCents;
   const filteredCustomers = useMemo(() => {
     const q = customerQuery.trim().toLowerCase();
     if (!q) return customers;
@@ -160,19 +194,6 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         (customer.phone || '').toLowerCase().includes(q)
     );
   }, [customerQuery, customers]);
-
-  const buildHeaders = async () => {
-    const clerkToken = await getToken();
-    if (!clerkToken || !subUserToken) {
-      throw new Error('No hay sesión activa para consultar devoluciones.');
-    }
-    return {
-      Authorization: `Bearer ${clerkToken}`,
-      'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-      'X-SubUser-Token': subUserToken,
-      ...(accountId ? { 'X-Account-Id': accountId } : {}),
-    };
-  };
 
   const resetCreateDraft = () => {
     setCustomerQuery('');
@@ -192,12 +213,105 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         setLoadingReturns(true);
       }
       setReturnsError(null);
-      const headers = await buildHeaders();
-      const response = await axios.get(`${API_URL}/api/returns`, { headers });
-      setReturnsList(response.data?.data || []);
+
+      if (refresh && isOnline) {
+        try {
+          const clerkToken = await getToken();
+          if (clerkToken) {
+            syncService.setGetTokenFunction(() => getToken());
+            syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+            await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+          }
+        } catch (syncError) {
+          console.error('Error sincronizando devoluciones en refresh:', syncError);
+        }
+      }
+
+      const returnRows = await db.query<any>(
+        `SELECT local_id, server_id, return_code, sale_local_id, sale_server_id, total_cents, notes, returned_at, cancelled_at, data
+         FROM returns
+         ORDER BY returned_at DESC, rowid DESC`
+      );
+
+      const mapped: ReturnListItem[] = [];
+      for (const row of returnRows) {
+        const parsed = parseJsonSafe(row.data);
+        const localId = String(row.local_id);
+        const saleLocalId = row.sale_local_id ? String(row.sale_local_id) : null;
+        const saleServerId = row.sale_server_id ? String(row.sale_server_id) : null;
+        const saleRow = saleLocalId
+          ? await db.queryFirst<any>('SELECT local_id, server_id, invoice_code, data FROM sales WHERE local_id = ?', [saleLocalId])
+          : saleServerId
+            ? await db.queryFirst<any>('SELECT local_id, server_id, invoice_code, data FROM sales WHERE server_id = ?', [saleServerId])
+            : null;
+        const saleParsed = parseJsonSafe(saleRow?.data);
+
+        const returnItemRows = await db.query<any>(
+          `SELECT local_id, sale_item_id, product_local_id, product_server_id, product_name, qty, unit_price_cents, line_total_cents, data
+           FROM return_items
+           WHERE return_local_id = ?
+           ORDER BY rowid ASC`,
+          [localId]
+        );
+
+        const items = returnItemRows.map((returnItemRow) => {
+          const returnItemParsed = parseJsonSafe(returnItemRow.data);
+          return {
+            id: String(returnItemParsed?.id || returnItemRow.local_id),
+            saleItemId: String(returnItemParsed?.saleItemId || returnItemRow.sale_item_id || ''),
+            productId: String(
+              returnItemParsed?.productId ||
+                returnItemRow.product_server_id ||
+                returnItemRow.product_local_id ||
+                ''
+            ),
+            qty: Number(returnItemParsed?.qty || returnItemRow.qty || 0),
+            unitPriceCents: Number(returnItemParsed?.unitPriceCents || returnItemRow.unit_price_cents || 0),
+            lineTotalCents: Number(returnItemParsed?.lineTotalCents || returnItemRow.line_total_cents || 0),
+            product: {
+              name: String(
+                returnItemParsed?.product?.name ||
+                  returnItemParsed?.productName ||
+                  returnItemRow.product_name ||
+                  'Producto'
+              ),
+            },
+          };
+        });
+
+        mapped.push({
+          id: String(row.server_id || row.local_id),
+          returnCode: String(row.return_code || parsed?.returnCode || `DEV-LOCAL-${localId.slice(-6)}`),
+          saleId: String(parsed?.saleId || saleServerId || saleLocalId || ''),
+          totalCents: Number(parsed?.totalCents || row.total_cents || 0),
+          notes: parsed?.notes ? String(parsed.notes) : row.notes ? String(row.notes) : null,
+          returnedAt: toIsoString(parsed?.returnedAt || row.returned_at),
+          cancelledAt: toIsoString(parsed?.cancelledAt || row.cancelled_at),
+          sale: {
+            id: String(
+              parsed?.sale?.id ||
+                parsed?.saleId ||
+                saleRow?.server_id ||
+                saleRow?.local_id ||
+                saleServerId ||
+                saleLocalId ||
+                ''
+            ),
+            invoiceCode: String(parsed?.sale?.invoiceCode || saleRow?.invoice_code || saleParsed?.invoiceCode || '-'),
+            type: String(parsed?.sale?.type || saleParsed?.type || 'CONTADO'),
+            customer: {
+              id: String(parsed?.sale?.customer?.id || saleParsed?.customerId || ''),
+              name: String(parsed?.sale?.customer?.name || saleParsed?.customerName || 'Cliente general'),
+            },
+          },
+          items,
+        });
+      }
+
+      setReturnsList(mapped);
     } catch (error: any) {
-      const message = error?.response?.data?.error || 'No se pudo cargar el listado de devoluciones.';
-      console.error('Error cargando devoluciones:', error?.response?.data || error?.message || error);
+      const message = 'No se pudo cargar el listado de devoluciones.';
+      console.error('Error cargando devoluciones:', error?.message || error);
       setReturnsList([]);
       setReturnsError(message);
     } finally {
@@ -240,12 +354,19 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   }, []);
 
   useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      void loadReturns(true);
+    });
+    return unsubscribe;
+  }, [navigation, isOnline, getToken]);
+
+  useEffect(() => {
     let mounted = true;
     const loadCustomers = async () => {
       try {
         setLoadingCustomers(true);
         const rows = await db.query<{ local_id: string; server_id: string; name: string; phone?: string | null }>(
-          'SELECT local_id, server_id, name, phone FROM customers WHERE server_id IS NOT NULL ORDER BY name'
+          'SELECT local_id, server_id, name, phone FROM customers ORDER BY name'
         );
         if (!mounted) return;
         setCustomers(
@@ -280,15 +401,58 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     const t = setTimeout(async () => {
       try {
         setSearching(true);
-        const headers = await buildHeaders();
-        const response = await axios.get(`${API_URL}/api/returns/sales`, {
-          headers,
-          params: { query: query.trim(), customerId: selectedCustomer.serverId },
-        });
-        setSearchResults(response.data?.data || []);
+        const ids = [selectedCustomer.localId, selectedCustomer.serverId].filter(
+          (value): value is string => Boolean(value)
+        );
+        if (!ids.length) {
+          setSearchResults([]);
+          return;
+        }
+
+        const placeholders = ids.map(() => '?').join(', ');
+        const rows = await db.query<any>(
+          `SELECT local_id, server_id, invoice_code, customer_id, total_cents, status, created_at, data
+           FROM sales
+           WHERE customer_id IN (${placeholders})
+           ORDER BY created_at DESC, rowid DESC`,
+          ids
+        );
+
+        const q = query.trim().toLowerCase();
+        const localResults: SaleSearchResult[] = rows
+          .map((row) => {
+            const parsed = parseJsonSafe(row.data);
+            const soldAt = toIsoString(parsed?.soldAt || parsed?.createdAt || row.created_at);
+            const status = String(parsed?.status || row.status || '').toLowerCase();
+            const invoiceCode = String(row.invoice_code || parsed?.invoiceCode || '-');
+            return {
+              id: String(row.local_id || row.server_id),
+              invoiceCode,
+              soldAt,
+              type: String(parsed?.type || 'CONTADO'),
+              totalCents: Number(parsed?.totalCents || row.total_cents || 0),
+              status,
+            };
+          })
+          .filter((row) => row.status !== 'cancelled')
+          .filter((row) => !q || row.invoiceCode.toLowerCase().includes(q))
+          .map((row) => ({
+            id: row.id,
+            invoiceCode: row.invoiceCode,
+            soldAt: row.soldAt,
+            type: row.type,
+            totalCents: row.totalCents,
+            customer: {
+              id: selectedCustomer.serverId || selectedCustomer.localId,
+              name: selectedCustomer.name,
+              phone: selectedCustomer.phone || null,
+            },
+          }));
+
+        setSearchResults(localResults);
       } catch (error: any) {
         setSearchResults([]);
-        console.error('Error buscando ventas para devolución:', error?.response?.data || error?.message || error);
+        console.error('Error buscando ventas para devolución:', error?.message || error);
       } finally {
         setSearching(false);
       }
@@ -300,23 +464,178 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const handleSelectSale = async (saleId: string) => {
     try {
       setLoadingSale(true);
-      const headers = await buildHeaders();
-      const response = await axios.get(`${API_URL}/api/returns/sales/${saleId}`, { headers });
-      const detail: SaleDetail = response.data;
+      const saleRow = await db.queryFirst<any>(
+        'SELECT local_id, server_id, invoice_code, total_cents, created_at, status, data FROM sales WHERE local_id = ? OR server_id = ? LIMIT 1',
+        [saleId, saleId]
+      );
+      if (!saleRow) {
+        Alert.alert('Error', 'No se encontró la venta seleccionada en la base local.');
+        return;
+      }
+
+      const parsedSale = parseJsonSafe(saleRow.data);
+      const saleLocalId = String(saleRow.local_id || saleId);
+      const saleServerId = saleRow.server_id ? String(saleRow.server_id) : null;
+      const soldAt = toIsoString(parsedSale?.soldAt || parsedSale?.createdAt || saleRow.created_at);
+      const saleType = String(parsedSale?.type || 'CONTADO').toUpperCase();
+
+      const returnRows = await db.query<{ sale_item_id: string; returned_qty: number }>(
+        `SELECT ri.sale_item_id, SUM(ri.qty) AS returned_qty
+         FROM return_items ri
+         INNER JOIN returns r ON r.local_id = ri.return_local_id
+         WHERE (r.sale_local_id = ? OR r.sale_server_id = ?)
+           AND r.cancelled_at IS NULL
+         GROUP BY ri.sale_item_id`,
+        [saleLocalId, saleServerId || saleId]
+      );
+      const returnedByItem = new Map<string, number>();
+      for (const row of returnRows) {
+        returnedByItem.set(String(row.sale_item_id || ''), Number(row.returned_qty || 0));
+      }
+
+      const rawItems = Array.isArray(parsedSale?.items) ? parsedSale.items : [];
+      const items: SaleDetailItem[] = rawItems
+        .map((item: any, index: number) => {
+          const saleItemId = String(item?.saleItemId || item?.id || `${saleLocalId}_${index}`);
+          const soldQty = Number(item?.qty ?? item?.quantity ?? 0);
+          const returnedQty = Number(returnedByItem.get(saleItemId) || 0);
+          const availableQty = Math.max(0, soldQty - returnedQty);
+          const unitPriceCents = Number(item?.unitPriceCents ?? item?.priceCents ?? item?.price ?? 0);
+          const productId = String(item?.productId || '');
+
+          return {
+            saleItemId,
+            productId,
+            qty: soldQty,
+            returnedQty,
+            availableQty,
+            unitPriceCents: Number.isFinite(unitPriceCents) ? unitPriceCents : 0,
+            product: {
+              id: productId,
+              name: String(item?.product?.name || item?.productName || 'Producto'),
+              sku: item?.product?.sku ? String(item.product.sku) : null,
+              reference: item?.product?.reference ? String(item.product.reference) : null,
+              saleUnit: item?.product?.saleUnit ? String(item.product.saleUnit) : null,
+            },
+          };
+        })
+        .filter((item: SaleDetailItem) => item.qty > 0);
+
+      let returnPolicy: ReturnPolicy = {
+        canCreateReturn: true,
+        blockedReason: null,
+        maxReturnCents: null,
+        currentBalanceCents: null,
+        arLocalId: null,
+      };
+
+      if (saleType === 'CREDITO') {
+        const arRows = await db.query<any>(
+          `SELECT local_id, server_id, balance_cents, status, data
+           FROM accounts_receivable
+           ORDER BY rowid DESC`
+        );
+
+        const saleInvoiceCode = String(saleRow.invoice_code || parsedSale?.invoiceCode || '').trim();
+        const matchBySaleId = (rowParsed: any) => {
+          const rowSaleId = String(rowParsed?.saleId || rowParsed?.sale?.id || '').trim();
+          if (!rowSaleId) return false;
+          return rowSaleId === saleLocalId || (saleServerId ? rowSaleId === saleServerId : false);
+        };
+        const matchByInvoice = (rowParsed: any) => {
+          if (!saleInvoiceCode) return false;
+          const rowInvoice = String(rowParsed?.invoiceCode || rowParsed?.sale?.invoiceCode || '').trim();
+          return rowInvoice !== '' && rowInvoice === saleInvoiceCode;
+        };
+
+        let arMatch: any | null = null;
+        for (const arRow of arRows) {
+          const parsedAr = parseJsonSafe(arRow.data);
+          if (matchBySaleId(parsedAr)) {
+            arMatch = { row: arRow, parsed: parsedAr };
+            break;
+          }
+        }
+        if (!arMatch) {
+          for (const arRow of arRows) {
+            const parsedAr = parseJsonSafe(arRow.data);
+            if (matchByInvoice(parsedAr)) {
+              arMatch = { row: arRow, parsed: parsedAr };
+              break;
+            }
+          }
+        }
+
+        if (!arMatch) {
+          returnPolicy = {
+            canCreateReturn: false,
+            blockedReason: 'Factura a credito sin cuenta por cobrar asociada.',
+            maxReturnCents: 0,
+            currentBalanceCents: null,
+            arLocalId: null,
+          };
+        } else {
+          const balanceCents = Number(arMatch.row?.balance_cents || arMatch.parsed?.balanceCents || 0);
+          const status = String(arMatch.row?.status || arMatch.parsed?.status || '').toUpperCase();
+          const isPaid = balanceCents <= 0 || status === 'PAGADA' || status === 'PAGADO';
+
+          if (isPaid) {
+            returnPolicy = {
+              canCreateReturn: false,
+              blockedReason: 'Esta factura a credito esta pagada totalmente y no permite devoluciones.',
+              maxReturnCents: Math.max(0, balanceCents),
+              currentBalanceCents: Math.max(0, balanceCents),
+              arLocalId: String(arMatch.row?.local_id || ''),
+            };
+          } else {
+            returnPolicy = {
+              canCreateReturn: true,
+              blockedReason: null,
+              maxReturnCents: Math.max(0, balanceCents),
+              currentBalanceCents: Math.max(0, balanceCents),
+              arLocalId: String(arMatch.row?.local_id || ''),
+            };
+          }
+        }
+      }
+
+      const detail: SaleDetail = {
+        id: saleLocalId,
+        invoiceCode: String(saleRow.invoice_code || parsedSale?.invoiceCode || '-'),
+        soldAt,
+        type: saleType,
+        totalCents: Number(parsedSale?.totalCents || saleRow.total_cents || 0),
+        returnPolicy,
+        customer: {
+          id: String(parsedSale?.customerId || selectedCustomer?.serverId || selectedCustomer?.localId || ''),
+          name: String(parsedSale?.customerName || selectedCustomer?.name || 'Cliente general'),
+          phone: selectedCustomer?.phone || null,
+        },
+        items,
+      };
+
       setSelectedSale(detail);
       setReturnItems([]);
       setNotes('');
       setQuery('');
       setSearchResults([]);
+
+      if (!returnPolicy.canCreateReturn) {
+        Alert.alert('Devolucion bloqueada', returnPolicy.blockedReason || 'Esta venta no permite devoluciones.');
+      }
     } catch (error: any) {
-      console.error('Error cargando detalle de venta para devolución:', error?.response?.data || error?.message || error);
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudo cargar la venta.');
+      console.error('Error cargando detalle de venta para devolución:', error?.message || error);
+      Alert.alert('Error', 'No se pudo cargar la venta.');
     } finally {
       setLoadingSale(false);
     }
   };
 
   const addItemToReturn = (item: SaleDetailItem) => {
+    if (isReturnBlocked) {
+      Alert.alert('Devolucion bloqueada', selectedSale?.returnPolicy.blockedReason || 'Esta venta no permite devoluciones.');
+      return;
+    }
     if (item.availableQty <= 0) return;
 
     setReturnItems((prev) => {
@@ -359,8 +678,19 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
 
   const handleSave = async () => {
     if (!selectedSale) return;
+    if (isReturnBlocked) {
+      Alert.alert('Devolucion bloqueada', selectedSale.returnPolicy.blockedReason || 'Esta venta no permite devoluciones.');
+      return;
+    }
     if (returnItems.length === 0) {
       Alert.alert('Error', 'Debes agregar al menos un producto a devolver.');
+      return;
+    }
+    if (exceedsCreditLimit && maxReturnCents !== null) {
+      Alert.alert(
+        'Monto excedido',
+        `La devolucion no puede exceder el balance pendiente (${formatCurrency(maxReturnCents)}).`
+      );
       return;
     }
 
@@ -369,27 +699,148 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       const selectedSaleSnapshot = selectedSale;
       const returnItemsSnapshot = [...returnItems];
       const notesSnapshot = notes.trim();
-      const headers = await buildHeaders();
-      const payload = {
+      const returnLocalId = generateLocalId();
+      const returnedAt = Date.now();
+      const localCodeSuffix = String(returnedAt).slice(-6);
+      const returnCode = `DEV-LOCAL-${localCodeSuffix}`;
+      const saleRow = await db.queryFirst<{ server_id?: string }>(
+        'SELECT server_id FROM sales WHERE local_id = ? OR server_id = ? LIMIT 1',
+        [selectedSaleSnapshot.id, selectedSaleSnapshot.id]
+      );
+      const saleServerId = saleRow?.server_id ? String(saleRow.server_id) : null;
+      const queueItems = returnItemsSnapshot.map((item) => ({
+        saleItemId: item.saleItemId,
+        productId: item.productId,
+        qty: item.qty,
+        unitPriceCents: item.unitPriceCents,
+      }));
+      const totalReturnCents = returnItemsSnapshot.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0);
+      const returnData = {
+        localId: returnLocalId,
+        returnCode,
         saleId: selectedSaleSnapshot.id,
+        saleLocalId: selectedSaleSnapshot.id,
+        saleServerId,
+        arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+        totalCents: totalReturnCents,
+        notes: notesSnapshot || null,
+        returnedAt,
+        cancelledAt: null,
+        sale: {
+          id: saleServerId || selectedSaleSnapshot.id,
+          invoiceCode: selectedSaleSnapshot.invoiceCode || '-',
+          type: selectedSaleSnapshot.type || 'CONTADO',
+          customer: {
+            id: selectedSaleSnapshot.customer?.id || '',
+            name: selectedSaleSnapshot.customer?.name || 'Cliente general',
+          },
+        },
         items: returnItemsSnapshot.map((item) => ({
           saleItemId: item.saleItemId,
           productId: item.productId,
           qty: item.qty,
           unitPriceCents: item.unitPriceCents,
+          lineTotalCents: item.unitPriceCents * item.qty,
+          product: {
+            name: item.productName,
+          },
         })),
-        notes: notesSnapshot || null,
       };
 
-      const response = await axios.post(`${API_URL}/api/returns`, payload, { headers });
-      const returnCode = response.data?.returnCode || 'DEV-LOCAL';
+      await db.insert('returns', {
+        local_id: returnLocalId,
+        server_id: null,
+        return_code: returnCode,
+        sale_local_id: selectedSaleSnapshot.id,
+        sale_server_id: saleServerId,
+        total_cents: totalReturnCents,
+        notes: notesSnapshot || null,
+        returned_at: returnedAt,
+        cancelled_at: null,
+        synced: 0,
+        data: JSON.stringify(returnData),
+      });
+
+      for (const item of returnItemsSnapshot) {
+        const lineTotalCents = item.unitPriceCents * item.qty;
+        const productRow = await db.queryFirst<{ local_id?: string; server_id?: string }>(
+          'SELECT local_id, server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [item.productId, item.productId]
+        );
+        await db.insert('return_items', {
+          local_id: generateLocalId(),
+          return_local_id: returnLocalId,
+          sale_item_id: item.saleItemId,
+          product_local_id: productRow?.local_id ? String(productRow.local_id) : null,
+          product_server_id: productRow?.server_id ? String(productRow.server_id) : null,
+          product_name: item.productName,
+          qty: item.qty,
+          unit_price_cents: item.unitPriceCents,
+          line_total_cents: lineTotalCents,
+          synced: 0,
+          data: JSON.stringify({
+            saleItemId: item.saleItemId,
+            productId: item.productId,
+            qty: item.qty,
+            unitPriceCents: item.unitPriceCents,
+            lineTotalCents,
+            product: { name: item.productName },
+          }),
+        });
+      }
+
+      if (
+        String(selectedSaleSnapshot.type || '').toUpperCase() === 'CREDITO' &&
+        selectedSaleSnapshot.returnPolicy.arLocalId
+      ) {
+        const arLocalId = String(selectedSaleSnapshot.returnPolicy.arLocalId);
+        const arRow = await db.queryFirst<any>(
+          'SELECT total_cents, balance_cents, paid_cents, status, data FROM accounts_receivable WHERE local_id = ? LIMIT 1',
+          [arLocalId]
+        );
+        if (arRow) {
+          const currentBalance = Number(arRow.balance_cents || 0);
+          const totalArCents = Number(arRow.total_cents || 0);
+          const newBalanceCents = Math.max(0, currentBalance - totalReturnCents);
+          const newPaidCents = Math.max(0, totalArCents - newBalanceCents);
+          const newStatus = newBalanceCents <= 0 ? 'PAGADO' : 'PARCIAL';
+          const arParsed = parseJsonSafe(arRow.data);
+
+          await db.update('accounts_receivable', arLocalId, {
+            balance_cents: newBalanceCents,
+            paid_cents: newPaidCents,
+            status: newStatus,
+            synced: 0,
+            data: JSON.stringify({
+              ...(arParsed || {}),
+              balanceCents: newBalanceCents,
+              paidCents: newPaidCents,
+              status: newStatus,
+            }),
+          });
+        }
+      }
+
+      await syncService.queueOperation(
+        'return',
+        'create',
+        {
+          saleId: selectedSaleSnapshot.id,
+          saleServerId,
+          arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+          items: queueItems,
+          notes: notesSnapshot || null,
+        },
+        returnLocalId
+      );
+
       const receipt: ReturnReceiptPayload = {
-        returnId: response.data?.id || undefined,
+        returnId: returnLocalId,
         returnCode,
-        returnedAt: Date.now(),
+        returnedAt,
         invoiceCode: selectedSaleSnapshot.invoiceCode || '-',
         customerName: selectedSaleSnapshot.customer?.name || 'Cliente general',
-        totalCents: returnItemsSnapshot.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0),
+        totalCents: totalReturnCents,
         notes: notesSnapshot || null,
         items: returnItemsSnapshot.map((item) => ({
           productName: item.productName,
@@ -402,8 +853,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       openListMode();
       navigation.navigate('ReturnReceipt', { receipt, autoPrint: true });
     } catch (error: any) {
-      console.error('Error creando devolución:', error?.response?.data || error?.message || error);
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudo crear la devolución.');
+      console.error('Error creando devolución:', error?.message || error);
+      Alert.alert('Error', 'No se pudo crear la devolución.');
     } finally {
       setSaving(false);
     }
@@ -601,6 +1052,17 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           <Text style={styles.summaryLabel}>Total venta:</Text>
           <Text style={styles.summaryValue}>{formatCurrency(selectedSale?.totalCents || 0)}</Text>
         </View>
+        {selectedSale?.returnPolicy.currentBalanceCents !== null ? (
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Balance pendiente:</Text>
+            <Text style={styles.summaryValue}>{formatCurrency(selectedSale?.returnPolicy.currentBalanceCents || 0)}</Text>
+          </View>
+        ) : null}
+        {isReturnBlocked ? (
+          <Text style={styles.policyErrorText}>
+            {selectedSale?.returnPolicy.blockedReason || 'Esta venta no permite devoluciones.'}
+          </Text>
+        ) : null}
         <Button mode="text" onPress={() => setSelectedSale(null)}>
           Cambiar venta
         </Button>
@@ -620,7 +1082,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             <Button
               mode="outlined"
               onPress={() => addItemToReturn(item)}
-              disabled={item.availableQty <= 0}
+              disabled={item.availableQty <= 0 || isReturnBlocked}
             >
               Agregar
             </Button>
@@ -641,11 +1103,27 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
                   </Text>
                 </View>
                 <View style={styles.qtyBox}>
-                  <IconButton icon="minus" size={18} onPress={() => changeItemQty(item.saleItemId, item.qty - 1)} />
+                  <IconButton
+                    icon="minus"
+                    size={18}
+                    disabled={isReturnBlocked}
+                    onPress={() => changeItemQty(item.saleItemId, item.qty - 1)}
+                  />
                   <Text style={styles.qtyText}>{item.qty}</Text>
-                  <IconButton icon="plus" size={18} onPress={() => changeItemQty(item.saleItemId, item.qty + 1)} />
+                  <IconButton
+                    icon="plus"
+                    size={18}
+                    disabled={isReturnBlocked}
+                    onPress={() => changeItemQty(item.saleItemId, item.qty + 1)}
+                  />
                 </View>
-                <IconButton icon="delete" size={20} iconColor={ui.colors.danger} onPress={() => removeDraftItem(item.saleItemId)} />
+                <IconButton
+                  icon="delete"
+                  size={20}
+                  disabled={isReturnBlocked}
+                  iconColor={ui.colors.danger}
+                  onPress={() => removeDraftItem(item.saleItemId)}
+                />
               </Surface>
             ))}
           </View>
@@ -657,8 +1135,14 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             onChangeText={setNotes}
             multiline
             numberOfLines={2}
+            disabled={isReturnBlocked}
             style={styles.notesInput}
           />
+          {exceedsCreditLimit && maxReturnCents !== null ? (
+            <Text style={styles.policyErrorText}>
+              El total de la devolucion ({formatCurrency(totalCents)}) excede el balance pendiente permitido ({formatCurrency(maxReturnCents)}).
+            </Text>
+          ) : null}
         </>
       ) : null}
     </View>
@@ -724,7 +1208,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
               mode="contained"
               onPress={handleSave}
               loading={saving}
-              disabled={saving}
+              disabled={saving || isReturnBlocked || exceedsCreditLimit}
               buttonColor={ui.colors.primary}
               textColor="#fff"
               style={styles.saveBtn}
@@ -802,6 +1286,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
     color: ui.colors.textMuted,
     textAlign: 'center',
+  },
+  policyErrorText: {
+    marginTop: 8,
+    color: ui.colors.danger,
+    fontWeight: '700',
   },
   centerFull: {
     flex: 1,

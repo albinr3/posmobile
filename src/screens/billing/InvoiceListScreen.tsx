@@ -1,7 +1,8 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, Alert, TouchableOpacity, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '@clerk/clerk-expo';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -11,6 +12,8 @@ import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { syncService } from '../../services/sync/SyncService';
+import { useAuthStore } from '../../store/authStore';
+import { useSyncStore } from '../../store/syncStore';
 
 interface InvoiceListItem {
   localId: string;
@@ -26,16 +29,91 @@ interface InvoiceListScreenProps {
   navigation: any;
 }
 
+const INVOICE_AUTO_SYNC_MIN_INTERVAL_MS = 60_000;
+
+const resolveSaleCreatedAt = (rowCreatedAt: unknown, parsedData: any): number => {
+  const candidates = [
+    rowCreatedAt,
+    parsedData?.createdAt,
+    parsedData?.soldAt,
+    parsedData?.date,
+  ];
+
+  for (const candidate of candidates) {
+    const asNumber = Number(candidate);
+    if (Number.isFinite(asNumber)) return asNumber;
+    if (typeof candidate === 'string' && candidate.trim()) {
+      const asDate = new Date(candidate).getTime();
+      if (Number.isFinite(asDate)) return asDate;
+    }
+    if (candidate instanceof Date) {
+      const ts = candidate.getTime();
+      if (Number.isFinite(ts)) return ts;
+    }
+  }
+
+  return Date.now();
+};
+
 export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'completed' | 'pending' | 'cancelled'>('all');
   const [invoices, setInvoices] = useState<InvoiceListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const { getToken } = useAuth();
+  const { subUserToken } = useAuthStore();
+  const { isOnline } = useSyncStore();
+  const getTokenRef = useRef(getToken);
+  const subUserTokenRef = useRef(subUserToken);
+  const isOnlineRef = useRef(isOnline);
+  const isSyncingOnFocusRef = useRef(false);
+  const lastAutoSyncAtRef = useRef(0);
+  getTokenRef.current = getToken;
+  subUserTokenRef.current = subUserToken;
+  isOnlineRef.current = isOnline;
 
   useFocusEffect(
     useCallback(() => {
-      loadInvoices();
+      if (isSyncingOnFocusRef.current) return;
+      isSyncingOnFocusRef.current = true;
+      let active = true;
+
+      const syncAndLoad = async () => {
+        try {
+          setLoading(true);
+          await loadInvoices();
+          if (!active || !isOnlineRef.current) return;
+
+          const clerkToken = await getTokenRef.current();
+          if (!clerkToken || !subUserTokenRef.current) return;
+
+          const now = Date.now();
+          const canAutoSync = now - lastAutoSyncAtRef.current >= INVOICE_AUTO_SYNC_MIN_INTERVAL_MS;
+          if (!canAutoSync) return;
+
+          syncService.setGetTokenFunction(() => getTokenRef.current());
+          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+          lastAutoSyncAtRef.current = Date.now();
+
+          if (active) {
+            await loadInvoices();
+          }
+        } catch (error) {
+          console.error('Error sincronizando facturas:', error);
+        } finally {
+          if (active) {
+            isSyncingOnFocusRef.current = false;
+          }
+        }
+      };
+
+      syncAndLoad();
+      return () => {
+        active = false;
+        isSyncingOnFocusRef.current = false;
+      };
     }, [])
   );
 
@@ -59,10 +137,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           paymentMethod: parsedData?.paymentMethod ? String(parsedData.paymentMethod) : null,
           status: normalizedStatus,
           totalCents: Number(row.total_cents || parsedData?.totalCents || 0),
-          createdAt: Number(row.created_at || parsedData?.createdAt || Date.now()),
+          createdAt: resolveSaleCreatedAt(row.created_at, parsedData),
           synced: row.synced === 1,
         };
       });
+      mapped.sort((a, b) => b.createdAt - a.createdAt);
       setInvoices(mapped);
     } catch (error) {
       console.error('Error cargando facturas:', error);
@@ -75,6 +154,19 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const onRefresh = async () => {
     setRefreshing(true);
+    try {
+      if (isOnlineRef.current) {
+        const clerkToken = await getTokenRef.current();
+        if (clerkToken && subUserTokenRef.current) {
+          syncService.setGetTokenFunction(() => getTokenRef.current());
+          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+          lastAutoSyncAtRef.current = Date.now();
+        }
+      }
+    } catch (error) {
+      console.error('Error sincronizando facturas en refresco:', error);
+    }
     await loadInvoices();
   };
 
@@ -159,7 +251,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
       const items = Array.isArray(parsedData?.items) ? parsedData.items : [];
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
-      const createdAt = Number(row.created_at || parsedData?.createdAt || Date.now());
+      const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
       const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
       const paymentMethodLabel = getPaymentLabel(parsedData?.paymentMethod || invoice.paymentMethod);
@@ -246,7 +338,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
       const items = Array.isArray(parsedData?.items) ? parsedData.items : [];
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
-      const createdAt = Number(row.created_at || parsedData?.createdAt || Date.now());
+      const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
       const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
       const paymentMethodLabel = getPaymentLabel(parsedData?.paymentMethod || invoice.paymentMethod);

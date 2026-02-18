@@ -4,9 +4,11 @@ import { TextInput, Button, Text, Menu, Icon, Switch } from 'react-native-paper'
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import axios from 'axios';
 import { useAuthStore } from '../../store/authStore';
-import { formatCurrency } from '../../utils/helpers';
+import { useSyncStore } from '../../store/syncStore';
+import { db } from '../../database/Database';
+import { syncService } from '../../services/sync/SyncService';
+import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
 interface AddPurchaseScreenProps {
@@ -16,20 +18,44 @@ interface AddPurchaseScreenProps {
 
 interface SupplierOption {
   id: string;
+  serverId: string | null;
   name: string;
-  discountPercentBp?: number;
-  chargesItbis?: boolean;
-  itbisRateBp?: number | null;
+  discountPercentBp: number;
+  chargesItbis: boolean;
+  itbisRateBp: number | null;
 }
 
 interface ProductOption {
   id: string;
+  serverId: string | null;
   name: string;
-  sku?: string | null;
-  reference?: string | null;
+  sku: string | null;
+  reference: string | null;
   costCents: number;
   priceCents: number;
   itbisRateBp: number;
+  isActive: boolean;
+}
+
+interface PurchaseStoredItem {
+  id?: string | null;
+  productId: string;
+  productServerId?: string | null;
+  productName?: string;
+  qty: number;
+  unitCostCents: number;
+  discountPercentBp?: number;
+  netCostCents?: number;
+  salePriceCents?: number;
+  saleMarginBp?: number;
+  purchaseIncludesItbis?: boolean;
+  appliedItbisRateBp?: number;
+  lineTotalCents?: number;
+}
+
+interface CatalogSnapshot {
+  suppliers: SupplierOption[];
+  products: ProductOption[];
 }
 
 interface PurchaseFormItem {
@@ -43,7 +69,10 @@ interface PurchaseFormItem {
   salePrice: string;
 }
 
-function createEmptyItem(defaultSaleMarginPercent = ''): PurchaseFormItem {
+const DEFAULT_PURCHASE_ITBIS_RATE_BP = 1800;
+const DEFAULT_SALE_MARGIN_PERCENT = '30';
+
+function createEmptyItem(defaultSaleMarginPercent = DEFAULT_SALE_MARGIN_PERCENT): PurchaseFormItem {
   return {
     key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     productId: null,
@@ -56,13 +85,72 @@ function createEmptyItem(defaultSaleMarginPercent = ''): PurchaseFormItem {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== 'string' || !raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function asString(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text.length > 0 ? text : null;
+}
+
+function asNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function asBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || value === 'true') return true;
+  if (value === 0 || value === '0' || value === 'false') return false;
+  return fallback;
+}
+
+function normalizeStoredItems(raw: unknown): PurchaseStoredItem[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      if (!isRecord(entry)) return null;
+      const productId = asString(entry.productId);
+      if (!productId) return null;
+      return {
+        id: asString(entry.id),
+        productId,
+        productServerId: asString(entry.productServerId),
+        productName: asString(entry.productName) || undefined,
+        qty: asNumber(entry.qty) ?? 0,
+        unitCostCents: asNumber(entry.unitCostCents) ?? 0,
+        discountPercentBp: asNumber(entry.discountPercentBp) ?? undefined,
+        netCostCents: asNumber(entry.netCostCents) ?? undefined,
+        salePriceCents: asNumber(entry.salePriceCents) ?? undefined,
+        saleMarginBp: asNumber(entry.saleMarginBp) ?? undefined,
+        purchaseIncludesItbis:
+          typeof entry.purchaseIncludesItbis === 'boolean' ? entry.purchaseIncludesItbis : undefined,
+        appliedItbisRateBp: asNumber(entry.appliedItbisRateBp) ?? undefined,
+        lineTotalCents: asNumber(entry.lineTotalCents) ?? undefined,
+      } as PurchaseStoredItem;
+    })
+    .filter((item): item is PurchaseStoredItem => item !== null);
+}
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const normalizeDiscountBp = (discountBp: number | null | undefined) => {
   const raw = Number.isFinite(Number(discountBp)) ? Number(discountBp) : 0;
   return clamp(Math.round(raw), 0, 10000);
 };
 const normalizeItbisRateBp = (rateBp: number | null | undefined) => {
-  const raw = Number.isFinite(Number(rateBp)) ? Number(rateBp) : 1800;
+  const raw = Number.isFinite(Number(rateBp)) ? Number(rateBp) : DEFAULT_PURCHASE_ITBIS_RATE_BP;
   return clamp(Math.round(raw), 0, 100000);
 };
 const normalizeMarginBp = (marginBp: number | null | undefined) => {
@@ -131,143 +219,281 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const [notes, setNotes] = useState('');
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [updateProductPrice, setUpdateProductPrice] = useState(true);
-  const [items, setItems] = useState<PurchaseFormItem[]>([createEmptyItem('30')]);
-  const [purchaseItbisRateBp, setPurchaseItbisRateBp] = useState(1800);
-  const [defaultSaleMarginPercent, setDefaultSaleMarginPercent] = useState('30');
+  const [items, setItems] = useState<PurchaseFormItem[]>([createEmptyItem()]);
 
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [supplierMenuVisible, setSupplierMenuVisible] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [persistedLocalId, setPersistedLocalId] = useState<string | null>(null);
+  const [persistedServerId, setPersistedServerId] = useState<string | null>(null);
 
   const [loading, setLoading] = useState(false);
   const [loadingInitialData, setLoadingInitialData] = useState(true);
   const lastFocusLoadKeyRef = useRef<string | null>(null);
   const { getToken } = useAuth();
   const { subUserToken, accountId } = useAuthStore();
+  const { isOnline } = useSyncStore();
+  const isOnlineRef = useRef(isOnline);
+  const getTokenRef = useRef(getToken);
+  const subUserTokenRef = useRef(subUserToken);
+  const accountIdRef = useRef(accountId);
+  isOnlineRef.current = isOnline;
+  getTokenRef.current = getToken;
+  subUserTokenRef.current = subUserToken;
+  accountIdRef.current = accountId;
 
-  const resolveHeaders = async () => {
-    const clerkToken = await getToken();
-    if (!clerkToken || !subUserToken) throw new Error('No hay sesión activa');
+  const resolveLocalProductId = useCallback(
+    (
+      rawProductId: string | null | undefined,
+      rawProductServerId?: string | null,
+      sourceProducts: ProductOption[] = products
+    ): string | null => {
+      const direct = asString(rawProductId);
+      if (direct) {
+        const localMatch = sourceProducts.find((product) => product.id === direct);
+        if (localMatch) return localMatch.id;
+      }
+
+      const serverCandidate = asString(rawProductServerId) || asString(rawProductId);
+      if (serverCandidate) {
+        const serverMatch = sourceProducts.find((product) => product.serverId === serverCandidate);
+        if (serverMatch) return serverMatch.id;
+      }
+
+      return null;
+    },
+    [products]
+  );
+
+  const loadLocalCatalogs = useCallback(async (): Promise<CatalogSnapshot> => {
+    const supplierRows = await db.query<{
+      local_id: string;
+      server_id: string | null;
+      name: string | null;
+      discount_percent_bp: number | null;
+      charges_itbis: number | null;
+      itbis_rate_bp: number | null;
+      data: string | null;
+    }>(
+      `SELECT local_id, server_id, name, discount_percent_bp, charges_itbis, itbis_rate_bp, data
+       FROM suppliers
+       ORDER BY name COLLATE NOCASE ASC`
+    );
+
+    const nextSuppliers = supplierRows
+      .map((row) => {
+        const parsed = parseJsonObject(row.data);
+        const name = asString(row.name) || asString(parsed?.name) || '';
+        return {
+          id: String(row.local_id),
+          serverId: asString(row.server_id) || asString(parsed?.serverId) || asString(parsed?.id),
+          name,
+          discountPercentBp: Math.max(
+            0,
+            Math.round(asNumber(row.discount_percent_bp) ?? asNumber(parsed?.discountPercentBp) ?? 0)
+          ),
+          chargesItbis: asBoolean(
+            asNumber(row.charges_itbis) === 1 ? true : parsed?.chargesItbis,
+            false
+          ),
+          itbisRateBp: asNumber(row.itbis_rate_bp) ?? asNumber(parsed?.itbisRateBp) ?? null,
+        } as SupplierOption;
+      })
+      .filter((supplier) => supplier.name.length > 0);
+
+    const productRows = await db.query<{
+      local_id: string;
+      server_id: string | null;
+      name: string | null;
+      sku: string | null;
+      cost_cents: number | null;
+      price_cents: number | null;
+      data: string | null;
+    }>(
+      `SELECT local_id, server_id, name, sku, cost_cents, price_cents, data
+       FROM products
+       ORDER BY name COLLATE NOCASE ASC`
+    );
+
+    const nextProducts = productRows
+      .map((row) => {
+        const parsed = parseJsonObject(row.data);
+        const rawItbisRateBp = asNumber(parsed?.itbisRateBp);
+        const rawTaxRate = asNumber(parsed?.taxRate);
+        const normalizedItbisRateBp =
+          rawItbisRateBp !== null
+            ? normalizeItbisRateBp(rawItbisRateBp)
+            : rawTaxRate !== null
+              ? normalizeItbisRateBp(rawTaxRate <= 100 ? rawTaxRate * 100 : rawTaxRate)
+              : DEFAULT_PURCHASE_ITBIS_RATE_BP;
+
+        let isActive = true;
+        if (parsed && typeof parsed.isActive === 'boolean') isActive = parsed.isActive;
+        if (parsed && typeof parsed.active === 'boolean') isActive = parsed.active;
+
+        return {
+          id: String(row.local_id),
+          serverId: asString(row.server_id) || asString(parsed?.serverId) || asString(parsed?.id),
+          name: asString(row.name) || asString(parsed?.name) || '',
+          sku: asString(row.sku) || asString(parsed?.sku),
+          reference: asString(parsed?.reference),
+          costCents: Math.max(0, Math.round(asNumber(row.cost_cents) ?? asNumber(parsed?.costCents) ?? 0)),
+          priceCents: Math.max(0, Math.round(asNumber(row.price_cents) ?? asNumber(parsed?.priceCents) ?? 0)),
+          itbisRateBp: normalizedItbisRateBp,
+          isActive,
+        } as ProductOption;
+      })
+      .filter((product) => product.name.length > 0);
+
+    setSuppliers(nextSuppliers);
+    setProducts(nextProducts);
+
     return {
-      Authorization: `Bearer ${clerkToken}`,
-      'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-      'X-SubUser-Token': subUserToken,
-      ...(accountId ? { 'X-Account-Id': accountId } : {}),
+      suppliers: nextSuppliers,
+      products: nextProducts,
     };
-  };
+  }, []);
 
-  const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+  const loadLocalPurchaseForEdit = useCallback(
+    async (catalog: CatalogSnapshot) => {
+      if (!isEditMode) return;
+
+      const row = await db.queryFirst<{
+        local_id: string;
+        server_id: string | null;
+        supplier_name: string | null;
+        data: string | null;
+      }>(
+        `SELECT local_id, server_id, supplier_name, data
+         FROM purchases
+         WHERE local_id = ? OR server_id = ?
+         LIMIT 1`,
+        [purchaseId, purchaseId]
+      );
+
+      if (!row) {
+        Alert.alert('Error', 'No se encontró la compra que deseas editar.');
+        navigation.goBack();
+        return;
+      }
+
+      const parsed = parseJsonObject(row.data);
+      const parsedItems = normalizeStoredItems(parsed?.items);
+      const serverId =
+        asString(row.server_id) || asString(parsed?.serverId) || asString(parsed?.id);
+      const supplierFromPayloadId = asString(parsed?.supplierId);
+      const supplierFromPayloadServerId = asString(parsed?.supplierServerId);
+      const supplierNameFromPayload = asString(parsed?.supplierName) || asString(row.supplier_name) || '';
+
+      const matchedSupplier =
+        catalog.suppliers.find((supplier) => supplier.id === supplierFromPayloadId) ||
+        catalog.suppliers.find((supplier) => supplier.serverId === supplierFromPayloadServerId) ||
+        catalog.suppliers.find(
+          (supplier) =>
+            supplierNameFromPayload &&
+            supplier.name.toLowerCase() === supplierNameFromPayload.toLowerCase()
+        ) ||
+        null;
+
+      setPersistedLocalId(String(row.local_id));
+      setPersistedServerId(serverId);
+      setSupplierId(matchedSupplier?.id || null);
+      setSupplierName(matchedSupplier?.name || supplierNameFromPayload);
+      setNotes(asString(parsed?.notes) || '');
+      setUpdateProductCost(asBoolean(parsed?.updateProductCost, true));
+      setUpdateProductPrice(asBoolean(parsed?.updateProductPrice, true));
+
+      if (parsedItems.length === 0) {
+        setItems([createEmptyItem()]);
+        return;
+      }
+
+      const defaultDiscountPercent =
+        matchedSupplier && Number(matchedSupplier.discountPercentBp || 0) > 0
+          ? String(Number(matchedSupplier.discountPercentBp) / 100)
+          : '';
+
+      const mappedItems = parsedItems.map((item, index) => {
+        const resolvedProductId = resolveLocalProductId(item.productId, item.productServerId, catalog.products);
+        const matchedProduct =
+          catalog.products.find((product) => product.id === resolvedProductId) ||
+          catalog.products.find((product) => product.serverId === item.productId) ||
+          null;
+
+        return {
+          key: `${item.id || item.productId}_${index}_${Math.random().toString(36).slice(2, 6)}`,
+          productId: resolvedProductId,
+          productName: item.productName || matchedProduct?.name || 'Producto',
+          qty: String(Number(item.qty || 0)),
+          unitCost: String(Number(item.unitCostCents || 0) / 100),
+          discountPercent:
+            item.discountPercentBp !== null && item.discountPercentBp !== undefined
+              ? String(Number(item.discountPercentBp) / 100)
+              : defaultDiscountPercent,
+          saleMarginPercent:
+            item.saleMarginBp !== null && item.saleMarginBp !== undefined
+              ? String(Number(item.saleMarginBp) / 100)
+              : DEFAULT_SALE_MARGIN_PERCENT,
+          salePrice:
+            item.salePriceCents !== null && item.salePriceCents !== undefined && Number(item.salePriceCents) > 0
+              ? String(Number(item.salePriceCents) / 100)
+              : '',
+        } as PurchaseFormItem;
+      });
+
+      setItems(mappedItems.length > 0 ? mappedItems : [createEmptyItem()]);
+    },
+    [isEditMode, navigation, purchaseId, resolveLocalProductId]
+  );
+
+  const syncBestEffort = useCallback(async (): Promise<boolean> => {
+    if (!isOnlineRef.current) return false;
+
+    const clerkToken = await getTokenRef.current();
+    const currentSubUserToken = useAuthStore.getState().subUserToken;
+    if (!clerkToken || !currentSubUserToken) return false;
+
+    syncService.setGetTokenFunction(() => getTokenRef.current());
+    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    await syncService.fullSync(clerkToken);
+    return true;
+  }, []);
+
+  const loadLocalCatalogsRef = useRef(loadLocalCatalogs);
+  const loadLocalPurchaseForEditRef = useRef(loadLocalPurchaseForEdit);
+  loadLocalCatalogsRef.current = loadLocalCatalogs;
+  loadLocalPurchaseForEditRef.current = loadLocalPurchaseForEdit;
 
   useFocusEffect(
     useCallback(() => {
-      const focusLoadKey = `${purchaseId || 'new'}:${accountId || ''}:${subUserToken || ''}`;
+      const focusLoadKey = `${purchaseId || 'new'}:${accountIdRef.current || ''}:${subUserTokenRef.current || ''}`;
       if (lastFocusLoadKeyRef.current === focusLoadKey) return;
       lastFocusLoadKeyRef.current = focusLoadKey;
 
       let isMounted = true;
       const loadInitial = async () => {
         setLoadingInitialData(true);
-        let resolvedDefaultSaleMarginPercent = '30';
         try {
-          const headers = await resolveHeaders();
-          const [suppliersResp, productsResp] = await Promise.all([
-            axios.get(`${API_URL}/api/suppliers`, { headers }),
-            axios.get(`${API_URL}/api/products`, { headers, params: { take: 200 } }),
-          ]);
-
-          const suppliersRows = (suppliersResp.data?.data || []).map((s: any) => ({
-            id: String(s.id),
-            name: String(s.name || ''),
-            discountPercentBp: Number(s.discountPercentBp || 0),
-            chargesItbis: Boolean(s.chargesItbis),
-            itbisRateBp:
-              s.itbisRateBp === null || s.itbisRateBp === undefined
-                ? null
-                : Number(s.itbisRateBp || 0),
-          }));
-          const productsRows = (productsResp.data?.data || []).map((p: any) => ({
-            id: String(p.id),
-            name: String(p.name || ''),
-            sku: p.sku ? String(p.sku) : null,
-            reference: p.reference ? String(p.reference) : null,
-            costCents: Number(p.costCents || 0),
-            priceCents: Number(p.priceCents || 0),
-            itbisRateBp: Number(p.itbisRateBp || 1800),
-          }));
-          if (!isMounted) return;
-          setSuppliers(suppliersRows);
-          setProducts(productsRows);
-          try {
-            const settingsResp = await axios.get(`${API_URL}/api/company-settings`, { headers });
-            const nextRate = Number(settingsResp.data?.itbisRateBp);
-            const nextMarginBp = Number(settingsResp.data?.defaultProfitMarginBp);
-            if (Number.isFinite(nextRate) && nextRate >= 0) {
-              setPurchaseItbisRateBp(Math.round(nextRate));
-            } else {
-              setPurchaseItbisRateBp(1800);
+          let catalog = await loadLocalCatalogsRef.current();
+          if (isOnlineRef.current) {
+            const synced = await syncBestEffort();
+            if (synced) {
+              catalog = await loadLocalCatalogsRef.current();
             }
-            const normalizedMarginPercent =
-              Number.isFinite(nextMarginBp) && nextMarginBp >= 0 ? String(Number(nextMarginBp) / 100) : '30';
-            resolvedDefaultSaleMarginPercent = normalizedMarginPercent;
-            setDefaultSaleMarginPercent(normalizedMarginPercent);
-            if (!isEditMode) {
-              setItems((prev) =>
-                prev.map((item) =>
-                  item.saleMarginPercent.trim().length === 0 ? { ...item, saleMarginPercent: normalizedMarginPercent } : item
-                )
-              );
-            }
-          } catch {
-            setPurchaseItbisRateBp(1800);
-            setDefaultSaleMarginPercent('30');
-            resolvedDefaultSaleMarginPercent = '30';
           }
+          if (!isMounted) return;
 
           if (isEditMode) {
-            const purchaseResp = await axios.get(`${API_URL}/api/purchases/${purchaseId}`, { headers });
-            const purchase = purchaseResp.data || {};
-            const purchaseSupplierName = String(purchase.supplierName || '');
-            if (!isMounted) return;
-            setSupplierName(purchaseSupplierName);
-            const matchedSupplier = suppliersRows.find((s: SupplierOption) => s.name.toLowerCase() === purchaseSupplierName.toLowerCase());
-            setSupplierId(matchedSupplier?.id || null);
-            setNotes(String(purchase.notes || ''));
-            setUpdateProductCost(true);
-
-            const loadedItems = Array.isArray(purchase.items) ? purchase.items : [];
-            if (loadedItems.length > 0) {
-              const defaultDiscountPercent =
-                matchedSupplier && Number(matchedSupplier.discountPercentBp || 0) > 0
-                  ? String(Number(matchedSupplier.discountPercentBp || 0) / 100)
-                  : '';
-              setItems(
-                loadedItems.map((item: any) => ({
-                  key: `${item.id || item.productId}_${Math.random().toString(36).slice(2, 6)}`,
-                  productId: String(item.productId || ''),
-                  productName: String(item.productName || productsRows.find((p: ProductOption) => p.id === String(item.productId || ''))?.name || ''),
-                  qty: String(Number(item.qty || 0)),
-                  unitCost: String(Number(item.unitCostCents || 0) / 100),
-                  discountPercent: item.discountPercentBp ? String(Number(item.discountPercentBp) / 100) : defaultDiscountPercent,
-                  saleMarginPercent:
-                    item.saleMarginBp !== null && item.saleMarginBp !== undefined
-                      ? String(Number(item.saleMarginBp) / 100)
-                      : resolvedDefaultSaleMarginPercent,
-                  salePrice:
-                    item.salePriceCents !== null && item.salePriceCents !== undefined && Number(item.salePriceCents) > 0
-                      ? String(Number(item.salePriceCents) / 100)
-                      : '',
-                }))
-              );
-            } else {
-              setItems([createEmptyItem(resolvedDefaultSaleMarginPercent)]);
-            }
+            await loadLocalPurchaseForEditRef.current(catalog);
+          } else {
+            setPersistedLocalId(null);
+            setPersistedServerId(null);
           }
-        } catch (error: any) {
+        } catch (error) {
           if (!isMounted) return;
-          console.error('Error cargando datos de compra:', error);
-          const apiError = error?.response?.data?.error;
-          Alert.alert('Error', apiError ? String(apiError) : 'No se pudo cargar la compra');
+          console.error('Error cargando datos locales de compra:', error);
+          Alert.alert('Error', 'No se pudo cargar la compra');
           if (isEditMode) navigation.goBack();
         } finally {
           if (isMounted) setLoadingInitialData(false);
@@ -279,21 +505,22 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         lastFocusLoadKeyRef.current = null;
         isMounted = false;
       };
-    }, [accountId, isEditMode, navigation, purchaseId, subUserToken])
+    }, [isEditMode, navigation, purchaseId, syncBestEffort])
   );
 
   const updateItem = (index: number, patch: Partial<PurchaseFormItem>) => {
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   };
 
-  const addItem = () => setItems((prev) => [...prev, createEmptyItem(defaultSaleMarginPercent)]);
+  const addItem = () => setItems((prev) => [...prev, createEmptyItem()]);
   const removeItem = (index: number) =>
     setItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
 
   const filteredProducts = () => {
     const query = productSearchQuery.trim().toLowerCase();
-    if (!query) return products.slice(0, 8);
-    return products
+    const activeProducts = products.filter((product) => product.isActive);
+    if (!query) return activeProducts.slice(0, 8);
+    return activeProducts
       .filter(
         (product) =>
           product.name.toLowerCase().includes(query) ||
@@ -312,10 +539,10 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const parseNumberFromInput = (value: string) => Number((value || '0').replace(',', '.'));
   const toCents = (value: string) => Math.round(parseNumberFromInput(value) * 100);
   const getPurchaseItbisRateBp = (supplier: SupplierOption | null) => {
-    if (supplier?.chargesItbis) return supplier.itbisRateBp ?? purchaseItbisRateBp;
-    return purchaseItbisRateBp;
+    if (supplier?.chargesItbis) return supplier.itbisRateBp ?? DEFAULT_PURCHASE_ITBIS_RATE_BP;
+    return DEFAULT_PURCHASE_ITBIS_RATE_BP;
   };
-  const defaultSaleMarginBp = normalizeMarginBp(parseNumberFromInput(defaultSaleMarginPercent) * 100);
+  const defaultSaleMarginBp = normalizeMarginBp(parseNumberFromInput(DEFAULT_SALE_MARGIN_PERCENT) * 100);
 
   const recalcItemPricing = (
     item: PurchaseFormItem,
@@ -388,7 +615,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       }
 
       const emptyIdx = prev.findIndex((x) => !x.productId);
-      const targetItem = emptyIdx >= 0 ? prev[emptyIdx] : createEmptyItem(defaultSaleMarginPercent);
+      const targetItem = emptyIdx >= 0 ? prev[emptyIdx] : createEmptyItem();
 
       const patch: Partial<PurchaseFormItem> = {
         productId: product.id,
@@ -397,8 +624,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         ...(targetItem.discountPercent.trim().length === 0 && selectedSupplierDiscountPercent
           ? { discountPercent: selectedSupplierDiscountPercent }
           : {}),
-        ...(targetItem.saleMarginPercent.trim().length === 0 && defaultSaleMarginPercent
-          ? { saleMarginPercent: defaultSaleMarginPercent }
+        ...(targetItem.saleMarginPercent.trim().length === 0 && DEFAULT_SALE_MARGIN_PERCENT
+          ? { saleMarginPercent: DEFAULT_SALE_MARGIN_PERCENT }
           : {}),
       };
 
@@ -406,7 +633,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         return prev.map((x, i) => (i === emptyIdx ? recalcItemPricing(x, 'margin', patch) : x));
       }
 
-      return [...prev, recalcItemPricing(createEmptyItem(defaultSaleMarginPercent), 'margin', patch)];
+      return [...prev, recalcItemPricing(createEmptyItem(), 'margin', patch)];
     });
   };
 
@@ -414,7 +641,9 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
     const supplierDiscountBp = selectedSupplier?.discountPercentBp || 0;
     const supplierChargesItbis = selectedSupplier ? Boolean(selectedSupplier.chargesItbis) : true;
     const normalizedPurchaseItbisRateBp = normalizeItbisRateBp(
-      supplierChargesItbis ? selectedSupplier?.itbisRateBp ?? purchaseItbisRateBp : purchaseItbisRateBp
+      supplierChargesItbis
+        ? selectedSupplier?.itbisRateBp ?? DEFAULT_PURCHASE_ITBIS_RATE_BP
+        : DEFAULT_PURCHASE_ITBIS_RATE_BP
     );
 
     return items.reduce((sum, item) => {
@@ -436,7 +665,76 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
       return sum + Math.round(netCostCents * qty);
     }, 0);
-  }, [items, purchaseItbisRateBp, selectedSupplier]);
+  }, [items, selectedSupplier]);
+
+  const applyPurchaseEffectsLocally = useCallback(
+    async (
+      previousItems: PurchaseStoredItem[],
+      nextItems: PurchaseStoredItem[],
+      options: { updateCost: boolean; updatePrice: boolean }
+    ) => {
+      const stockDeltaByProduct = new Map<string, number>();
+      const latestPricingByProduct = new Map<string, { costCents: number; priceCents: number }>();
+
+      const addDelta = (localProductId: string, delta: number) => {
+        const current = stockDeltaByProduct.get(localProductId) || 0;
+        stockDeltaByProduct.set(localProductId, current + delta);
+      };
+
+      for (const item of previousItems) {
+        const localProductId = resolveLocalProductId(item.productId, item.productServerId);
+        const qty = Number(item.qty || 0);
+        if (!localProductId || !Number.isFinite(qty) || qty === 0) continue;
+        addDelta(localProductId, -qty);
+      }
+
+      for (const item of nextItems) {
+        const localProductId = resolveLocalProductId(item.productId, item.productServerId);
+        const qty = Number(item.qty || 0);
+        if (!localProductId || !Number.isFinite(qty) || qty === 0) continue;
+        addDelta(localProductId, qty);
+        latestPricingByProduct.set(localProductId, {
+          costCents: Math.max(0, Math.round(Number(item.netCostCents ?? item.unitCostCents ?? 0))),
+          priceCents: Math.max(0, Math.round(Number(item.salePriceCents ?? 0))),
+        });
+      }
+
+      for (const [localProductId, delta] of stockDeltaByProduct.entries()) {
+        if (!Number.isFinite(delta) || delta === 0) continue;
+        await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [delta, localProductId]);
+      }
+
+      if (!options.updateCost && !options.updatePrice) return;
+
+      for (const [localProductId, pricing] of latestPricingByProduct.entries()) {
+        const row = await db.queryFirst<{ data: string | null }>(
+          `SELECT data
+           FROM products
+           WHERE local_id = ?
+           LIMIT 1`,
+          [localProductId]
+        );
+
+        const patch: Record<string, any> = {};
+        if (options.updateCost) patch.cost_cents = pricing.costCents;
+        if (options.updatePrice) patch.price_cents = pricing.priceCents;
+
+        const parsed = parseJsonObject(row?.data);
+        if (parsed) {
+          patch.data = JSON.stringify({
+            ...parsed,
+            ...(options.updateCost ? { costCents: pricing.costCents } : {}),
+            ...(options.updatePrice ? { priceCents: pricing.priceCents } : {}),
+          });
+        }
+
+        if (Object.keys(patch).length > 0) {
+          await db.update('products', localProductId, patch);
+        }
+      }
+    },
+    [resolveLocalProductId]
+  );
 
   const handleSave = async () => {
     if (!supplierId || !selectedSupplier) {
@@ -445,29 +743,49 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
     }
 
     const normalizedItems = items.map((item) => {
+      const matchedProduct = products.find((product) => product.id === item.productId) || null;
       const qty = Number(item.qty || 0);
       const unitCostCents = toCents(item.unitCost);
       const discountRaw = (item.discountPercent || '').trim();
       const discountPercent = parseNumberFromInput(discountRaw);
       const hasDiscount = discountRaw.length > 0 && Number.isFinite(discountPercent) && discountPercent > 0;
       const discountPercentBp = hasDiscount ? Math.round(discountPercent * 100) : undefined;
+      const resolvedDiscountPercentBp =
+        discountPercentBp ?? normalizeDiscountBp(selectedSupplier.discountPercentBp);
       const saleMarginRaw = (item.saleMarginPercent || '').trim();
       const saleMarginPercent = parseNumberFromInput(saleMarginRaw);
       const hasSaleMargin = saleMarginRaw.length > 0 && Number.isFinite(saleMarginPercent) && saleMarginPercent >= 0;
-      const saleMarginBp = hasSaleMargin ? Math.round(saleMarginPercent * 100) : undefined;
+      const parsedSaleMarginBp = hasSaleMargin ? Math.round(saleMarginPercent * 100) : undefined;
       const salePriceRaw = (item.salePrice || '').trim();
       const salePrice = parseNumberFromInput(salePriceRaw);
-      const hasSalePrice = salePriceRaw.length > 0 && Number.isFinite(salePrice) && salePrice > 0;
-      const salePriceCents = hasSalePrice ? Math.round(salePrice * 100) : undefined;
+      const hasSalePrice = salePriceRaw.length > 0 && Number.isFinite(salePrice) && salePrice >= 0;
+      const parsedSalePriceCents = hasSalePrice ? Math.round(salePrice * 100) : undefined;
+
+      const pricing = resolvePurchaseSalePricingMobile({
+        unitCostCents,
+        discountPercentBp: resolvedDiscountPercentBp,
+        purchaseIncludesItbis: Boolean(selectedSupplier.chargesItbis),
+        purchaseItbisRateBp: getPurchaseItbisRateBp(selectedSupplier),
+        productItbisRateBp: matchedProduct?.itbisRateBp ?? 0,
+        defaultSaleMarginBp,
+        saleMarginBp: parsedSalePriceCents !== undefined ? undefined : parsedSaleMarginBp,
+        salePriceCents: parsedSalePriceCents,
+      });
+
       return {
-        productId: item.productId,
+        productId: String(item.productId || ''),
+        productServerId: matchedProduct?.serverId || null,
+        productName: item.productName || matchedProduct?.name || 'Producto',
         qty,
         unitCostCents,
-        discountPercentBp,
-        saleMarginBp,
-        salePriceCents,
+        discountPercentBp: resolvedDiscountPercentBp,
+        netCostCents: pricing.netCostCents,
+        salePriceCents: pricing.salePriceCents,
+        saleMarginBp: pricing.saleMarginBp,
         purchaseIncludesItbis: Boolean(selectedSupplier.chargesItbis),
-      };
+        appliedItbisRateBp: matchedProduct?.itbisRateBp ?? 0,
+        lineTotalCents: Math.round(pricing.netCostCents * qty),
+      } as PurchaseStoredItem;
     });
 
     if (normalizedItems.some((item) => !item.productId || item.qty <= 0 || item.unitCostCents < 0)) {
@@ -475,29 +793,176 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       return;
     }
 
+    if (normalizedItems.some((item) => !products.some((product) => product.id === item.productId))) {
+      Alert.alert('Error', 'Hay productos no disponibles localmente. Sincroniza y vuelve a intentarlo.');
+      return;
+    }
+
     setLoading(true);
     try {
-      const headers = await resolveHeaders();
-      const payload = {
-        supplierId: supplierId || null,
-        supplierName: supplierName.trim() || null,
+      const now = Date.now();
+      const localId = isEditMode ? persistedLocalId || String(purchaseId) : generateLocalId();
+
+      let previousItems: PurchaseStoredItem[] = [];
+      let purchasedAt = now;
+      let cancelledAt: number | null = null;
+      let serverId = persistedServerId;
+
+      if (isEditMode) {
+        const existingRow = await db.queryFirst<{
+          local_id: string;
+          server_id: string | null;
+          purchased_at: number | null;
+          cancelled_at: number | null;
+          data: string | null;
+        }>(
+          `SELECT local_id, server_id, purchased_at, cancelled_at, data
+           FROM purchases
+           WHERE local_id = ?
+           LIMIT 1`,
+          [localId]
+        );
+
+        if (!existingRow) {
+          Alert.alert('Error', 'No se pudo encontrar la compra para actualizar.');
+          setLoading(false);
+          return;
+        }
+
+        const parsedExisting = parseJsonObject(existingRow.data);
+        previousItems = normalizeStoredItems(parsedExisting?.items);
+        purchasedAt = Math.round(asNumber(existingRow.purchased_at) ?? asNumber(parsedExisting?.purchasedAt) ?? now);
+        cancelledAt = asNumber(existingRow.cancelled_at) ?? asNumber(parsedExisting?.cancelledAt) ?? null;
+        serverId = asString(existingRow.server_id) || asString(parsedExisting?.serverId) || asString(parsedExisting?.id) || serverId;
+      }
+
+      const computedTotalCents = normalizedItems.reduce((sum, item) => sum + Math.round(Number(item.lineTotalCents || 0)), 0);
+
+      const purchaseData = {
+        ...(serverId ? { id: serverId, serverId } : {}),
+        localId,
+        supplierId: selectedSupplier.id,
+        supplierServerId: selectedSupplier.serverId,
+        supplierName: selectedSupplier.name,
         notes: notes.trim() || null,
+        totalCents: computedTotalCents,
+        purchasedAt,
+        cancelledAt,
+        itemsCount: normalizedItems.length,
+        items: normalizedItems,
         updateProductCost,
         updateProductPrice,
-        items: normalizedItems,
+      };
+
+      await applyPurchaseEffectsLocally(previousItems, normalizedItems, {
+        updateCost: updateProductCost,
+        updatePrice: updateProductPrice,
+      });
+
+      const rowPatch = {
+        server_id: serverId,
+        supplier_name: selectedSupplier.name,
+        total_cents: computedTotalCents,
+        purchased_at: purchasedAt,
+        cancelled_at: cancelledAt,
+        synced: 0,
+        data: JSON.stringify(purchaseData),
       };
 
       if (isEditMode) {
-        await axios.put(`${API_URL}/api/purchases/${purchaseId}`, payload, { headers });
+        await db.update('purchases', localId, rowPatch);
       } else {
-        await axios.post(`${API_URL}/api/purchases`, payload, { headers });
+        await db.insert('purchases', {
+          local_id: localId,
+          ...rowPatch,
+        });
       }
 
-      Alert.alert('Éxito', isEditMode ? 'Compra actualizada correctamente' : 'Compra creada correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
-    } catch (error: any) {
-      console.error(isEditMode ? 'Error actualizando compra:' : 'Error creando compra:', error);
-      const apiError = error?.response?.data?.error;
-      Alert.alert('Error', apiError ? String(apiError) : isEditMode ? 'No se pudo actualizar la compra' : 'No se pudo crear la compra');
+      const queuePayload = {
+        ...(serverId ? { id: serverId } : {}),
+        supplierId: selectedSupplier.id,
+        supplierServerId: selectedSupplier.serverId,
+        supplierName: selectedSupplier.name,
+        notes: notes.trim() || null,
+        updateProductCost,
+        updateProductPrice,
+        items: normalizedItems.map((item) => ({
+          productId: item.productId,
+          productServerId: item.productServerId || null,
+          qty: item.qty,
+          unitCostCents: item.unitCostCents,
+          ...(typeof item.discountPercentBp === 'number' ? { discountPercentBp: item.discountPercentBp } : {}),
+          ...(typeof item.saleMarginBp === 'number' ? { saleMarginBp: item.saleMarginBp } : {}),
+          ...(typeof item.salePriceCents === 'number' ? { salePriceCents: item.salePriceCents } : {}),
+          purchaseIncludesItbis: item.purchaseIncludesItbis !== false,
+        })),
+      };
+
+      syncService.setGetTokenFunction(getToken);
+      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+
+      if (isEditMode) {
+        if (serverId) {
+          await db.runAsync(
+            "DELETE FROM sync_queue WHERE entity_type = 'purchase' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
+            [localId]
+          );
+          await syncService.queueOperation('purchase', 'update', queuePayload, localId);
+        } else {
+          await db.runAsync(
+            "DELETE FROM sync_queue WHERE entity_type = 'purchase' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
+            [localId]
+          );
+          const pendingCreate = await db.queryFirst<{ id: number }>(
+            `SELECT id
+             FROM sync_queue
+             WHERE entity_type = 'purchase'
+               AND entity_local_id = ?
+               AND action = 'create'
+               AND status IN ('pending','error')
+             ORDER BY created_at DESC
+             LIMIT 1`,
+            [localId]
+          );
+
+          if (pendingCreate?.id) {
+            await db.update(
+              'sync_queue',
+              String(pendingCreate.id),
+              {
+                data: JSON.stringify(queuePayload),
+                status: 'pending',
+                retry_count: 0,
+              },
+              'id'
+            );
+          } else {
+            await syncService.queueOperation('purchase', 'create', queuePayload, localId);
+          }
+        }
+      } else {
+        await db.runAsync(
+          "DELETE FROM sync_queue WHERE entity_type = 'purchase' AND entity_local_id = ? AND status IN ('pending','error')",
+          [localId]
+        );
+        await syncService.queueOperation('purchase', 'create', queuePayload, localId);
+      }
+
+      setPersistedLocalId(localId);
+      setPersistedServerId(serverId || null);
+
+      const successMessage = isOnlineRef.current
+        ? isEditMode
+          ? 'Compra guardada correctamente.'
+          : 'Compra creada correctamente.'
+        : isEditMode
+          ? 'Compra guardada localmente. Se sincronizará cuando vuelva la conexión.'
+          : 'Compra creada localmente. Se sincronizará cuando vuelva la conexión.';
+
+      Alert.alert('Éxito', successMessage, [{ text: 'OK', onPress: () => navigation.goBack() }]);
+    } catch (error) {
+      console.error(isEditMode ? 'Error actualizando compra local:' : 'Error creando compra local:', error);
+      Alert.alert('Error', isEditMode ? 'No se pudo guardar la compra' : 'No se pudo crear la compra');
     } finally {
       setLoading(false);
     }
@@ -523,15 +988,6 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
               </TouchableOpacity>
             }
           >
-            <Menu.Item
-              title="Sin proveedor"
-              onPress={() => {
-                setSupplierId(null);
-                setSupplierName('');
-                recalcAllItemsForSupplier(null);
-                setSupplierMenuVisible(false);
-              }}
-            />
             {suppliers.map((supplier) => (
               <Menu.Item
                 key={supplier.id}

@@ -35,7 +35,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
           if (clerkToken && subUserToken) {
             syncService.setGetTokenFunction(getToken);
             syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-            await syncService.fullSync(clerkToken);
+            await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           }
         } catch (error) {
           console.error('Error sincronizando clientes al abrir pantalla:', error);
@@ -85,7 +85,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
       if (clerkToken && subUserToken) {
         syncService.setGetTokenFunction(getToken);
         syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-        await syncService.fullSync(clerkToken);
+        await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       }
     } catch (error) {
       console.error('Error sincronizando clientes:', error);

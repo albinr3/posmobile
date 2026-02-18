@@ -2,16 +2,15 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText } from 'react-native';
 import { Searchbar, Text, Icon } from 'react-native-paper';
 import * as Print from 'expo-print';
-import axios from 'axios';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { useAuthStore } from '../../store/authStore';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -85,7 +84,6 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
   const { isOnline } = useSyncStore();
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
 
@@ -139,7 +137,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     }
 
     await db.update('payments', localPaymentId, {
-      synced: isOnline ? 1 : 0,
+      synced: 0,
       data: JSON.stringify({
         ...paymentData,
         id: item.id,
@@ -174,68 +172,37 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     }
 
     return localPaymentId;
-  }, [isOnline]);
+  }, []);
 
   const loadReceipts = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      if (!isOnline) {
-        const localRows = await loadLocalReceipts();
-        setReceipts(localRows);
-        return;
-      }
-      const clerkToken = await getToken();
-      if (!clerkToken || !subUserToken) {
-        const localRows = await loadLocalReceipts();
-        setReceipts(localRows);
-        return;
-      }
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-      const headers = {
-        Authorization: `Bearer ${clerkToken}`,
-        'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-        'X-SubUser-Token': subUserToken,
-        ...(accountId ? { 'X-Account-Id': accountId } : {}),
-      };
-
-      const response = await axios.get(`${API_URL}/api/payments`, { headers });
-      const rows = Array.isArray(response.data?.data) ? response.data.data : [];
-      const localIndexRows = await db.query<{ local_id: string; server_id?: string | null; receipt_code?: string | null }>(
-        'SELECT local_id, server_id, receipt_code FROM payments'
-      );
-      const byServer = new Map<string, string>();
-      const byReceipt = new Map<string, string>();
-      localIndexRows.forEach((r) => {
-        if (r.server_id) byServer.set(String(r.server_id), String(r.local_id));
-        if (r.receipt_code) byReceipt.set(String(r.receipt_code), String(r.local_id));
-      });
-
-      const mapped = rows.map((row: any) => ({
-        id: String(row.id),
-        localId: byServer.get(String(row.id)) || byReceipt.get(String(row.receiptCode || '')) || null,
-        serverId: String(row.id),
-        receiptCode: String(row.receiptCode || '-'),
-        amountCents: Number(row.amountCents || 0),
-        paymentMethod: String(row.method || 'EFECTIVO'),
-        customerName: String(row.customer?.name || 'Cliente'),
-        invoiceCode: row.sale?.invoiceCode ? String(row.sale.invoiceCode) : null,
-        reference: null,
-        notes: row.note ? String(row.note) : null,
-        createdAt: row.paidAt ? new Date(row.paidAt).getTime() : Date.now(),
-        cancelledAt: row.cancelledAt ? new Date(row.cancelledAt).getTime() : null,
-        arId: row.arId ? String(row.arId) : null,
-      })) as PaymentReceiptItem[];
-
-      setReceipts(mapped);
-    } catch (error) {
-      console.error('Error cargando recibos de pago:', error);
       const localRows = await loadLocalReceipts();
       setReceipts(localRows);
+    } catch (error) {
+      console.error('Error cargando recibos de pago:', error);
     } finally {
       setLoading(false);
+    }
+
+    try {
+      if (!isOnline) return;
+      const clerkToken = await getToken();
+      const subUserToken = useAuthStore.getState().subUserToken;
+      if (!clerkToken || !subUserToken) return;
+
+      syncService.setGetTokenFunction(() => getToken());
+      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+
+      const freshRows = await loadLocalReceipts();
+      setReceipts(freshRows);
+    } catch (error) {
+      console.error('Error sincronizando recibos de pago:', error);
+    } finally {
       setRefreshing(false);
     }
-  }, [accountId, getToken, isOnline, loadLocalReceipts, subUserToken]);
+  }, [getToken, isOnline, loadLocalReceipts]);
 
   loadReceiptsRef.current = loadReceipts;
 
@@ -284,44 +251,30 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         onPress: async () => {
           try {
             const cancelledAt = Date.now();
-            if (!isOnline) {
-              const localPaymentId = await applyLocalCancelledState(item, cancelledAt);
-              if (!item.serverId && !item.id) {
-                Alert.alert('Sync', 'No se puede cancelar offline: el pago aún no tiene id de servidor.');
-                return;
-              }
-              await syncService.queueOperation(
-                'payment',
-                'update',
-                {
-                  id: item.serverId || item.id,
-                  cancel: true,
-                  status: 'cancelled',
-                  cancelledAt,
-                },
-                localPaymentId || `payment_${item.id}`
-              );
-              Alert.alert('Recibo', 'Recibo marcado para cancelación. Se sincronizará cuando haya internet.');
-              await loadReceipts();
+            const serverPaymentId = item.serverId || null;
+            if (!serverPaymentId) {
+              Alert.alert('Sync', 'No se puede cancelar: el recibo aun no tiene id de servidor.');
               return;
             }
+            const localPaymentId = await applyLocalCancelledState(item, cancelledAt);
+            await syncService.queueOperation(
+              'payment',
+              'update',
+              {
+                id: serverPaymentId,
+                cancel: true,
+                status: 'cancelled',
+                cancelledAt,
+              },
+              localPaymentId || `payment_${serverPaymentId}`
+            );
 
-            const clerkToken = await getToken();
-            if (!clerkToken || !subUserToken) {
-              Alert.alert('Sesión', 'No hay sesión activa para cancelar recibos.');
-              return;
-            }
-            const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-            const headers = {
-              Authorization: `Bearer ${clerkToken}`,
-              'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-              'X-SubUser-Token': subUserToken,
-              ...(accountId ? { 'X-Account-Id': accountId } : {}),
-            };
-            await axios.post(`${API_URL}/api/payments/${item.id}/cancel`, {}, { headers });
-            await applyLocalCancelledState(item, cancelledAt);
-
-            Alert.alert('Recibo', 'Recibo cancelado.');
+            Alert.alert(
+              'Recibo',
+              isOnline
+                ? 'Recibo cancelado localmente. Se sincronizara en segundo plano.'
+                : 'Recibo marcado para cancelacion. Se sincronizara cuando haya internet.'
+            );
             await loadReceipts();
           } catch (error) {
             console.error('Error cancelando recibo de pago:', error);

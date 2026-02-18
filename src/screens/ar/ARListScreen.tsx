@@ -81,7 +81,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
     if (!clerkToken || !subUserTokenRef.current) return false;
     syncService.setGetTokenFunction(() => getTokenRef.current());
     syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken);
+    await syncService.fullSync(clerkToken, { ignoreCooldown: true });
     return true;
   }, []);
 
