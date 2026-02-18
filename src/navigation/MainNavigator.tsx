@@ -31,11 +31,14 @@ import { SupplierListScreen } from '../screens/suppliers/SupplierListScreen';
 import { AddSupplierScreen } from '../screens/suppliers/AddSupplierScreen';
 import { PurchaseListScreen } from '../screens/purchases/PurchaseListScreen';
 import { AddPurchaseScreen } from '../screens/purchases/AddPurchaseScreen';
+import { OperatingExpensesScreen } from '../screens/operating-expenses/OperatingExpensesScreen';
+import { AddOperatingExpenseScreen } from '../screens/operating-expenses/AddOperatingExpenseScreen';
 import { CustomerListScreen } from '../screens/customers/CustomerListScreen';
 import { AddCustomerScreen } from '../screens/customers/AddCustomerScreen';
 import { CustomerDetailScreen } from '../screens/customers/CustomerDetailScreen';
 import { ARListScreen } from '../screens/ar/ARListScreen';
 import { RegisterPaymentScreen } from '../screens/ar/RegisterPaymentScreen';
+import { PaymentReceiptsScreen } from '../screens/ar/PaymentReceiptsScreen';
 import { PrinterSettingsScreen } from '../screens/settings/PrinterSettingsScreen';
 import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
 import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
@@ -139,6 +142,14 @@ function ARStack() {
   );
 }
 
+function PaymentReceiptsStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="PaymentReceipts" component={PaymentReceiptsScreen} />
+    </Stack.Navigator>
+  );
+}
+
 function SettingsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
@@ -160,6 +171,15 @@ function BillingStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function OperatingExpensesStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="OperatingExpenses" component={OperatingExpensesScreen} />
+      <Stack.Screen name="AddOperatingExpense" component={AddOperatingExpenseScreen} />
     </Stack.Navigator>
   );
 }
@@ -267,7 +287,7 @@ function BottomTabs() {
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
   const { signOut } = useAuth();
-  const { logout } = useAuthStore();
+  const { logout, setSubUser } = useAuthStore();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, StatusBar.currentHeight || 0) + 6;
   const currentRoute = props.state.routeNames[props.state.index] || 'Home';
@@ -348,6 +368,14 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       (props.navigation as any).navigate('BillingMenu', { screen: 'InvoiceList' });
       return;
     }
+    if (key === 'payment_receipts') {
+      (props.navigation as any).navigate('PaymentReceiptsMenu', { screen: 'PaymentReceipts' });
+      return;
+    }
+    if (key === 'operating_expenses') {
+      (props.navigation as any).navigate('OperatingExpensesMenu', { screen: 'OperatingExpenses' });
+      return;
+    }
     if (key === 'ar') {
       (props.navigation as any).navigate('ARMenu', { screen: 'ARList' });
       return;
@@ -356,18 +384,37 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
   };
 
   const handleLogout = () => {
-    Alert.alert('Cerrar sesión', '¿Seguro que deseas cerrar sesión?', [
+    Alert.alert('Cerrar sesión', 'Esto cerrará el subusuario y la cuenta principal (correo). ¿Deseas continuar?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Cerrar sesión',
         style: 'destructive',
         onPress: async () => {
           try {
-            await logout();
+            // Cerrar primero sesión de Clerk para que AuthNavigator no se inicialice en SelectUser.
             await signOut();
+            await logout();
           } catch (error) {
             console.error('Error cerrando sesión:', error);
             Alert.alert('Sesión', 'No se pudo cerrar sesión. Intenta de nuevo.');
+          }
+        },
+      },
+    ]);
+  };
+
+  const handleSwitchUser = () => {
+    Alert.alert('Cambiar usuario', 'Se cerrará el subusuario actual y volverás a selección de usuario.', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Cambiar',
+        onPress: async () => {
+          try {
+            await setSubUser(null, null, null);
+            props.navigation.closeDrawer();
+          } catch (error) {
+            console.error('Error cambiando subusuario:', error);
+            Alert.alert('Usuario', 'No se pudo cambiar de usuario.');
           }
         },
       },
@@ -404,6 +451,8 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'suppliers' && currentRoute === 'SuppliersMenu') ||
             (item.key === 'purchases' && currentRoute === 'PurchasesMenu') ||
             (item.key === 'billing' && currentRoute === 'BillingMenu') ||
+            (item.key === 'payment_receipts' && currentRoute === 'PaymentReceiptsMenu') ||
+            (item.key === 'operating_expenses' && currentRoute === 'OperatingExpensesMenu') ||
             (item.key === 'ar' && currentRoute === 'ARMenu');
 
           return (
@@ -427,12 +476,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       <TouchableOpacity
         style={styles.whatsAppButton}
         onPress={async () => {
-          const rawNumber = (process.env.EXPO_PUBLIC_WHATSAPP_SUPPORT_NUMBER || process.env.WHATSAPP_PHONE_NUMBER_ID || '').replace(/\D/g, '');
-          if (!rawNumber) {
-            Alert.alert('WhatsApp', 'Configura EXPO_PUBLIC_WHATSAPP_SUPPORT_NUMBER para abrir el chat.');
-            return;
-          }
-          const url = `https://wa.me/${rawNumber}`;
+          const url = 'https://wa.me/18499254434?text=Hola%20MOVOPos';
           const supported = await Linking.canOpenURL(url);
           if (!supported) {
             Alert.alert('WhatsApp', 'No se pudo abrir WhatsApp en este dispositivo.');
@@ -443,6 +487,11 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       >
         <Icon source="whatsapp" size={22} color="#22C55E" />
         <Text style={styles.whatsAppText}>Ayuda por WhatsApp</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity style={styles.switchUserButton} onPress={handleSwitchUser}>
+        <Icon source="account-switch-outline" size={22} color={ui.colors.primary} />
+        <Text style={styles.switchUserText}>Cambiar usuario</Text>
       </TouchableOpacity>
 
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
@@ -477,6 +526,8 @@ export function MainNavigator() {
       <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
       <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
       <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
+      <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
+      <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
       <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
       <Drawer.Screen name="Reports" component={DashboardScreen} options={{ title: 'Reportes' }} />
       <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
@@ -568,6 +619,24 @@ const styles = StyleSheet.create({
   },
   logoutText: {
     color: '#DC2626',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  switchUserButton: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  switchUserText: {
+    color: ui.colors.primary,
     fontSize: 15,
     fontWeight: '800',
   },

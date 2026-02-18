@@ -6,6 +6,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider, MD3LightTheme } from 'react-native-paper';
 import { ClerkProvider, useAuth, useUser } from '@clerk/clerk-expo';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { db } from './src/database/Database';
 import { syncService } from './src/services/sync/SyncService';
@@ -22,7 +24,8 @@ const theme = {
 };
 
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
-const LOCAL_DB_WIPED_ONCE_KEY = 'movopos_local_db_wiped_once_v1';
+const LOCAL_DB_WIPED_ONCE_KEY = 'movopos_local_db_wiped_once_v2';
+const LOCAL_HARD_RESET_ONCE_KEY = 'movopos_local_hard_reset_once_v1';
 const APP_AUTH_DEBUG = false;
 
 const tokenCache = {
@@ -55,6 +58,9 @@ function RootApp() {
     initializeApp();
     return () => {
       syncService.destroy();
+      db.destroy().catch((error) => {
+        console.warn('No se pudo cerrar SQLite al desmontar App:', error);
+      });
     };
   }, []);
 
@@ -142,6 +148,55 @@ function RootApp() {
   const initializeApp = async () => {
     try {
       if (APP_AUTH_DEBUG) console.log('[App] initializeApp() start');
+      // Hard reset local one-shot: borra SQLite + session storage para iniciar en cero.
+      const hardResetDone = await SecureStore.getItemAsync(LOCAL_HARD_RESET_ONCE_KEY);
+      if (hardResetDone !== '1') {
+        try {
+          await syncService.destroy();
+          await db.destroy();
+        } catch (error) {
+          console.warn('No se pudo detener servicios antes de hard reset:', error);
+        }
+
+        try {
+          await AsyncStorage.clear();
+        } catch (error) {
+          console.warn('No se pudo limpiar AsyncStorage en hard reset:', error);
+        }
+
+        const secureKeys = [
+          'movopos_subuser_token',
+          'movopos_subuser_data',
+          'movopos_account_id',
+          LOCAL_DB_WIPED_ONCE_KEY,
+        ];
+        for (const key of secureKeys) {
+          try {
+            await SecureStore.deleteItemAsync(key);
+          } catch (error) {
+            console.warn(`No se pudo borrar SecureStore key ${key}:`, error);
+          }
+        }
+
+        try {
+          const sqliteDir = `${LegacyFileSystem.documentDirectory || ''}SQLite`;
+          const files = await LegacyFileSystem.readDirectoryAsync(sqliteDir);
+          for (const file of files) {
+            if (!file.toLowerCase().startsWith('movopos')) continue;
+            const path = `${sqliteDir}/${file}`;
+            try {
+              await LegacyFileSystem.deleteAsync(path, { idempotent: true });
+            } catch (error) {
+              console.warn(`No se pudo borrar archivo SQLite ${file}:`, error);
+            }
+          }
+        } catch (error) {
+          console.warn('No se pudo limpiar carpeta SQLite en hard reset:', error);
+        }
+
+        await SecureStore.setItemAsync(LOCAL_HARD_RESET_ONCE_KEY, '1');
+      }
+
       // Inicializar base de datos
       await db.init();
 

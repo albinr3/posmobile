@@ -61,6 +61,7 @@ class SyncService {
   private getSubUserTokenFn: (() => Promise<string | null>) | null = null;
   private backendAuthCooldownUntil = 0;
   private lastAuthWaitLogAt = 0;
+  private lastFullSyncAttemptAt = 0;
 
   // Método para establecer la función que obtiene el token de Clerk
   setTokenGetter(fn: () => Promise<string | null>) {
@@ -110,6 +111,12 @@ class SyncService {
 
   async fullSync(authToken: string) {
     if (this.isSyncing) return;
+    const now = Date.now();
+    if (now - this.lastFullSyncAttemptAt < 15_000) {
+      if (SYNC_DEBUG) console.log('[SyncService] fullSync() omitido por cooldown');
+      return;
+    }
+    this.lastFullSyncAttemptAt = now;
     if (SYNC_DEBUG) console.log('[SyncService] fullSync() start', { authToken: shortToken(authToken) });
     this.isSyncing = true;
     useSyncStore.getState().setIsSyncing(true);
@@ -314,15 +321,32 @@ class SyncService {
     // Preparar datos según el tipo de entidad
     const requestData = await this.prepareRequestData(item.entity_type, data, item.action);
     
+    const paymentCancelRequested =
+      item.entity_type === 'payment' &&
+      item.action === 'update' &&
+      (data?.cancel === true ||
+        String(data?.status || '').toLowerCase() === 'cancelled' ||
+        Boolean(data?.cancelledAt));
+
+    let method: 'DELETE' | 'PUT' | 'POST' =
+      item.action === 'delete' ? 'DELETE' : item.action === 'update' ? 'PUT' : 'POST';
     let url = `${API_URL}/api/${endpoint}`;
-    if (item.action === 'update' && data.id) {
+    if (paymentCancelRequested) {
+      if (!data?.id) {
+        throw new Error('No se puede cancelar pago sin id de servidor');
+      }
+      method = 'POST';
+      url = `${API_URL}/api/payments/${data.id}/cancel`;
+    } else if (item.action === 'delete' && data?.id) {
+      url = `${url}/${data.id}`;
+    } else if (item.action === 'update' && data.id) {
       url = `${url}/${data.id}`;
     }
 
     if (SYNC_DEBUG) {
       console.log('[SyncService] syncItem() request', {
         queueId: item.id,
-        method: item.action === 'delete' ? 'DELETE' : item.action === 'update' ? 'PUT' : 'POST',
+        method,
         url,
         accountId,
         dataKeys: requestData ? Object.keys(requestData) : [],
@@ -332,7 +356,7 @@ class SyncService {
     }
     
     const response = await axios({
-      method: item.action === 'delete' ? 'DELETE' : item.action === 'update' ? 'PUT' : 'POST',
+      method,
       url,
       data: requestData,
       timeout: 25000,
@@ -410,8 +434,20 @@ class SyncService {
       }, 'local_id');
     } else if (item.action === 'update') {
       const table = this.getTableName(item.entity_type);
-      await db.update(table, item.entity_local_id, {
+      const updatePatch: any = {
         synced: 1,
+      };
+      if (item.entity_type === 'payment' && paymentCancelRequested) {
+        const now = data?.cancelledAt || Date.now();
+        updatePatch.data = JSON.stringify({
+          ...(data || {}),
+          status: 'cancelled',
+          cancel: true,
+          cancelledAt: now,
+        });
+      }
+      await db.update(table, item.entity_local_id, {
+        ...updatePatch,
         ...(item.entity_type === 'product' && Array.isArray(data?.imageUrls)
           ? { data: JSON.stringify({ ...data, imageUrls: data.imageUrls }) }
           : {}),
@@ -637,6 +673,19 @@ class SyncService {
         };
         }
       case 'payment':
+        {
+        const cancelRequested =
+          action === 'update' &&
+          (data?.cancel === true ||
+            String(data?.status || '').toLowerCase() === 'cancelled' ||
+            Boolean(data?.cancelledAt));
+        if (cancelRequested) {
+          return {
+            cancel: true,
+            cancelledAt: data?.cancelledAt || Date.now(),
+          };
+        }
+
         let resolvedArId = data.arId || data.accountReceivableId || data.arServerId || null;
         if (resolvedArId) {
           const ar = await db.queryFirst<{ server_id?: string }>(
@@ -651,6 +700,7 @@ class SyncService {
           method: data.method || data.paymentMethod,
           note: data.note || null,
         };
+        }
       case 'quote':
         let resolvedQuoteCustomerId: string | null = null;
         if (data.customerId) {
@@ -708,6 +758,22 @@ class SyncService {
           notes: data.notes || null,
           validUntil: data.validUntil || null,
         };
+      case 'operating_expense':
+        {
+          const expenseDate = data?.expenseDate
+            ? new Date(String(data.expenseDate)).toISOString()
+            : new Date().toISOString();
+          if (action === 'delete') {
+            return {};
+          }
+          return {
+            description: String(data?.description || '').trim(),
+            amountCents: Number(data?.amountCents || 0),
+            expenseDate,
+            category: data?.category ? String(data.category).trim() : null,
+            notes: data?.notes ? String(data.notes).trim() : null,
+          };
+        }
       default:
         return data;
     }
@@ -1304,6 +1370,145 @@ class SyncService {
           }
         );
       }
+
+      // Descargar recibos de pago (incluye cancelados para historial)
+      const paymentsResponse = await axios.get(`${API_URL}/api/payments`, {
+        headers,
+        params: { take: 500 },
+      });
+      if (SYNC_DEBUG) {
+        console.log('[SyncService] downloadFromServer() payments status', {
+          status: paymentsResponse.status,
+          count: (paymentsResponse.data?.data || paymentsResponse.data || []).length,
+        });
+      }
+
+      const payments = paymentsResponse.data?.data || paymentsResponse.data || [];
+      for (const payment of payments) {
+        const serverPaymentId = String(payment?.id || '');
+        if (!serverPaymentId) continue;
+
+        const arServerId = payment?.arId ? String(payment.arId) : null;
+        let arLocalId: string | null = null;
+        if (arServerId) {
+          const localAr = await db.queryFirst<{ local_id?: string }>(
+            'SELECT local_id FROM accounts_receivable WHERE server_id = ?',
+            [arServerId]
+          );
+          arLocalId = localAr?.local_id ? String(localAr.local_id) : null;
+        }
+
+        const paidAtMs =
+          payment?.paidAt && !Number.isNaN(new Date(payment.paidAt).getTime())
+            ? new Date(payment.paidAt).getTime()
+            : Date.now();
+        const cancelledAtMs =
+          payment?.cancelledAt && !Number.isNaN(new Date(payment.cancelledAt).getTime())
+            ? new Date(payment.cancelledAt).getTime()
+            : null;
+
+        const paymentData = {
+          id: serverPaymentId,
+          serverId: serverPaymentId,
+          receiptCode: String(payment?.receiptCode || ''),
+          receiptNumber: Number(payment?.receiptNumber || 0),
+          arId: arLocalId,
+          arServerId,
+          customerId: payment?.customer?.id ? String(payment.customer.id) : null,
+          customerName: payment?.customer?.name ? String(payment.customer.name) : 'Cliente',
+          amountCents: Number(payment?.amountCents || 0),
+          method: String(payment?.method || 'EFECTIVO'),
+          note: payment?.note || null,
+          createdAt: paidAtMs,
+          paidAt: paidAtMs,
+          cancelledAt: cancelledAtMs,
+        };
+
+        const paymentRow = {
+          receipt_code: paymentData.receiptCode || `R-${serverPaymentId}`,
+          amount_cents: paymentData.amountCents,
+          ar_id: arLocalId,
+          synced: 1,
+          data: JSON.stringify(paymentData),
+        };
+
+        const existsByServer = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM payments WHERE server_id = ?',
+          [serverPaymentId]
+        );
+        if (existsByServer?.local_id) {
+          await db.update('payments', serverPaymentId, paymentRow, 'server_id');
+          continue;
+        }
+
+        const existsByReceipt = paymentData.receiptCode
+          ? await db.queryFirst<{ local_id?: string }>(
+              'SELECT local_id FROM payments WHERE receipt_code = ?',
+              [paymentData.receiptCode]
+            )
+          : null;
+        if (existsByReceipt?.local_id) {
+          await db.update(
+            'payments',
+            String(existsByReceipt.local_id),
+            { server_id: serverPaymentId, ...paymentRow }
+          );
+          continue;
+        }
+
+        await db.insert('payments', {
+          local_id: `server_payment_${serverPaymentId}`,
+          server_id: serverPaymentId,
+          ...paymentRow,
+        });
+      }
+
+      // Descargar gastos operativos
+      const operatingExpensesResponse = await axios.get(`${API_URL}/api/operating-expenses`, {
+        headers,
+      });
+      const operatingExpenses = operatingExpensesResponse.data?.data || operatingExpensesResponse.data || [];
+      for (const expense of operatingExpenses) {
+        const expenseId = String(expense?.id || '');
+        if (!expenseId) continue;
+        const expenseDateMs =
+          expense?.expenseDate && !Number.isNaN(new Date(expense.expenseDate).getTime())
+            ? new Date(expense.expenseDate).getTime()
+            : Date.now();
+        const expenseData = {
+          id: expenseId,
+          serverId: expenseId,
+          description: String(expense?.description || ''),
+          amountCents: Number(expense?.amountCents || 0),
+          expenseDate: new Date(expenseDateMs).toISOString(),
+          category: expense?.category ? String(expense.category) : null,
+          notes: expense?.notes ? String(expense.notes) : null,
+          createdAt: expense?.createdAt ? String(expense.createdAt) : null,
+          updatedAt: expense?.updatedAt ? String(expense.updatedAt) : null,
+        };
+        const expenseRow = {
+          description: expenseData.description,
+          amount_cents: expenseData.amountCents,
+          expense_date: expenseDateMs,
+          category: expenseData.category,
+          notes: expenseData.notes,
+          synced: 1,
+          data: JSON.stringify(expenseData),
+        };
+        const exists = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM operating_expenses WHERE server_id = ?',
+          [expenseId]
+        );
+        if (exists?.local_id) {
+          await db.update('operating_expenses', expenseId, expenseRow, 'server_id');
+        } else {
+          await db.insert('operating_expenses', {
+            local_id: `server_opex_${expenseId}`,
+            server_id: expenseId,
+            ...expenseRow,
+          });
+        }
+      }
     } catch (error: any) {
       console.error('❌ [SyncService] Error descargando datos del servidor:', error);
       if (error.response) {
@@ -1333,6 +1538,7 @@ class SyncService {
       'product': 'products',
       'customer': 'customers',
       'payment': 'payments',
+      'operating_expense': 'operating-expenses',
     };
     return endpoints[entityType] || entityType;
   }
@@ -1344,6 +1550,7 @@ class SyncService {
       'product': 'products',
       'customer': 'customers',
       'payment': 'payments',
+      'operating_expense': 'operating_expenses',
     };
     return tables[entityType] || entityType;
   }

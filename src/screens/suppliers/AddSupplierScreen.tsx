@@ -23,6 +23,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
   const [address, setAddress] = useState('');
   const [discountPercent, setDiscountPercent] = useState('');
   const [chargesItbis, setChargesItbis] = useState(false);
+  const [itbisRatePercent, setItbisRatePercent] = useState('18');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingSupplier, setLoadingSupplier] = useState(false);
@@ -66,6 +67,11 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
           setNotes(String(item.notes || ''));
           setChargesItbis(Boolean(item.chargesItbis));
           setDiscountPercent(item.discountPercentBp ? String(Number(item.discountPercentBp) / 100) : '');
+          setItbisRatePercent(
+            item.itbisRateBp !== null && item.itbisRateBp !== undefined
+              ? String(Number(item.itbisRateBp) / 100)
+              : '18'
+          );
         } catch (error: any) {
           if (!isActive) return;
           console.error('Error cargando proveedor:', error);
@@ -108,6 +114,11 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
       };
       const discountValue = Number((discountPercent || '0').replace(',', '.'));
       const discountPercentBp = Number.isFinite(discountValue) && discountValue > 0 ? Math.round(discountValue * 100) : 0;
+      const itbisRateValue = Number((itbisRatePercent || '18').replace(',', '.'));
+      const itbisRateBp =
+        chargesItbis && Number.isFinite(itbisRateValue)
+          ? Math.min(10000, Math.max(0, Math.round(itbisRateValue * 100)))
+          : null;
 
       const payload = {
         name: name.trim(),
@@ -118,6 +129,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
         notes: notes.trim() || null,
         discountPercentBp,
         chargesItbis,
+        itbisRateBp,
       };
 
       if (isEditMode) {
@@ -210,9 +222,24 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
             <Checkbox status={chargesItbis ? 'checked' : 'unchecked'} onPress={() => setChargesItbis((prev) => !prev)} color={ui.colors.primary} />
             <View style={styles.checkTextWrap}>
               <Text style={styles.checkTitle}>Sumar ITBIS en compras</Text>
-              <Text style={styles.fieldHelp}>Si se marca, se sumará el 18% de ITBIS al costo de los productos de este proveedor.</Text>
+              <Text style={styles.fieldHelp}>Si se marca, se sumará ITBIS al costo según la tasa configurada abajo.</Text>
             </View>
           </View>
+          {chargesItbis ? (
+            <>
+              <Text style={styles.fieldLabel}>Tasa ITBIS de compra (%)</Text>
+              <TextInput
+                placeholder="Ej: 18 para 18%"
+                value={itbisRatePercent}
+                onChangeText={setItbisRatePercent}
+                mode="outlined"
+                keyboardType="decimal-pad"
+                style={styles.input}
+                outlineColor={ui.colors.border}
+                activeOutlineColor={ui.colors.primary}
+              />
+            </>
+          ) : null}
           <TextInput
             label="Notas"
             value={notes}

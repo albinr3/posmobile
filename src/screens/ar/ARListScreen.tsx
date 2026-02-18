@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as RNText } from 'react-native';
 import { Text, Chip, Button, Searchbar } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
@@ -30,56 +30,15 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const { subUserToken } = useAuthStore();
   const { isOnline } = useSyncStore();
   const isSyncingOnFocusRef = useRef(false);
+  const getTokenRef = useRef(getToken);
+  const subUserTokenRef = useRef(subUserToken);
+  const isOnlineRef = useRef(isOnline);
 
-  const syncARBestEffort = useCallback(async () => {
-    if (!isOnline) return false;
-    const clerkToken = await getToken();
-    if (!clerkToken || !subUserToken) return false;
-    syncService.setGetTokenFunction(getToken);
-    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken);
-    return true;
-  }, [getToken, isOnline, subUserToken]);
+  getTokenRef.current = getToken;
+  subUserTokenRef.current = subUserToken;
+  isOnlineRef.current = isOnline;
 
-  useFocusEffect(
-    useCallback(() => {
-      if (isSyncingOnFocusRef.current) return;
-      isSyncingOnFocusRef.current = true;
-      let active = true;
-
-      const syncAndLoad = async () => {
-        setLoading(true);
-        await loadARItems();
-
-        if (!active || !isOnline) {
-          isSyncingOnFocusRef.current = false;
-          return;
-        }
-
-        syncARBestEffort()
-          .then(async (synced) => {
-            if (!active || !synced) return;
-            await loadARItems();
-          })
-          .catch((error) => {
-            console.error('Error sincronizando AR al abrir pantalla:', error);
-          })
-          .finally(() => {
-            if (active) {
-              isSyncingOnFocusRef.current = false;
-            }
-          });
-      };
-
-      syncAndLoad();
-      return () => {
-        active = false;
-        isSyncingOnFocusRef.current = false;
-      };
-    }, [isOnline, syncARBestEffort])
-  );
-
-  const loadARItems = async () => {
+  const loadARItems = useCallback(async () => {
     try {
       const result = await db.query<any>(
         `SELECT * FROM accounts_receivable
@@ -114,12 +73,60 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
+
+  const syncARBestEffort = useCallback(async () => {
+    if (!isOnlineRef.current) return false;
+    const clerkToken = await getTokenRef.current();
+    if (!clerkToken || !subUserTokenRef.current) return false;
+    syncService.setGetTokenFunction(() => getTokenRef.current());
+    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    await syncService.fullSync(clerkToken);
+    return true;
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isSyncingOnFocusRef.current) return;
+      isSyncingOnFocusRef.current = true;
+      let active = true;
+
+      const syncAndLoad = async () => {
+        setLoading(true);
+        await loadARItems();
+
+        if (!active || !isOnlineRef.current) {
+          isSyncingOnFocusRef.current = false;
+          return;
+        }
+
+        syncARBestEffort()
+          .then(async (synced) => {
+            if (!active || !synced) return;
+            await loadARItems();
+          })
+          .catch((error) => {
+            console.error('Error sincronizando AR al abrir pantalla:', error);
+          })
+          .finally(() => {
+            if (active) {
+              isSyncingOnFocusRef.current = false;
+            }
+          });
+      };
+
+      syncAndLoad();
+      return () => {
+        active = false;
+        isSyncingOnFocusRef.current = false;
+      };
+    }, [loadARItems, syncARBestEffort])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      if (isOnline) {
+      if (isOnlineRef.current) {
         await syncARBestEffort();
       }
     } catch (error) {
@@ -158,9 +165,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
       <TouchableOpacity style={styles.arCard} onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })}>
         <View style={styles.arHeader}>
           <Text style={styles.customerName}>{item.customerName}</Text>
-          <Chip compact style={[styles.statusChip, { backgroundColor: `${statusColor}20` }]} textStyle={[styles.statusChipText, { color: statusColor }]}>
-            {isOverdue(item.dueDate) ? 'Vencida' : item.status}
-          </Chip>
+          <View style={[styles.statusBadge, { backgroundColor: `${statusColor}20` }]}>
+            <RNText style={[styles.statusBadgeText, { color: statusColor }]}>
+              {isOverdue(item.dueDate) ? 'Vencida' : item.status}
+            </RNText>
+          </View>
         </View>
         <Text style={styles.invoiceText}>Factura: {item.invoiceCode || 'N/A'}</Text>
 
@@ -314,8 +323,19 @@ const styles = StyleSheet.create({
   },
   arHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flex: 1, marginRight: 8 },
-  statusChip: { height: 28 },
-  statusChipText: { fontSize: 11, fontWeight: '700' },
+  statusBadge: {
+    minHeight: 32,
+    borderRadius: ui.radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statusBadgeText: {
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '700',
+  },
   invoiceText: { color: ui.colors.textMuted, fontSize: 12, marginBottom: 6 },
   progressText: { color: ui.colors.textMuted, fontSize: 11, marginBottom: 5 },
   progressBarBg: { height: 8, borderRadius: 8, backgroundColor: '#EEEAF6', overflow: 'hidden' },

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Text, Avatar, Button } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
 import { ui } from '../../theme/ui';
+import { useAuthStore } from '../../store/authStore';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
 
@@ -26,7 +27,8 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
   const [account, setAccount] = useState<{ id: string; name: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { getToken } = useAuth();
+  const { getToken, signOut } = useAuth();
+  const { logout } = useAuthStore();
 
   useEffect(() => {
     loadSubUsers();
@@ -67,6 +69,29 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
       username: selectedUser.username,
       accountId: account?.id,
     });
+  };
+
+  const handleClerkLogout = () => {
+    Alert.alert('Cerrar sesión', '¿Deseas cerrar la sesión principal (correo)?', [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Cerrar sesión',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await signOut();
+            await logout();
+            navigation.reset({
+              index: 0,
+              routes: [{ name: 'Login' }],
+            });
+          } catch (error) {
+            console.error('Error cerrando sesión de Clerk:', error);
+            Alert.alert('Sesión', 'No se pudo cerrar sesión. Intenta de nuevo.');
+          }
+        },
+      },
+    ]);
   };
 
   if (loading) {
@@ -126,6 +151,16 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
             </TouchableOpacity>
           ))
         )}
+
+        <Button
+          mode="outlined"
+          style={styles.logoutButton}
+          textColor={ui.colors.danger}
+          onPress={handleClerkLogout}
+          icon="logout"
+        >
+          Cerrar sesión de correo
+        </Button>
       </ScrollView>
     </SafeAreaView>
   );
@@ -172,5 +207,10 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { color: ui.colors.text, fontSize: 18, fontWeight: '700' },
   emptySubtitle: { color: ui.colors.textMuted, marginTop: 6 },
+  logoutButton: {
+    marginTop: 14,
+    borderColor: '#F3B4B4',
+    backgroundColor: '#FFF7F7',
+  },
 });
 

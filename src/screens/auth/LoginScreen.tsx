@@ -6,6 +6,7 @@ import {
   Platform,
   TouchableOpacity,
   TextInput,
+  Image,
 } from 'react-native';
 import { Button, Text } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -120,6 +121,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
           </Button>
 
           <TouchableOpacity onPress={handleGoogle} disabled={loading} style={styles.googleButton}>
+            <Image source={require('../../../assets/search.png')} style={styles.googleIcon} resizeMode="contain" />
             <Text style={styles.googleButtonText}>Continuar con Google</Text>
           </TouchableOpacity>
         </View>
@@ -187,9 +189,11 @@ const styles = StyleSheet.create({
     borderRadius: ui.radius.lg,
     borderWidth: 1,
     borderColor: ui.colors.border,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  googleIcon: { width: 18, height: 18, marginRight: 8 },
   googleButtonText: { color: ui.colors.text, fontWeight: '600' },
 });
 
