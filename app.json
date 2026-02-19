@@ -25,8 +25,7 @@
         "NSCameraUsageDescription": "MOVOPos necesita acceso a la cámara para escanear códigos de barras",
         "NSFaceIDUsageDescription": "MOVOPos usa Face ID para autenticación segura",
         "NSBluetoothAlwaysUsageDescription": "MOVOPos necesita Bluetooth para conectar con impresoras térmicas",
-        "NSBluetoothPeripheralUsageDescription": "MOVOPos necesita Bluetooth para conectar con impresoras térmicas",
-        "NSLocationWhenInUseUsageDescription": "MOVOPos usa tu ubicación para registrar el lugar de las ventas"
+        "NSBluetoothPeripheralUsageDescription": "MOVOPos necesita Bluetooth para conectar con impresoras térmicas"
       }
     },
     "android": {
@@ -42,8 +41,6 @@
         "BLUETOOTH_ADMIN",
         "BLUETOOTH_CONNECT",
         "BLUETOOTH_SCAN",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
         "VIBRATE",
         "RECEIVE_BOOT_COMPLETED"
       ]

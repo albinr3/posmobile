@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, Alert, ScrollView, Image } from 'react-native';
-import { Text, Surface, Searchbar, Button, IconButton, TextInput, Divider, ActivityIndicator } from 'react-native-paper';
+import { View, StyleSheet, Alert, ScrollView, Image, TouchableOpacity } from 'react-native';
+import { Text, Surface, Searchbar, Button, IconButton, TextInput, Divider, ActivityIndicator, Icon } from 'react-native-paper';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
@@ -86,6 +86,8 @@ interface CustomerOption {
 
 interface ReturnListItem {
   id: string;
+  localId: string;
+  serverId: string | null;
   returnCode: string;
   saleId: string;
   totalCents: number;
@@ -218,8 +220,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         try {
           const clerkToken = await getToken();
           if (clerkToken) {
-            syncService.setGetTokenFunction(() => getToken());
-            syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+            syncService.setTokenGetter(() => getToken());
+            syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
             await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           }
         } catch (syncError) {
@@ -281,6 +283,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
 
         mapped.push({
           id: String(row.server_id || row.local_id),
+          localId,
+          serverId: row.server_id ? String(row.server_id) : null,
           returnCode: String(row.return_code || parsed?.returnCode || `DEV-LOCAL-${localId.slice(-6)}`),
           saleId: String(parsed?.saleId || saleServerId || saleLocalId || ''),
           totalCents: Number(parsed?.totalCents || row.total_cents || 0),
@@ -348,6 +352,126 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         (Number(returnItem.unitPriceCents) || 0) * (Number(returnItem.qty) || 0),
     })),
   });
+
+  const handleCancelReturn = (item: ReturnListItem) => {
+    if (item.cancelledAt) {
+      Alert.alert('Devolucion', 'Esta devolucion ya esta cancelada.');
+      return;
+    }
+
+    if (item.serverId) {
+      Alert.alert(
+        'No disponible',
+        'Solo se pueden cancelar devoluciones que aun no se han sincronizado.'
+      );
+      return;
+    }
+
+    Alert.alert('Cancelar devolucion', `¿Seguro que deseas cancelar ${item.returnCode}?`, [
+      { text: 'No', style: 'cancel' },
+      {
+        text: 'Si, cancelar',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            const cancelledAt = Date.now();
+            const returnRow = await db.queryFirst<any>(
+              `SELECT local_id, total_cents, notes, cancelled_at, data
+               FROM returns
+               WHERE local_id = ? OR server_id = ?
+               LIMIT 1`,
+              [item.localId, item.id]
+            );
+
+            if (!returnRow) {
+              Alert.alert('Error', 'No se encontro la devolucion en la base local.');
+              return;
+            }
+
+            if (returnRow.cancelled_at) {
+              Alert.alert('Devolucion', 'Esta devolucion ya estaba cancelada.');
+              return;
+            }
+
+            const parsedReturn = parseJsonSafe(returnRow.data) || {};
+            const totalReturnCents = Number(returnRow.total_cents || parsedReturn?.totalCents || item.totalCents || 0);
+            const arLocalId = parsedReturn?.arLocalId ? String(parsedReturn.arLocalId) : null;
+            const saleType = String(parsedReturn?.sale?.type || item.sale?.type || '').toUpperCase();
+
+            await db.update('returns', item.localId, {
+              cancelled_at: cancelledAt,
+              synced: 1,
+              data: JSON.stringify({
+                ...(parsedReturn || {}),
+                cancelledAt,
+              }),
+            });
+
+            await db.runAsync('UPDATE return_items SET synced = 1 WHERE return_local_id = ?', [item.localId]);
+
+            await db.runAsync(
+              `UPDATE sync_queue
+               SET status = 'synced',
+                   synced_at = ?,
+                   retry_count = COALESCE(retry_count, 0) + 1
+               WHERE entity_type = 'return'
+                 AND entity_local_id = ?
+                 AND status = 'pending'`,
+              [cancelledAt, item.localId]
+            );
+
+            if (saleType === 'CREDITO' && arLocalId) {
+              const arRow = await db.queryFirst<any>(
+                'SELECT total_cents, balance_cents, data FROM accounts_receivable WHERE local_id = ? LIMIT 1',
+                [arLocalId]
+              );
+
+              if (arRow) {
+                const arParsed = parseJsonSafe(arRow.data) || {};
+                const totalArCents = Number(arRow.total_cents || arParsed?.totalCents || 0);
+                const currentBalanceCents = Number(arRow.balance_cents || arParsed?.balanceCents || 0);
+                const restoredBalanceCents = Math.min(
+                  totalArCents,
+                  Math.max(0, currentBalanceCents + totalReturnCents)
+                );
+                const restoredPaidCents = Math.max(0, totalArCents - restoredBalanceCents);
+                const restoredStatus =
+                  restoredBalanceCents <= 0
+                    ? 'PAGADO'
+                    : restoredBalanceCents === totalArCents
+                      ? 'PENDIENTE'
+                      : 'PARCIAL';
+
+                await db.update('accounts_receivable', arLocalId, {
+                  balance_cents: restoredBalanceCents,
+                  paid_cents: restoredPaidCents,
+                  status: restoredStatus,
+                  synced: 0,
+                  data: JSON.stringify({
+                    ...(arParsed || {}),
+                    balanceCents: restoredBalanceCents,
+                    paidCents: restoredPaidCents,
+                    status: restoredStatus,
+                  }),
+                });
+              }
+            }
+
+            Alert.alert(
+              'Devolucion',
+              isOnline
+                ? 'Devolucion cancelada localmente.'
+                : 'Devolucion cancelada localmente. Se mantendra anulada en este dispositivo.'
+            );
+            await loadReturns();
+          } catch (error: any) {
+            console.error('Error cancelando devolucion:', error?.message || error);
+            Alert.alert('Error', 'No se pudo cancelar la devolucion.');
+          }
+        },
+      },
+    ]);
+  };
 
   useEffect(() => {
     void loadReturns();
@@ -906,21 +1030,24 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             </View>
             <View style={styles.returnAmountBox}>
               <Text style={styles.returnAmount}>{formatCurrency(item.totalCents)}</Text>
-              <Button
-                mode="text"
-                compact
-                icon="printer"
-                contentStyle={styles.reprintButtonContent}
-                labelStyle={styles.reprintButtonLabel}
-                onPress={() =>
-                  navigation.navigate('ReturnReceipt', {
-                    receipt: buildReceiptFromListedReturn(item),
-                    autoPrint: true,
-                  })
-                }
-              >
-                Reimprimir
-              </Button>
+              <View style={styles.actionsRow}>
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.printButton]}
+                  onPress={() =>
+                    navigation.navigate('ReturnReceipt', {
+                      receipt: buildReceiptFromListedReturn(item),
+                      autoPrint: true,
+                    })
+                  }
+                >
+                  <Icon source="printer" size={18} color="#fff" />
+                </TouchableOpacity>
+                {!item.cancelledAt ? (
+                  <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={() => handleCancelReturn(item)}>
+                    <Icon source="close" size={18} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
               {item.cancelledAt ? <Text style={styles.returnCancelled}>Cancelada</Text> : null}
             </View>
           </Surface>
@@ -1340,13 +1467,25 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '800',
   },
-  reprintButtonContent: {
-    height: 28,
+  actionsRow: {
+    marginTop: 8,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: 8,
   },
-  reprintButtonLabel: {
-    fontSize: 11,
-    marginVertical: 0,
-    marginHorizontal: 0,
+  actionButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  printButton: {
+    backgroundColor: '#2563EB',
+  },
+  cancelButton: {
+    backgroundColor: '#EF4444',
   },
   returnCancelled: {
     marginTop: 4,
@@ -1444,3 +1583,4 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
 });
+

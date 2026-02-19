@@ -73,8 +73,8 @@ export function SubUserLoginScreen({ navigation, route }: any) {
         }
         await setSubUser(response.data.user, response.data.token, accountId || response.data.user.accountId);
         try {
-          syncService.setGetTokenFunction(getToken);
-          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          syncService.setTokenGetter(getToken);
+          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
           if (SUBUSER_LOGIN_DEBUG) {
             const state = useAuthStore.getState();
             console.log('[SubUserLogin] estado tras setSubUser', {
@@ -174,3 +174,4 @@ const styles = StyleSheet.create({
   loginButton: { marginTop: 8, borderRadius: ui.radius.md },
   buttonContent: { height: 50 },
 });
+

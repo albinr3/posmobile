@@ -9,6 +9,7 @@ import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { AppNavigator } from './src/navigation/AppNavigator';
+import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { db } from './src/database/Database';
 import { syncService } from './src/services/sync/SyncService';
 import { useAuthStore } from './src/store/authStore';
@@ -241,7 +242,9 @@ function RootApp() {
     <GestureHandlerRootView style={styles.flex}>
       <SafeAreaProvider>
         <PaperProvider theme={theme}>
-          <AppNavigator />
+          <ErrorBoundary>
+            <AppNavigator />
+          </ErrorBoundary>
           <StatusBar style="auto" translucent={false} />
         </PaperProvider>
       </SafeAreaProvider>

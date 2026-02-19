@@ -124,8 +124,8 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
         });
       }
 
-      syncService.setGetTokenFunction(getToken);
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      syncService.setTokenGetter(getToken);
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
       if (isEditMode) {
         await db.runAsync(
           "DELETE FROM sync_queue WHERE entity_type = 'customer' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
@@ -230,4 +230,5 @@ const styles = StyleSheet.create({
   saveButton: { borderRadius: ui.radius.md },
   saveButtonContent: { height: 50 },
 });
+
 

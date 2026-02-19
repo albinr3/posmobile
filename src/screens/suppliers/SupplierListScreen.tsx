@@ -81,8 +81,8 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
       const subUserToken = useAuthStore.getState().subUserToken;
       if (!clerkToken || !subUserToken) return;
 
-      syncService.setGetTokenFunction(() => getToken());
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      syncService.setTokenGetter(() => getToken());
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
       await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       await loadSuppliersFromDb();
     } catch (error) {
@@ -204,3 +204,4 @@ const styles = StyleSheet.create({
   emptyText: { color: ui.colors.textMuted },
   fab: { backgroundColor: ui.colors.primary },
 });
+

@@ -74,8 +74,8 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
 
           const clerkToken = await getTokenRef.current();
           if (!clerkToken || !subUserTokenRef.current) return;
-          syncService.setGetTokenFunction(() => getTokenRef.current());
-          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          syncService.setTokenGetter(() => getTokenRef.current());
+          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
           await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           if (active) {
             await loadQuotes();
@@ -466,3 +466,4 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });
+

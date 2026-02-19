@@ -454,8 +454,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
     const currentSubUserToken = useAuthStore.getState().subUserToken;
     if (!clerkToken || !currentSubUserToken) return false;
 
-    syncService.setGetTokenFunction(() => getTokenRef.current());
-    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    syncService.setTokenGetter(() => getTokenRef.current());
+    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
     await syncService.fullSync(clerkToken);
     return true;
   }, []);
@@ -898,8 +898,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         })),
       };
 
-      syncService.setGetTokenFunction(getToken);
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      syncService.setTokenGetter(getToken);
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
 
       if (isEditMode) {
         if (serverId) {
@@ -1267,3 +1267,4 @@ const styles = StyleSheet.create({
   saveButton: { borderRadius: ui.radius.md },
   saveButtonContent: { height: 50 },
 });
+

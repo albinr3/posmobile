@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText } from 'react-native';
 import { Searchbar, Text, Icon } from 'react-native-paper';
 import * as Print from 'expo-print';
-import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
@@ -10,7 +9,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -83,8 +82,8 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const { getToken } = useAuth();
   const { isOnline } = useSyncStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
 
   const loadLocalReceipts = useCallback(async () => {
@@ -186,14 +185,11 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     }
 
     try {
-      if (!isOnline) return;
-      const clerkToken = await getToken();
-      const subUserToken = useAuthStore.getState().subUserToken;
-      if (!clerkToken || !subUserToken) return;
-
-      syncService.setGetTokenFunction(() => getToken());
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+      const synced = await runFullSyncIfAuthenticated({
+        isOnline,
+        ignoreCooldown: true,
+      });
+      if (!synced) return;
 
       const freshRows = await loadLocalReceipts();
       setReceipts(freshRows);
@@ -202,7 +198,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     } finally {
       setRefreshing(false);
     }
-  }, [getToken, isOnline, loadLocalReceipts]);
+  }, [isOnline, loadLocalReceipts, runFullSyncIfAuthenticated]);
 
   loadReceiptsRef.current = loadReceipts;
 
@@ -414,3 +410,4 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });
+

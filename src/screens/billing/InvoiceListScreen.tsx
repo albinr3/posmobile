@@ -92,8 +92,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           const canAutoSync = now - lastAutoSyncAtRef.current >= INVOICE_AUTO_SYNC_MIN_INTERVAL_MS;
           if (!canAutoSync) return;
 
-          syncService.setGetTokenFunction(() => getTokenRef.current());
-          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          syncService.setTokenGetter(() => getTokenRef.current());
+          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
           await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           lastAutoSyncAtRef.current = Date.now();
 
@@ -158,8 +158,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       if (isOnlineRef.current) {
         const clerkToken = await getTokenRef.current();
         if (clerkToken && subUserTokenRef.current) {
-          syncService.setGetTokenFunction(() => getTokenRef.current());
-          syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+          syncService.setTokenGetter(() => getTokenRef.current());
+          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
           await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           lastAutoSyncAtRef.current = Date.now();
         }
@@ -777,3 +777,4 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });
+

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { Buffer } from 'buffer';
 import { User } from '../types';
 import * as SecureStore from 'expo-secure-store';
 import { db } from '../database/Database';
@@ -8,6 +9,25 @@ const AUTH_DEBUG = false;
 function shortToken(token: string | null | undefined): string {
   if (!token) return 'null';
   return `${token.slice(0, 12)}...(${token.length})`;
+}
+
+function getJwtExpiryMs(token: string): number | null {
+  try {
+    const parts = String(token || '').split('.');
+    if (parts.length < 2) return null;
+
+    const payloadBase64Url = parts[1];
+    const payloadBase64 = payloadBase64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = payloadBase64.padEnd(payloadBase64.length + ((4 - (payloadBase64.length % 4)) % 4), '=');
+    const payloadJson = Buffer.from(paddedPayload, 'base64').toString('utf8');
+    const payload = JSON.parse(payloadJson) as { exp?: unknown };
+    const expSeconds = Number(payload?.exp);
+
+    if (!Number.isFinite(expSeconds) || expSeconds <= 0) return null;
+    return expSeconds * 1000;
+  } catch {
+    return null;
+  }
 }
 
 interface SubUser {
@@ -119,13 +139,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const token = await SecureStore.getItemAsync(SUBUSER_TOKEN_KEY);
       const subUserData = await SecureStore.getItemAsync(SUBUSER_DATA_KEY);
       const accountId = await SecureStore.getItemAsync(ACCOUNT_ID_KEY);
+      const tokenExpiryMs = token ? getJwtExpiryMs(token) : null;
       if (AUTH_DEBUG) {
         console.log('[AuthStore] loadSubUserToken() secure store', {
           hasToken: !!token,
           token: shortToken(token),
           hasSubUserData: !!subUserData,
           accountId,
+          tokenExpiryMs,
         });
+      }
+
+      const tokenMissingExp = !!token && tokenExpiryMs === null;
+      const tokenExpired = !!token && tokenExpiryMs !== null && Date.now() >= tokenExpiryMs;
+      if (tokenMissingExp || tokenExpired) {
+        await SecureStore.deleteItemAsync(SUBUSER_TOKEN_KEY);
+        await SecureStore.deleteItemAsync(SUBUSER_DATA_KEY);
+        await SecureStore.deleteItemAsync(ACCOUNT_ID_KEY);
+        await db.setAccountScope(null);
+        set({
+          subUser: null,
+          subUserToken: null,
+          accountId: null,
+          isAuthenticated: false,
+        });
+        if (AUTH_DEBUG) {
+          console.log('[AuthStore] loadSubUserToken() token invalido o expirado, sesión local limpiada', {
+            tokenMissingExp,
+            tokenExpired,
+          });
+        }
+        return;
       }
 
       if (token && subUserData && accountId) {
@@ -146,6 +190,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
       } else {
         await db.setAccountScope(null);
+        set({
+          subUser: null,
+          subUserToken: null,
+          accountId: null,
+          isAuthenticated: false,
+        });
         if (AUTH_DEBUG) console.log('[AuthStore] loadSubUserToken() sin datos, db.setAccountScope(null)');
       }
     } catch (error) {

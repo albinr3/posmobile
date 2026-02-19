@@ -87,8 +87,8 @@ export function CategoryListScreen({ navigation }: CategoryListScreenProps) {
       const subUserToken = useAuthStore.getState().subUserToken;
       if (!clerkToken || !subUserToken) return;
 
-      syncService.setGetTokenFunction(() => getTokenRef.current());
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      syncService.setTokenGetter(() => getTokenRef.current());
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
       await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       await loadCategoriesFromDb();
     } catch (error) {
@@ -230,3 +230,4 @@ const styles = StyleSheet.create({
   emptyText: { color: ui.colors.textMuted },
   fab: { backgroundColor: ui.colors.primary },
 });
+

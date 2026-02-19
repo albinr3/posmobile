@@ -98,8 +98,8 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
     const clerkToken = await getTokenRef.current();
     if (!clerkToken || !subUserTokenRef.current) return false;
 
-    syncService.setGetTokenFunction(() => getTokenRef.current());
-    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    syncService.setTokenGetter(() => getTokenRef.current());
+    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
     await syncService.fullSync(clerkToken, { ignoreCooldown: true });
     return true;
   }, []);
@@ -263,3 +263,4 @@ const styles = StyleSheet.create({
   emptyText: { color: ui.colors.textMuted },
   fab: { backgroundColor: ui.colors.primary },
 });
+

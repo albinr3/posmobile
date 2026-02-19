@@ -1,8 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid } from 'react-native';
 import { Text, Surface, Button, ActivityIndicator, List, Divider, Switch } from 'react-native-paper';
+import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { db } from '../../database/Database';
+import { syncService } from '../../services/sync/SyncService';
+import { useSyncStore } from '../../store/syncStore';
+import { useAuthStore } from '../../store/authStore';
+import { useCartStore } from '../../store/cartStore';
+import { useQuoteCartStore } from '../../store/quoteCartStore';
 
 interface PrinterDevice {
   id: string;
@@ -16,10 +23,13 @@ interface PrinterSettingsScreenProps {
 }
 
 export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps) {
+  const { getToken } = useAuth();
+  const { isOnline } = useSyncStore();
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<PrinterDevice | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
+  const [resettingData, setResettingData] = useState(false);
 
   useEffect(() => {
     loadSettings();
@@ -47,7 +57,6 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         ]);
         
         return Object.values(granted).every(
@@ -117,6 +126,69 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const toggleAutoPrint = async (value: boolean) => {
     setAutoPrint(value);
     await AsyncStorage.setItem('auto_print', value.toString());
+  };
+
+  const executeLocalDataReset = async () => {
+    try {
+      setResettingData(true);
+
+      await db.clearAllData();
+      useCartStore.getState().clear();
+      useQuoteCartStore.getState().clear();
+      useSyncStore.getState().setPendingCount(0);
+
+      if (!isOnline) {
+        Alert.alert(
+          'Datos locales reiniciados',
+          'La base local quedo en cero. Cuando vuelvas a tener internet, la app descargara datos desde la API.'
+        );
+        return;
+      }
+
+      const clerkToken = await getToken();
+      if (!clerkToken) {
+        Alert.alert(
+          'Datos locales reiniciados',
+          'La base local quedo en cero, pero no hay sesion principal activa para sincronizar ahora.'
+        );
+        return;
+      }
+
+      syncService.setTokenGetter(() => getToken());
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+
+      Alert.alert('Datos locales reiniciados', 'Se limpio la base local y se inicio la descarga desde la API.');
+    } catch (error) {
+      console.error('Error reiniciando datos locales:', error);
+      Alert.alert('Error', 'No se pudo reiniciar la base local.');
+    } finally {
+      setResettingData(false);
+    }
+  };
+
+  const handleResetLocalData = () => {
+    Alert.alert(
+      'Reiniciar base local',
+      'Esto borrara TODA la data local del celular (ventas, clientes, productos, devoluciones, etc.).',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Continuar',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Confirmacion final',
+              'Despues de esto la app quedara en cero y volvera a traer datos desde la API. ¿Deseas seguir?',
+              [
+                { text: 'No', style: 'cancel' },
+                { text: 'Si, borrar todo', style: 'destructive', onPress: () => void executeLocalDataReset() },
+              ]
+            );
+          },
+        },
+      ]
+    );
   };
 
   const renderDevice = ({ item }: { item: PrinterDevice }) => (
@@ -208,6 +280,27 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
           </View>
         )}
       </View>
+
+      <Divider style={styles.divider} />
+
+      <Surface style={styles.dangerSection}>
+        <Text style={styles.dangerTitle}>Datos Locales</Text>
+        <Text style={styles.dangerDescription}>
+          Borra toda la base de datos local de este celular y vuelve a empezar desde cero con lo que llegue de la API.
+        </Text>
+        <Button
+          mode="contained"
+          buttonColor="#B91C1C"
+          textColor="#fff"
+          icon="database-remove"
+          loading={resettingData}
+          disabled={resettingData}
+          onPress={handleResetLocalData}
+          style={styles.dangerButton}
+        >
+          {resettingData ? 'Reiniciando...' : 'Borrar base local'}
+        </Button>
+      </Surface>
     </SafeAreaView>
   );
 }
@@ -311,4 +404,28 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     color: '#666',
   },
+  dangerSection: {
+    margin: 12,
+    marginTop: 0,
+    padding: 16,
+    borderRadius: 12,
+    elevation: 1,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  dangerTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  dangerDescription: {
+    marginTop: 6,
+    color: '#7F1D1D',
+    fontSize: 12,
+  },
+  dangerButton: {
+    marginTop: 12,
+  },
 });
+

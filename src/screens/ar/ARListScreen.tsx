@@ -3,14 +3,12 @@ import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as R
 import { Text, Chip, Button, Searchbar } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
-import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { AccountReceivable } from '../../types';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 
 interface ARListScreenProps {
   navigation: any;
@@ -26,16 +24,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'partial' | 'overdue'>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
   const { isOnline } = useSyncStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const isSyncingOnFocusRef = useRef(false);
-  const getTokenRef = useRef(getToken);
-  const subUserTokenRef = useRef(subUserToken);
   const isOnlineRef = useRef(isOnline);
 
-  getTokenRef.current = getToken;
-  subUserTokenRef.current = subUserToken;
   isOnlineRef.current = isOnline;
 
   const loadARItems = useCallback(async () => {
@@ -76,14 +69,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   }, []);
 
   const syncARBestEffort = useCallback(async () => {
-    if (!isOnlineRef.current) return false;
-    const clerkToken = await getTokenRef.current();
-    if (!clerkToken || !subUserTokenRef.current) return false;
-    syncService.setGetTokenFunction(() => getTokenRef.current());
-    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-    return true;
-  }, []);
+    return runFullSyncIfAuthenticated({
+      isOnline: isOnlineRef.current,
+      ignoreCooldown: true,
+    });
+  }, [runFullSyncIfAuthenticated]);
 
   useFocusEffect(
     useCallback(() => {
@@ -351,4 +341,5 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });
+
 

@@ -33,8 +33,8 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
         try {
           const clerkToken = await getToken();
           if (clerkToken && subUserToken) {
-            syncService.setGetTokenFunction(getToken);
-            syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+            syncService.setTokenGetter(getToken);
+            syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
             await syncService.fullSync(clerkToken, { ignoreCooldown: true });
           }
         } catch (error) {
@@ -83,8 +83,8 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
     try {
       const clerkToken = await getToken();
       if (clerkToken && subUserToken) {
-        syncService.setGetTokenFunction(getToken);
-        syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+        syncService.setTokenGetter(getToken);
+        syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
         await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       }
     } catch (error) {
@@ -194,4 +194,5 @@ const styles = StyleSheet.create({
   emptyText: { color: ui.colors.textMuted },
   fab: { backgroundColor: ui.colors.primary },
 });
+
 

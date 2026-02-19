@@ -63,8 +63,8 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
        WHERE entity_type = 'product' AND action IN ('create', 'update') AND status = 'error'`
     );
 
-    syncService.setGetTokenFunction(getToken);
-    syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+    syncService.setTokenGetter(getToken);
+    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
     await syncService.fullSync(clerkToken, { ignoreCooldown: true });
     return true;
   };
@@ -370,4 +370,5 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
 });
+
 

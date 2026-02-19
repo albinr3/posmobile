@@ -164,8 +164,8 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
         });
       }
 
-      syncService.setGetTokenFunction(getToken);
-      syncService.setGetSubUserTokenFunction(async () => useAuthStore.getState().subUserToken);
+      syncService.setTokenGetter(getToken);
+      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
 
       if (isEditMode) {
         if (serverId) {
@@ -341,3 +341,4 @@ const styles = StyleSheet.create({
   saveButton: { borderRadius: ui.radius.md },
   saveButtonContent: { height: 50 },
 });
+

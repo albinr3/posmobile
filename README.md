@@ -1,200 +1,172 @@
-# 📱 MOVOPos Mobile
+# MOVOPos Mobile
 
-Aplicación móvil de punto de venta para MOVOPos, construida con React Native y Expo. Funcionalidad offline-first con sincronización automática.
+App móvil de punto de venta (POS) construida con React Native + Expo, con arquitectura offline-first y sincronización con backend MOVOPos.
 
-## 🚀 Características
+## Estado actual
 
-- **Punto de Venta (POS)** - Ventas rápidas con escaneo de código de barras
-- **Inventario** - Gestión de productos con fotos y códigos
-- **Clientes** - Base de datos de clientes con historial
-- **Cuentas por Cobrar** - Seguimiento de créditos y pagos
-- **Dashboard** - Métricas y reportes en tiempo real
-- **Offline-First** - Funciona sin internet, sincroniza cuando hay conexión
-- **Autenticación** - Login con WhatsApp OTP + Biométrico (huella/Face ID)
-- **Impresión** - Soporte para impresoras térmicas Bluetooth
+- Proyecto activo en Expo SDK 55 (preview).
+- Autenticación principal con Clerk (correo/código y Google OAuth).
+- Flujo de subusuarios obligatorio para operar la app.
+- Datos locales en SQLite por cuenta (`account scope`) + cola de sincronización.
 
-## 📋 Requisitos
+## Módulos implementados
 
-- Node.js 18+
-- npm o yarn
-- Expo CLI
-- Android Studio (para emulador) o dispositivo físico con Expo Go
+- Ventas POS (`sales`)
+- Cotizaciones (`sales/Quote*`)
+- Facturas (`billing`)
+- Devoluciones (`returns`)
+- Cuentas por cobrar y cobros (`ar`)
+- Recibos de pago (`ar/PaymentReceiptsScreen`)
+- Inventario, categorías, proveedores y compras (`inventory`, `categories`, `suppliers`, `purchases`)
+- Clientes (`customers`)
+- Gastos operativos (`operating-expenses`)
+- Dashboard, cuadre diario y reportes (`reports`)
+- Ajustes (impresora + reset local) (`settings`)
 
-## 🛠️ Instalación
+## Requisitos
+
+- Node.js 20+ recomendado
+- npm
+- Android Studio (emulador) o dispositivo físico con Expo Go / dev build
+- EAS CLI (solo para builds remotos)
+
+## Instalación
 
 ```bash
-# Clonar o navegar al proyecto
-cd movopos-mobile
-
-# Instalar dependencias
 npm install
-
-# Iniciar la aplicación
-npx expo start
 ```
 
-## 📱 Ejecutar la App
+## Variables de entorno
 
-### Opción 1: Expo Go (Recomendado para desarrollo)
-```bash
-npx expo start
-```
-Escanea el código QR con la app **Expo Go** en tu teléfono.
-
-### Opción 2: Emulador Android
-```bash
-npm run android
-```
-Requiere Android Studio con emulador configurado.
-
-### Opción 3: Development Build
-```bash
-npx expo run:android
-```
-
-## 📁 Estructura del Proyecto
-
-```
-src/
-├── components/        # Componentes reutilizables
-├── database/          # SQLite y manejo de datos locales
-│   └── Database.ts
-├── hooks/             # Custom hooks
-├── navigation/        # Configuración de navegación
-│   ├── AppNavigator.tsx
-│   ├── AuthNavigator.tsx
-│   └── MainNavigator.tsx
-├── screens/           # Pantallas de la app
-│   ├── ar/            # Cuentas por cobrar
-│   ├── auth/          # Login, OTP, Biométrico
-│   ├── customers/     # Clientes
-│   ├── inventory/     # Productos
-│   ├── reports/       # Dashboard y reportes
-│   ├── sales/         # POS, carrito, recibos
-│   └── settings/      # Configuración
-├── services/          # Servicios (sync, notifications, etc.)
-│   ├── notifications/
-│   └── sync/
-├── store/             # Estado global (Zustand)
-│   ├── authStore.ts
-│   ├── cartStore.ts
-│   └── syncStore.ts
-├── types/             # TypeScript types
-└── utils/             # Utilidades y helpers
-```
-
-## 📐 Regla de Layout Inferior (Android)
-
-Para evitar que botones inferiores choquen con la barra nativa de 3 botones:
-
-- Usa siempre `BottomDock` para acciones fijas en la parte inferior.
-- `BottomDock` ya aplica un inset seguro en Android (incluyendo fallback), aun cuando alguien intente reducirlo.
-- El área reservada para los botones nativos se pinta en blanco (`#FFFFFF`) desde `BottomDock`.
-- Si el contenido es scrolleable, deja `paddingBottom` suficiente para que la última sección no quede tapada por el dock.
-
-## 🔧 Configuración
-
-### Variables de Entorno
-
-Crea un archivo `.env` en la raíz:
+Crear `.env` en la raíz:
 
 ```env
-# API URL del backend
-API_URL=https://movopos.com
-
-# Clerk Authentication
 EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_xxx
-
-# UploadThing
-EXPO_PUBLIC_UPLOADTHING_APP_ID=xxx
+EXPO_PUBLIC_API_URL=https://movopos.com
 ```
 
-### Base de Datos Local
+Notas:
+- `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` es obligatoria (si falta, la app no inicia).
+- `EXPO_PUBLIC_API_URL` es recomendada; si no existe, se usa fallback `https://movopos.com`.
+- `API_URL` también es aceptada como fallback por compatibilidad.
 
-La app usa SQLite para almacenamiento local con las siguientes tablas:
-- `products` - Productos del inventario
-- `customers` - Clientes
-- `sales` - Ventas realizadas
-- `payments` - Pagos recibidos
-- `accounts_receivable` - Cuentas por cobrar
-- `sync_queue` - Cola de sincronización
+## Scripts
 
-## 📲 Pantallas Principales
+```bash
+npm run start
+npm run start:clear
+npm run android
+npm run ios
+npm run web
+```
 
-| Pantalla | Descripción |
-|----------|-------------|
-| **Login** | Ingreso con número de WhatsApp |
-| **OTP** | Verificación de código |
-| **Dashboard** | Resumen de ventas y métricas |
-| **POS** | Punto de venta con búsqueda y escaneo |
-| **Carrito** | Revisión y completar venta |
-| **Inventario** | Lista y gestión de productos |
-| **Clientes** | Lista y gestión de clientes |
-| **Cuentas por Cobrar** | Facturas pendientes y pagos |
-| **Configuración** | Impresora Bluetooth y preferencias |
+## Estructura (resumen)
 
-## 🔄 Sincronización Offline
+```text
+src/
+  components/
+  database/               # SQLite + migraciones simples
+  hooks/
+  navigation/             # AuthNavigator, AppNavigator, MainNavigator
+  screens/
+    ar/ auth/ billing/ categories/ customers/
+    inventory/ operating-expenses/ purchases/
+    reports/ returns/ sales/ settings/ suppliers/
+  services/
+    sync/                 # SyncService + módulos (download, payloads, shared)
+  store/                  # Zustand (auth/cart/quoteCart/sync)
+  theme/
+  types/
+  utils/
+```
 
-La app funciona completamente offline:
+## Base local (SQLite)
 
-1. Los datos se guardan localmente en SQLite
-2. Las operaciones se agregan a una cola de sincronización
-3. Cuando hay internet, se sincronizan automáticamente
-4. Conflictos se resuelven con "last-write-wins"
+Tablas principales:
+- `sync_queue`
+- `sync_metadata`
+- `sales`
+- `quotes`
+- `products`
+- `customers`
+- `suppliers`
+- `categories`
+- `payments`
+- `operating_expenses`
+- `accounts_receivable`
+- `purchases`
+- `returns`
+- `return_items`
 
-## 🖨️ Impresión Bluetooth
+## Sincronización offline
 
-Soporta impresoras térmicas ESC/POS de 58mm y 80mm:
+- Operaciones locales se encolan en `sync_queue`.
+- `SyncService` procesa la cola cuando hay conexión.
+- También ejecuta descargas completas periódicas y bajo demanda.
+- Requiere token de Clerk + token de subusuario.
+- Endpoints principales: `sales`, `quotes`, `products`, `customers`, `suppliers`, `categories`, `returns`, `payments`, `purchases`, `operating-expenses`, `accounts-receivable`.
+- En descargas se aplican `timeouts` por petición y se evita pedir detalle por cada venta/cotización cuando ya hay datos locales suficientes.
 
-1. Ve a Configuración > Impresora
-2. Busca dispositivos Bluetooth
-3. Conecta tu impresora
-4. Imprime recibos de venta y pagos
+## Configuración técnica relevante
 
-## 📦 Build de Producción
+- Se removió `expo-location` de dependencias y permisos nativos.
+- Android mantiene permisos Bluetooth para impresoras (`BLUETOOTH_*`) sin permisos de ubicación.
+- `tsconfig.json` usa alias `@/* -> src/*`.
+- La app envuelve navegación con `ErrorBoundary` para fallback visual ante errores de render.
 
-### Android APK (Testing)
+## Navegación
+
+- `AuthNavigator`: `Login` -> `EmailVerification`/OAuth -> `BiometricSetup` -> `SelectUser` -> `SubUserLogin`.
+- `MainNavigator`: Drawer + Bottom Tabs (Inicio, Ventas, Cobros) + stacks por módulo.
+
+## Build con EAS
+
+Perfiles en `eas.json`:
+- `development`: dev client
+- `preview`: APK Android / simulador iOS
+- `production`: AAB Android / release iOS
+
+Comandos:
+
 ```bash
 eas build --platform android --profile preview
-```
-
-### Android AAB (Play Store)
-```bash
 eas build --platform android --profile production
-```
-
-### Subir a Play Store
-```bash
 eas submit --platform android
 ```
 
-## 🧪 Testing
+## Pendientes técnicos relevantes
 
-```bash
-# Ejecutar tests
-npm test
+- Impresión Bluetooth en `PrinterSettingsScreen` está en modo simulado (scan/conexión/print real aún pendiente).
+- Persistencia de preferencia biométrica tiene `TODO`.
+- `OTPVerificationScreen` existe pero el flujo principal actual usa verificación por correo.
 
-# TypeScript check
-npx tsc --noEmit
-```
+## Pruebas recomendadas (post-cambios)
 
-## 📚 Tecnologías
+1. Autenticación subusuario:
+   - Login normal (token válido) y restauración de sesión al reabrir app.
+   - Token de subusuario expirado/inválido en `SecureStore`: debe limpiar sesión local y pedir reselección de usuario.
+2. Sincronización:
+   - `fullSync` con internet y con cola pendiente.
+   - Descarga con API lenta/no disponible: verificar timeouts y que no quede bloqueada indefinidamente.
+   - Verificar que ventas/cotizaciones cargan ítems correctamente en `ReceiptScreen`, `CreateReturnScreen`, `QuoteScreen`.
+3. AR y recibos:
+   - Pull-to-refresh en `ARListScreen` y `PaymentReceiptsScreen` con y sin internet.
+   - Cancelación de recibo y posterior re-sync.
+4. Carritos (`cartStore` / `quoteCartStore`):
+   - `addItem`, `updateQuantity`, `removeItem`, `clear`, edición de factura/cotización.
+   - Confirmar totales y conteo tras cambios de cantidad.
+5. ErrorBoundary:
+   - Forzar un error de render en una pantalla y validar que aparece fallback y botón `Reintentar`.
+6. Ajustes de impresora:
+   - Escaneo de impresoras en Android y solicitud de permisos Bluetooth sin pedir ubicación.
 
-- **React Native** + **Expo** - Framework móvil
-- **TypeScript** - Tipado estático
-- **React Navigation** - Navegación (Drawer + Tabs + Stack)
-- **Zustand** - Estado global
-- **Expo SQLite** - Base de datos local
-- **React Native Paper** - Componentes UI
-- **Clerk** - Autenticación
-- **Expo Camera** - Escaneo de códigos de barras
+## Referencia backend local
 
-## 🔗 Relacionado
+Si necesitas validar contratos/endpoints del backend:
 
-- [MOVOPos Web](../pos) - Aplicación web principal
-- [Documentación API](https://movopos.com/api/docs)
+- `C:\Users\Albin Rodriguez\Documents\pos\src\app\api`
+- fallback: `C:\Users\Albin Rodríguez\Videos\Nueva carpeta\tejada-pos\src\app\api`
 
-## 📄 Licencia
+## Licencia
 
-Privado - MOVOPos © 2024
-# posmobile
+Privado - MOVOPos
