@@ -181,7 +181,7 @@ export function AppTopHeader() {
           <Text style={styles.trialText}>{trialMessage}</Text>
           <TouchableOpacity
             onPress={() => {
-              refreshBillingStateRef.current(true).catch(() => {});
+              navigation.navigate('BillingPlansMenu', { screen: 'BillingPlans' });
             }}
           >
             <Text style={styles.trialLink}>Elegir plan</Text>

@@ -49,6 +49,7 @@ import { PrinterSettingsScreen } from '../screens/settings/PrinterSettingsScreen
 import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
 import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
 import { InvoiceListScreen } from '../screens/billing/InvoiceListScreen';
+import { BillingPlansScreen } from '../screens/billing/BillingPlansScreen';
 
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
@@ -177,6 +178,14 @@ function BillingStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
+    </Stack.Navigator>
+  );
+}
+
+function BillingPlansStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="BillingPlans" component={BillingPlansScreen} />
     </Stack.Navigator>
   );
 }
@@ -326,6 +335,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
     { key: 'shipping_labels', label: 'Etiquetas de envío', icon: 'truck-outline' },
     { key: 'operating_expenses', label: 'Gastos operativos', icon: 'currency-usd' },
+    { key: 'billing_plans', label: 'Planes y facturación', icon: 'wallet-outline' },
     { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
     { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
   ];
@@ -385,6 +395,10 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     }
     if (key === 'billing') {
       (props.navigation as any).navigate('BillingMenu', { screen: 'InvoiceList' });
+      return;
+    }
+    if (key === 'billing_plans') {
+      (props.navigation as any).navigate('BillingPlansMenu', { screen: 'BillingPlans' });
       return;
     }
     if (key === 'payment_receipts') {
@@ -469,6 +483,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'categories' && currentRoute === 'CategoriesMenu') ||
             (item.key === 'suppliers' && currentRoute === 'SuppliersMenu') ||
             (item.key === 'purchases' && currentRoute === 'PurchasesMenu') ||
+            (item.key === 'billing_plans' && currentRoute === 'BillingPlansMenu') ||
             (item.key === 'billing' && currentRoute === 'BillingMenu') ||
             (item.key === 'payment_receipts' && currentRoute === 'PaymentReceiptsMenu') ||
             (item.key === 'operating_expenses' && currentRoute === 'OperatingExpensesMenu') ||
@@ -544,6 +559,7 @@ export function MainNavigator() {
       <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />
       <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
       <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
+      <Drawer.Screen name="BillingPlansMenu" component={BillingPlansStack} options={{ title: 'Planes y facturación' }} />
       <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
       <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
       <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
