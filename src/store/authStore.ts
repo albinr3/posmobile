@@ -3,6 +3,7 @@ import { Buffer } from 'buffer';
 import { User } from '../types';
 import * as SecureStore from 'expo-secure-store';
 import { db } from '../database/Database';
+import { BillingState } from '../services/billing/billingService';
 
 const AUTH_DEBUG = false;
 
@@ -44,11 +45,14 @@ interface AuthState {
   subUser: SubUser | null;
   subUserToken: string | null;
   accountId: string | null;
+  billingState: BillingState | null;
+  isBillingBlocked: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   biometricEnabled: boolean;
   setUser: (user: User | null) => void;
   setSubUser: (subUser: SubUser | null, token: string | null, accountId: string | null) => Promise<void>;
+  setBillingState: (billingState: BillingState | null) => void;
   setLoading: (loading: boolean) => void;
   setBiometricEnabled: (enabled: boolean) => void;
   logout: () => Promise<void>;
@@ -59,11 +63,18 @@ const SUBUSER_TOKEN_KEY = 'movopos_subuser_token';
 const SUBUSER_DATA_KEY = 'movopos_subuser_data';
 const ACCOUNT_ID_KEY = 'movopos_account_id';
 
+function getIsBillingBlocked(billingState: BillingState | null): boolean {
+  if (!billingState) return false;
+  return billingState.isBlocked || !billingState.canAccessApp;
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   subUser: null,
   subUserToken: null,
   accountId: null,
+  billingState: null,
+  isBillingBlocked: false,
   isAuthenticated: false,
   isLoading: true,
   biometricEnabled: false,
@@ -80,6 +91,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // isAuthenticated se actualiza cuando se establece el subusuario
       // Por ahora, si hay usuario de Clerk, permitimos navegar (aunque falte subusuario)
       // Esto será manejado por la pantalla de selección de subusuario
+      billingState: user ? get().billingState : null,
+      isBillingBlocked: user ? get().isBillingBlocked : false,
       isLoading: false,
     });
   },
@@ -113,6 +126,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       subUser,
       subUserToken: token,
       accountId,
+      billingState: subUser && token ? get().billingState : null,
+      isBillingBlocked: subUser && token ? get().isBillingBlocked : false,
       isAuthenticated: !!subUser && !!token && !!get().user,
       isLoading: false,
     });
@@ -123,6 +138,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         hasSubUser: !!subUser,
       });
     }
+  },
+
+  setBillingState: (billingState: BillingState | null) => {
+    set({
+      billingState,
+      isBillingBlocked: getIsBillingBlocked(billingState),
+    });
   },
 
   setLoading: (loading: boolean) => {
@@ -194,6 +216,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           subUser: null,
           subUserToken: null,
           accountId: null,
+          billingState: null,
+          isBillingBlocked: false,
           isAuthenticated: false,
         });
         if (AUTH_DEBUG) console.log('[AuthStore] loadSubUserToken() sin datos, db.setAccountScope(null)');
@@ -217,6 +241,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       subUser: null,
       subUserToken: null,
       accountId: null,
+      billingState: null,
+      isBillingBlocked: false,
       isAuthenticated: false,
       isLoading: false,
     });

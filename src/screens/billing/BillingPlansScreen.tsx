@@ -77,7 +77,7 @@ function getStatusChipStyle(status: string) {
 
 export function BillingPlansScreen() {
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
+  const { subUserToken, accountId, setBillingState } = useAuthStore();
   const getTokenRef = useRef(getToken);
   const subUserTokenRef = useRef(subUserToken);
   const accountIdRef = useRef(accountId);
@@ -127,6 +127,7 @@ export function BillingPlansScreen() {
         const auth = await buildAuthContext();
         const data = await getBillingOverviewWithOptions(auth, { forceRefresh: isRefresh });
         setOverview(data);
+        setBillingState(data.state);
         setSelectedBankAccountId((current) => {
           if (current && data.bankAccounts.some((acc) => acc.id === current)) return current;
           return data.bankAccounts[0]?.id || '';
@@ -170,7 +171,7 @@ export function BillingPlansScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadOverview(false);
+      loadOverview(true);
     }, [loadOverview])
   );
 

@@ -1,15 +1,16 @@
-import React from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image } from 'react-native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
-import { Text, Icon } from 'react-native-paper';
+import { Text, Icon, ActivityIndicator } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
 import { AppTopHeader } from '../components/AppTopHeader';
 import { useAuthStore } from '../store/authStore';
+import { getBillingOverviewWithOptions } from '../services/billing/billingService';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
@@ -59,6 +60,27 @@ const commonStackOptions = {
   header: () => <AppTopHeader />,
   headerTitle: '',
 };
+
+const DRAWER_ENTRIES = [
+  { key: 'dashboard', label: 'Dashboard', icon: 'chart-bar' },
+  { key: 'billing', label: 'Lista de Facturas', icon: 'card-text-outline' },
+  { key: 'quotes', label: 'Cotizaciones', icon: 'file-document-outline' },
+  { key: 'quotes_list', label: 'Lista de Cotizaciones', icon: 'file-document-multiple-outline' },
+  { key: 'returns', label: 'Devoluciones', icon: 'backup-restore' },
+  { key: 'customers', label: 'Clientes', icon: 'account-group-outline' },
+  { key: 'products', label: 'Productos', icon: 'package-variant-closed' },
+  { key: 'categories', label: 'Categorías', icon: 'tag-outline' },
+  { key: 'suppliers', label: 'Proveedores', icon: 'store-outline' },
+  { key: 'purchases', label: 'Compras', icon: 'basket-outline' },
+  { key: 'payment_receipts', label: 'Recibos de pago', icon: 'receipt-text-outline' },
+  { key: 'daily_closing', label: 'Cuadre diario', icon: 'clipboard-text-outline' },
+  { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
+  { key: 'shipping_labels', label: 'Etiquetas de envío', icon: 'truck-outline' },
+  { key: 'operating_expenses', label: 'Gastos operativos', icon: 'currency-usd' },
+  { key: 'billing_plans', label: 'Planes y facturación', icon: 'wallet-outline' },
+  { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
+  { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
+];
 
 function SalesStack() {
   return (
@@ -315,30 +337,14 @@ function BottomTabs() {
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
   const { signOut } = useAuth();
-  const { logout, setSubUser } = useAuthStore();
+  const { logout, setSubUser, isBillingBlocked } = useAuthStore();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, StatusBar.currentHeight || 0) + 6;
   const currentRoute = props.state.routeNames[props.state.index] || 'Home';
-  const entries = [
-    { key: 'dashboard', label: 'Dashboard', icon: 'chart-bar' },
-    { key: 'billing', label: 'Lista de Facturas', icon: 'card-text-outline' },
-    { key: 'quotes', label: 'Cotizaciones', icon: 'file-document-outline' },
-    { key: 'quotes_list', label: 'Lista de Cotizaciones', icon: 'file-document-multiple-outline' },
-    { key: 'returns', label: 'Devoluciones', icon: 'backup-restore' },
-    { key: 'customers', label: 'Clientes', icon: 'account-group-outline' },
-    { key: 'products', label: 'Productos', icon: 'package-variant-closed' },
-    { key: 'categories', label: 'Categorías', icon: 'tag-outline' },
-    { key: 'suppliers', label: 'Proveedores', icon: 'store-outline' },
-    { key: 'purchases', label: 'Compras', icon: 'basket-outline' },
-    { key: 'payment_receipts', label: 'Recibos de pago', icon: 'receipt-text-outline' },
-    { key: 'daily_closing', label: 'Cuadre diario', icon: 'clipboard-text-outline' },
-    { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
-    { key: 'shipping_labels', label: 'Etiquetas de envío', icon: 'truck-outline' },
-    { key: 'operating_expenses', label: 'Gastos operativos', icon: 'currency-usd' },
-    { key: 'billing_plans', label: 'Planes y facturación', icon: 'wallet-outline' },
-    { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
-    { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
-  ];
+  const entries = useMemo(
+    () => (isBillingBlocked ? DRAWER_ENTRIES.filter((item) => item.key === 'billing_plans') : DRAWER_ENTRIES),
+    [isBillingBlocked]
+  );
 
   const navigateFromDrawer = (key: string, label: string) => {
     if (key === 'dashboard') {
@@ -541,8 +547,72 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 }
 
 export function MainNavigator() {
+  const { getToken } = useAuth();
+  const { subUserToken, accountId, isBillingBlocked, setBillingState } = useAuthStore();
+  const [checkingBillingAccess, setCheckingBillingAccess] = useState(true);
+  const getTokenRef = useRef(getToken);
+  const setBillingStateRef = useRef(setBillingState);
+  getTokenRef.current = getToken;
+  setBillingStateRef.current = setBillingState;
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadBillingAccess = async () => {
+      if (!subUserToken) {
+        setBillingStateRef.current(null);
+        if (mounted) setCheckingBillingAccess(false);
+        return;
+      }
+
+      try {
+        if (mounted) setCheckingBillingAccess(true);
+        const clerkToken = await getTokenRef.current();
+        if (!clerkToken) {
+          setBillingStateRef.current(null);
+          return;
+        }
+
+        const overview = await getBillingOverviewWithOptions(
+          {
+            clerkToken,
+            subUserToken,
+            accountId,
+          },
+          { forceRefresh: true }
+        );
+
+        if (!mounted) return;
+        setBillingStateRef.current(overview.state);
+      } catch (error) {
+        console.error('Error validando acceso por facturación:', error);
+        if (!mounted) return;
+        setBillingStateRef.current(null);
+      } finally {
+        if (mounted) setCheckingBillingAccess(false);
+      }
+    };
+
+    loadBillingAccess();
+
+    return () => {
+      mounted = false;
+    };
+  }, [accountId, subUserToken]);
+
+  if (checkingBillingAccess) {
+    return (
+      <View style={styles.loadingAccessContainer}>
+        <ActivityIndicator animating color={ui.colors.primary} />
+        <Text style={styles.loadingAccessText}>Validando acceso...</Text>
+      </View>
+    );
+  }
+
   return (
     <Drawer.Navigator
+      key={isBillingBlocked ? 'billing-blocked' : 'full-access'}
+      initialRouteName={isBillingBlocked ? 'BillingPlansMenu' : 'Home'}
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
@@ -550,23 +620,27 @@ export function MainNavigator() {
         drawerStyle: { width: 280, backgroundColor: ui.colors.surface },
       }}
     >
-      <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />
-      <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />
-      <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
-      <Drawer.Screen name="QuoteListMenu" component={QuoteListStack} options={{ title: 'Lista de Cotizaciones' }} />
-      <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
-      <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
-      <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />
-      <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
-      <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
       <Drawer.Screen name="BillingPlansMenu" component={BillingPlansStack} options={{ title: 'Planes y facturación' }} />
-      <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
-      <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
-      <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
-      <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
-      <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
-      <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
-      <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreen} options={{ title: 'Próximamente' }} />
+      {!isBillingBlocked ? (
+        <>
+          <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />
+          <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />
+          <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
+          <Drawer.Screen name="QuoteListMenu" component={QuoteListStack} options={{ title: 'Lista de Cotizaciones' }} />
+          <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
+          <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
+          <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />
+          <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
+          <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
+          <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
+          <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
+          <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
+          <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
+          <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
+          <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
+          <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreen} options={{ title: 'Próximamente' }} />
+        </>
+      ) : null}
     </Drawer.Navigator>
   );
 }
@@ -691,5 +765,18 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 14,
     color: ui.colors.textMuted,
+  },
+  loadingAccessContainer: {
+    flex: 1,
+    backgroundColor: ui.colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    padding: 24,
+  },
+  loadingAccessText: {
+    color: ui.colors.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
   },
 });
