@@ -6,6 +6,19 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { getPaymentMethodLabel } from '../../utils/paymentMethods';
+
+interface CashSalesSummaryBank {
+  bankName: string;
+  totalCents: number;
+}
+
+interface CashSalesSummaryItem {
+  method: string;
+  label: string;
+  totalCents: number;
+  banks: CashSalesSummaryBank[];
+}
 
 interface DailyCloseMetrics {
   soldTotal: number;
@@ -18,7 +31,30 @@ interface DailyCloseMetrics {
   paymentsCount: number;
   salesCount: number;
   collectedByMethod: Record<string, number>;
+  cashSalesSummary: {
+    totalCents: number;
+    salesCount: number;
+    byMethod: CashSalesSummaryItem[];
+  };
 }
+
+const EMPTY_METRICS: DailyCloseMetrics = {
+  soldTotal: 0,
+  soldCash: 0,
+  soldCredit: 0,
+  cashReturnsTotalCents: 0,
+  soldCashNetCents: 0,
+  soldTotalNetCents: 0,
+  collectedTotal: 0,
+  paymentsCount: 0,
+  salesCount: 0,
+  collectedByMethod: {},
+  cashSalesSummary: {
+    totalCents: 0,
+    salesCount: 0,
+    byMethod: [],
+  },
+};
 
 function toYmd(date: Date): string {
   const yyyy = date.getFullYear();
@@ -43,18 +79,8 @@ export function DailyCloseScreen() {
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [loading, setLoading] = useState(true);
-  const [metrics, setMetrics] = useState<DailyCloseMetrics>({
-    soldTotal: 0,
-    soldCash: 0,
-    soldCredit: 0,
-    cashReturnsTotalCents: 0,
-    soldCashNetCents: 0,
-    soldTotalNetCents: 0,
-    collectedTotal: 0,
-    paymentsCount: 0,
-    salesCount: 0,
-    collectedByMethod: {},
-  });
+  const [showCashSalesSummary, setShowCashSalesSummary] = useState(false);
+  const [metrics, setMetrics] = useState<DailyCloseMetrics>(EMPTY_METRICS);
 
   const loadMetrics = useCallback(async (fromYmd: string, toYmdValue: string) => {
     const fromDate = parseYmd(fromYmd) || new Date();
@@ -79,6 +105,8 @@ export function DailyCloseScreen() {
       let soldCash = 0;
       let soldCredit = 0;
       let salesCount = 0;
+      let cashSalesCount = 0;
+      const cashSalesSummaryMap = new Map<string, { method: string; label: string; totalCents: number; banks: Map<string, number> }>();
 
       for (const row of salesRows) {
         const statusRaw = String(row.status || '').toUpperCase();
@@ -96,7 +124,51 @@ export function DailyCloseScreen() {
         soldTotal += cents;
         salesCount += 1;
         if (type === 'CREDITO') soldCredit += cents;
-        else soldCash += cents;
+        else {
+          soldCash += cents;
+          cashSalesCount += 1;
+
+          const paymentSplits = Array.isArray(parsed?.paymentSplits) ? parsed.paymentSplits : [];
+          if (paymentSplits.length > 0) {
+            for (const split of paymentSplits) {
+              const method = String(split?.method || 'OTRO').toUpperCase();
+              const amountCents = Number(split?.amountCents || 0);
+              if (!Number.isFinite(amountCents) || amountCents <= 0) continue;
+
+              const current = cashSalesSummaryMap.get(method) || {
+                method,
+                label: getPaymentMethodLabel(method),
+                totalCents: 0,
+                banks: new Map<string, number>(),
+              };
+
+              current.totalCents += amountCents;
+              if (method === 'TRANSFERENCIA' && split?.transferBankName) {
+                const bankName = String(split.transferBankName);
+                current.banks.set(bankName, (current.banks.get(bankName) || 0) + amountCents);
+              }
+
+              cashSalesSummaryMap.set(method, current);
+            }
+            continue;
+          }
+
+          const method = String(parsed?.paymentMethod || 'OTRO').toUpperCase();
+          const current = cashSalesSummaryMap.get(method) || {
+            method,
+            label: getPaymentMethodLabel(method),
+            totalCents: 0,
+            banks: new Map<string, number>(),
+          };
+
+          current.totalCents += cents;
+          if (method === 'TRANSFERENCIA' && parsed?.transferBankName) {
+            const bankName = String(parsed.transferBankName);
+            current.banks.set(bankName, (current.banks.get(bankName) || 0) + cents);
+          }
+
+          cashSalesSummaryMap.set(method, current);
+        }
       }
 
       let cashReturnsTotalCents = 0;
@@ -148,6 +220,18 @@ export function DailyCloseScreen() {
         byMethod[method] = (byMethod[method] || 0) + cents;
       }
 
+      const cashSalesSummaryByMethod: CashSalesSummaryItem[] = Array.from(cashSalesSummaryMap.values())
+        .map((item) => ({
+          method: item.method,
+          label: item.label,
+          totalCents: item.totalCents,
+          banks: Array.from(item.banks.entries())
+            .map(([bankName, totalCents]) => ({ bankName, totalCents }))
+            .filter((bank) => bank.totalCents > 0)
+            .sort((a, b) => b.totalCents - a.totalCents || a.bankName.localeCompare(b.bankName, 'es')),
+        }))
+        .sort((a, b) => b.totalCents - a.totalCents || a.label.localeCompare(b.label, 'es'));
+
       setMetrics({
         soldTotal,
         soldCash,
@@ -159,21 +243,15 @@ export function DailyCloseScreen() {
         paymentsCount,
         salesCount,
         collectedByMethod: byMethod,
+        cashSalesSummary: {
+          totalCents: soldCash,
+          salesCount: cashSalesCount,
+          byMethod: cashSalesSummaryByMethod,
+        },
       });
     } catch (error) {
       console.error('Error cargando cuadre diario:', error);
-      setMetrics({
-        soldTotal: 0,
-        soldCash: 0,
-        soldCredit: 0,
-        cashReturnsTotalCents: 0,
-        soldCashNetCents: 0,
-        soldTotalNetCents: 0,
-        collectedTotal: 0,
-        paymentsCount: 0,
-        salesCount: 0,
-        collectedByMethod: {},
-      });
+      setMetrics(EMPTY_METRICS);
     } finally {
       setLoading(false);
     }
@@ -287,6 +365,50 @@ export function DailyCloseScreen() {
               : null}
           </Card.Content>
         </Card>
+
+        <Card style={styles.detailCard}>
+          <Card.Content>
+            <View style={styles.summaryHeader}>
+              <View style={styles.summaryHeaderText}>
+                <Text style={styles.detailTitle}>Ventas al contado por método</Text>
+                <Text style={styles.metricHint}>
+                  {formatCurrency(metrics.cashSalesSummary.totalCents)} · {metrics.cashSalesSummary.salesCount} ventas
+                </Text>
+              </View>
+              <Button mode="outlined" onPress={() => setShowCashSalesSummary((value) => !value)} textColor={ui.colors.primary}>
+                {showCashSalesSummary ? 'Ocultar' : 'Ver resumen'}
+              </Button>
+            </View>
+
+            {showCashSalesSummary ? (
+              loading ? (
+                <Text style={styles.emptyText}>Cargando...</Text>
+              ) : metrics.cashSalesSummary.byMethod.length === 0 ? (
+                <Text style={styles.emptyText}>No hay ventas al contado en el rango seleccionado.</Text>
+              ) : (
+                metrics.cashSalesSummary.byMethod.map((item) => (
+                  <View key={item.method} style={styles.summaryMethodCard}>
+                    <View style={styles.methodRowCompact}>
+                      <Text style={styles.methodName}>{item.label}</Text>
+                      <Text style={styles.methodValue}>{formatCurrency(item.totalCents)}</Text>
+                    </View>
+
+                    {item.method === 'TRANSFERENCIA' && item.banks.length > 0 ? (
+                      <View style={styles.bankList}>
+                        {item.banks.map((bank) => (
+                          <View key={bank.bankName} style={styles.bankRow}>
+                            <Text style={styles.bankName}>{bank.bankName}</Text>
+                            <Text style={styles.bankValue}>{formatCurrency(bank.totalCents)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                ))
+              )
+            ) : null}
+          </Card.Content>
+        </Card>
       </ScrollView>
     </SafeAreaView>
   );
@@ -318,6 +440,16 @@ const styles = StyleSheet.create({
   metricHint: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
   detailCard: { marginTop: 10, borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
   detailTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },
+  summaryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  summaryHeaderText: { flex: 1 },
+  summaryMethodCard: {
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    borderRadius: ui.radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 8,
+  },
   methodRow: {
     borderWidth: 1,
     borderColor: ui.colors.border,
@@ -329,7 +461,28 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  methodRowCompact: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
   methodName: { color: ui.colors.text, fontWeight: '700' },
   methodValue: { color: ui.colors.text, fontWeight: '800' },
+  bankList: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: ui.colors.border,
+    paddingTop: 10,
+    gap: 8,
+  },
+  bankRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 12,
+  },
+  bankName: { color: ui.colors.textMuted },
+  bankValue: { color: ui.colors.text, fontWeight: '700' },
   emptyText: { color: ui.colors.textMuted, paddingVertical: 8 },
 });

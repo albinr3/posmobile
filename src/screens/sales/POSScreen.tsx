@@ -35,6 +35,7 @@ const PAYMENT_OPTIONS = [
   { label: 'Efectivo', value: 'EFECTIVO' },
   { label: 'Tarjeta', value: 'TARJETA' },
   { label: 'Transferencia', value: 'TRANSFERENCIA' },
+  { label: 'Dividir pago', value: 'DIVIDIR_PAGO' },
 ];
 const VIEW_MODE_STORAGE_KEY = 'pos_view_mode';
 
@@ -55,6 +56,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     customerId,
     customerName,
     setPaymentMethod,
+    setTransferBankName,
+    setPaymentSplits,
     paymentMethod,
     items,
     loadInvoiceForEdit,
@@ -184,9 +187,12 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           paymentMethod:
             resolvedPaymentMethod === 'CREDITO' ||
             resolvedPaymentMethod === 'TARJETA' ||
-            resolvedPaymentMethod === 'TRANSFERENCIA'
+            resolvedPaymentMethod === 'TRANSFERENCIA' ||
+            resolvedPaymentMethod === 'DIVIDIR_PAGO'
               ? resolvedPaymentMethod
               : 'EFECTIVO',
+          transferBankName: parsedData?.transferBankName ? String(parsedData.transferBankName) : null,
+          paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : [],
           saleLocalId,
           invoiceCode: String(sale.invoice_code || parsedData?.invoiceCode || '-'),
         });
@@ -441,6 +447,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                 title={option.label}
                 onPress={() => {
                   setPaymentMethod(option.value);
+                  if (option.value !== 'TRANSFERENCIA') setTransferBankName(null);
+                  if (option.value !== 'DIVIDIR_PAGO') setPaymentSplits([]);
                   setPaymentMenuVisible(false);
                 }}
               />

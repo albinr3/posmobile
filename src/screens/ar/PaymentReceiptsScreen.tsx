@@ -10,6 +10,7 @@ import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
+import { formatPaymentWithBank } from '../../utils/paymentMethods';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -22,6 +23,7 @@ interface PaymentReceiptItem {
   receiptCode: string;
   amountCents: number;
   paymentMethod: string;
+  transferBankName?: string | null;
   customerName: string;
   invoiceCode?: string | null;
   reference?: string | null;
@@ -65,7 +67,7 @@ function buildPaymentReceiptHtml(payment: PaymentReceiptItem): string {
           <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(payment.createdAt))}</span></div>
           <div class="row"><span>Cliente:</span><span>${escapeHtml(payment.customerName)}</span></div>
           <div class="row"><span>Factura:</span><span>${escapeHtml(payment.invoiceCode || '-')}</span></div>
-          <div class="row"><span>Método:</span><span>${escapeHtml(payment.paymentMethod)}</span></div>
+          <div class="row"><span>Método:</span><span>${escapeHtml(formatPaymentWithBank(payment.paymentMethod, payment.transferBankName))}</span></div>
           <div class="row"><span>Referencia:</span><span>${escapeHtml(payment.reference || '-')}</span></div>
           ${payment.notes ? `<div style="margin-top:6px;"><strong>Notas:</strong> ${escapeHtml(payment.notes)}</div>` : ''}
           <div class="divider"></div>
@@ -106,6 +108,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         receiptCode: String(parsed?.receiptCode || row.receipt_code || '-'),
         amountCents: Number(parsed?.amountCents || row.amount_cents || 0),
         paymentMethod: String(parsed?.method || parsed?.paymentMethod || 'EFECTIVO'),
+        transferBankName: parsed?.transferBankName ? String(parsed.transferBankName) : null,
         customerName: String(parsed?.customerName || 'Cliente'),
         invoiceCode: parsed?.invoiceCode ? String(parsed.invoiceCode) : null,
         reference: parsed?.reference ? String(parsed.reference) : null,
@@ -294,7 +297,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       <Text style={styles.meta}>Cliente: {item.customerName}</Text>
       <Text style={styles.meta}>Factura: {item.invoiceCode || '-'}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
-      <Text style={styles.meta}>Método: {item.paymentMethod}</Text>
+      <Text style={styles.meta}>Método: {formatPaymentWithBank(item.paymentMethod, item.transferBankName)}</Text>
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Monto</Text>
         <Text style={styles.totalValue}>{formatCurrency(item.amountCents)}</Text>

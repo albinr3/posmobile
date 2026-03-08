@@ -11,6 +11,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { syncService } from '../../services/sync/SyncService';
 import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
@@ -20,6 +21,8 @@ interface InvoiceListItem {
   invoiceCode: string;
   customerName: string | null;
   paymentMethod: string | null;
+  transferBankName?: string | null;
+  paymentSplits?: Array<{ method: string; amountCents: number; transferBankName?: string | null }>;
   status: string;
   totalCents: number;
   createdAt: number;
@@ -53,6 +56,15 @@ const resolveSaleCreatedAt = (rowCreatedAt: unknown, parsedData: any): number =>
   }
 
   return Date.now();
+};
+
+const getInvoicePaymentSummary = (invoice: Pick<InvoiceListItem, 'paymentMethod' | 'transferBankName' | 'paymentSplits'>) => {
+  if (invoice.paymentMethod === 'DIVIDIR_PAGO' && Array.isArray(invoice.paymentSplits) && invoice.paymentSplits.length > 0) {
+    return invoice.paymentSplits
+      .map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`)
+      .join(' + ');
+  }
+  return formatPaymentWithBank(invoice.paymentMethod, invoice.transferBankName);
 };
 
 export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
@@ -135,6 +147,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           invoiceCode: String(row.invoice_code || parsedData?.invoiceCode || '-'),
           customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
           paymentMethod: parsedData?.paymentMethod ? String(parsedData.paymentMethod) : null,
+          transferBankName: parsedData?.transferBankName ? String(parsedData.transferBankName) : null,
+          paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : [],
           status: normalizedStatus,
           totalCents: Number(row.total_cents || parsedData?.totalCents || 0),
           createdAt: resolveSaleCreatedAt(row.created_at, parsedData),
@@ -190,11 +204,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
   };
 
   const getPaymentLabel = (method: string | null) => {
-    if (method === 'EFECTIVO') return 'Efectivo';
-    if (method === 'TARJETA') return 'Tarjeta';
-    if (method === 'TRANSFERENCIA') return 'Transferencia';
-    if (method === 'CREDITO') return 'Crédito';
-    return method || 'N/A';
+    return formatPaymentWithBank(method, null);
   };
 
   const queueSaleUpdateBestEffort = async (localId: string, payload: any) => {
@@ -254,7 +264,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
       const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
-      const paymentMethodLabel = getPaymentLabel(parsedData?.paymentMethod || invoice.paymentMethod);
+      const paymentMethodLabel = getInvoicePaymentSummary({
+        paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
+        transferBankName: parsedData?.transferBankName || invoice.transferBankName,
+        paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+      });
       const subtotalCents = Math.round(totalCents / 1.18);
       const itbisCents = totalCents - subtotalCents;
 
@@ -341,7 +355,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
       const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
-      const paymentMethodLabel = getPaymentLabel(parsedData?.paymentMethod || invoice.paymentMethod);
+      const paymentMethodLabel = getInvoicePaymentSummary({
+        paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
+        transferBankName: parsedData?.transferBankName || invoice.transferBankName,
+        paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+      });
       const subtotalCents = Math.round(totalCents / 1.18);
       const itbisCents = totalCents - subtotalCents;
 
@@ -568,7 +586,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       </View>
 
       <Text style={styles.meta}>Cliente: {item.customerName || 'Cliente general'}</Text>
-      <Text style={styles.meta}>Método de pago: {getPaymentLabel(item.paymentMethod)}</Text>
+      <Text style={styles.meta}>Método de pago: {getInvoicePaymentSummary(item)}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
 
       <View style={styles.footerRow}>

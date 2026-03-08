@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
-import { TextInput, Button, Text, Surface, Divider, Icon } from 'react-native-paper';
+import { TextInput, Button, Text, Surface, Divider, Icon, Menu } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
@@ -8,6 +8,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId, generateReceiptCode, formatCurrency } from '../../utils/helpers';
 import { AccountReceivable } from '../../types';
 import { ui } from '../../theme/ui';
+import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 
 interface RegisterPaymentScreenProps {
   navigation: any;
@@ -23,6 +24,8 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
   const [arItem, setARItem] = useState<AccountReceivable | null>(null);
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('EFECTIVO');
+  const [transferBankName, setTransferBankName] = useState<string | null>(null);
+  const [bankMenuVisible, setBankMenuVisible] = useState(false);
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
@@ -85,6 +88,11 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       return;
     }
 
+    if (paymentMethod === 'TRANSFERENCIA' && !transferBankName) {
+      Alert.alert('Error', 'Debes seleccionar el banco de la transferencia');
+      return;
+    }
+
     setLoading(true);
     try {
       const localId = generateLocalId();
@@ -100,6 +108,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
         customerName: arItem.customerName,
         amountCents,
         paymentMethod,
+        transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
         reference: reference.trim() || null,
         notes: notes.trim() || null,
         createdAt: now,
@@ -200,7 +209,12 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
                 <TouchableOpacity
                   key={option.value}
                   style={[styles.paymentCard, selected && styles.paymentCardSelected]}
-                  onPress={() => setPaymentMethod(option.value)}
+                  onPress={() => {
+                    setPaymentMethod(option.value);
+                    if (option.value !== 'TRANSFERENCIA') {
+                      setTransferBankName(null);
+                    }
+                  }}
                   activeOpacity={0.9}
                 >
                   <View style={[styles.paymentIconWrap, selected && styles.paymentIconWrapSelected]}>
@@ -211,6 +225,32 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
               );
             })}
           </View>
+
+          {paymentMethod === 'TRANSFERENCIA' && (
+            <View style={styles.bankSelectorWrap}>
+              <Text style={styles.summaryLabel}>Banco</Text>
+              <Menu
+                visible={bankMenuVisible}
+                onDismiss={() => setBankMenuVisible(false)}
+                anchor={
+                  <Button mode="outlined" onPress={() => setBankMenuVisible(true)} textColor={ui.colors.primary}>
+                    {transferBankName || 'Seleccionar banco'}
+                  </Button>
+                }
+              >
+                {DOMINICAN_BANKS.map((bankName) => (
+                  <Menu.Item
+                    key={bankName}
+                    onPress={() => {
+                      setTransferBankName(bankName);
+                      setBankMenuVisible(false);
+                    }}
+                    title={bankName}
+                  />
+                ))}
+              </Menu>
+            </View>
+          )}
 
           {(paymentMethod === 'TRANSFERENCIA' || paymentMethod === 'CHEQUE') && (
             <TextInput
@@ -334,6 +374,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 10,
     marginBottom: 10,
+  },
+  bankSelectorWrap: {
+    marginBottom: 12,
   },
   paymentCard: {
     width: '48%',

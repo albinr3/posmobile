@@ -36,6 +36,8 @@ export interface Sale {
   status: 'pending' | 'completed' | 'cancelled';
   items: SaleItem[];
   paymentMethod?: string;
+  transferBankName?: string | null;
+  paymentSplits?: SalePaymentSplit[];
   createdAt: number;
   synced: boolean;
   data: string;
@@ -57,8 +59,15 @@ export interface Payment {
   arId?: string;
   customerId?: string;
   method: string;
+  transferBankName?: string | null;
   synced: boolean;
   data: string;
+}
+
+export interface SalePaymentSplit {
+  method: string;
+  amountCents: number;
+  transferBankName?: string | null;
 }
 
 export interface AccountReceivable {

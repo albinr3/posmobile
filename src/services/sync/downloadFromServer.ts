@@ -407,6 +407,16 @@ export async function downloadFromServer(options: {
         customerId,
         customerName,
         paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || localSale?.paymentMethod || 'EFECTIVO'),
+        transferBankName: saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null,
+        paymentSplits: Array.isArray(saleDetail?.paymentSplits)
+          ? saleDetail.paymentSplits.map((split: any) => ({
+              method: String(split?.method || 'EFECTIVO'),
+              amountCents: Number(split?.amountCents || 0),
+              transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
+            }))
+          : Array.isArray(localSale?.paymentSplits)
+            ? localSale.paymentSplits
+            : [],
         type: String(saleDetail?.type || sale?.type || localSale?.type || 'CONTADO'),
         items,
         subtotalCents: Number(saleDetail?.subtotalCents || sale?.subtotalCents || localSale?.subtotalCents || 0),
@@ -921,6 +931,7 @@ export async function downloadFromServer(options: {
         customerName: payment?.customer?.name ? String(payment.customer.name) : 'Cliente',
         amountCents: Number(payment?.amountCents || 0),
         method: String(payment?.method || 'EFECTIVO'),
+        transferBankName: payment?.transferBankName ? String(payment.transferBankName) : null,
         note: payment?.note || null,
         createdAt: paidAtMs,
         paidAt: paidAtMs,

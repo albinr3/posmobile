@@ -1,6 +1,6 @@
-import React, { useCallback, useState } from 'react';
-import { View, StyleSheet, FlatList, Alert } from 'react-native';
-import { Text, Surface, Button, IconButton, Divider, Menu } from 'react-native-paper';
+import React, { useCallback, useMemo, useState } from 'react';
+import { View, StyleSheet, FlatList, Alert, ScrollView } from 'react-native';
+import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,6 +13,9 @@ import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
 import { Asset } from 'expo-asset';
 import { getBottomSafeInset } from '../../utils/safeArea';
+import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
+import { SalePaymentSplit } from '../../types';
+import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
 
 interface CartScreenProps {
   navigation: any;
@@ -61,6 +64,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     customerName,
     paymentMethod,
     setPaymentMethod,
+    transferBankName,
+    setTransferBankName,
+    paymentSplits,
+    setPaymentSplits,
     clear,
     editingSaleLocalId,
     editingInvoiceCode,
@@ -69,6 +76,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
   const [loading, setLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
+  const [transferBankMenuVisible, setTransferBankMenuVisible] = useState(false);
+  const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
+  const [splitMethodMenuIndex, setSplitMethodMenuIndex] = useState<number | null>(null);
+  const [splitBankMenuIndex, setSplitBankMenuIndex] = useState<number | null>(null);
   const { setCustomer } = useCartStore();
 
   useFocusEffect(
@@ -121,8 +132,57 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     { label: 'Efectivo', value: 'EFECTIVO' },
     { label: 'Tarjeta', value: 'TARJETA' },
     { label: 'Transferencia', value: 'TRANSFERENCIA' },
+    { label: 'Dividir pago', value: 'DIVIDIR_PAGO' },
     { label: 'Crédito', value: 'CREDITO' },
   ];
+  const splitMethodOptions = useMemo(
+    () => [
+      { label: 'Efectivo', value: 'EFECTIVO' },
+      { label: 'Tarjeta', value: 'TARJETA' },
+      { label: 'Transferencia', value: 'TRANSFERENCIA' },
+      { label: 'Otro', value: 'OTRO' },
+    ],
+    []
+  );
+
+  const handlePaymentMethodSelect = (nextMethod: string) => {
+    setPaymentMethod(nextMethod);
+    if (nextMethod !== 'TRANSFERENCIA') {
+      setTransferBankName(null);
+    }
+    if (nextMethod !== 'DIVIDIR_PAGO') {
+      setPaymentSplits([]);
+    }
+    setMenuVisible(false);
+  };
+
+  const addPaymentSplit = () => {
+    setPaymentSplits([...paymentSplits, { method: 'EFECTIVO', amountCents: 0, transferBankName: null }]);
+  };
+
+  const updatePaymentSplit = (index: number, patch: Partial<SalePaymentSplit>) => {
+    setPaymentSplits(
+      paymentSplits.map((split, splitIndex) => {
+        if (splitIndex !== index) return split;
+        const nextSplit = { ...split, ...patch };
+        if (nextSplit.method !== 'TRANSFERENCIA') {
+          nextSplit.transferBankName = null;
+        }
+        return nextSplit;
+      })
+    );
+  };
+
+  const removePaymentSplit = (index: number) => {
+    setPaymentSplits(paymentSplits.filter((_, splitIndex) => splitIndex !== index));
+  };
+
+  const totalSplitCents = useMemo(
+    () => paymentSplits.reduce((sum, split) => sum + Number(split.amountCents || 0), 0),
+    [paymentSplits]
+  );
+
+  const splitDifferenceCents = getTotal() - totalSplitCents;
 
   const handleCompleteSale = async () => {
     if (items.length === 0) return;
@@ -156,6 +216,34 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
     }
 
+    if (paymentMethod === 'TRANSFERENCIA' && !transferBankName) {
+      Alert.alert('Banco requerido', 'Debes seleccionar el banco de la transferencia.');
+      return;
+    }
+
+    if (paymentMethod === 'DIVIDIR_PAGO') {
+      if (paymentSplits.length === 0) {
+        Alert.alert('Pago dividido', 'Debes agregar al menos un método en el pago dividido.');
+        return;
+      }
+      if (totalSplitCents !== getTotal()) {
+        Alert.alert('Pago dividido', 'La suma de los pagos debe ser igual al total de la venta.');
+        return;
+      }
+      const invalidTransferSplit = paymentSplits.find(
+        (split) => split.method === 'TRANSFERENCIA' && !split.transferBankName
+      );
+      if (invalidTransferSplit) {
+        Alert.alert('Pago dividido', 'Cada transferencia debe tener un banco seleccionado.');
+        return;
+      }
+      const invalidAmountSplit = paymentSplits.find((split) => !Number.isFinite(split.amountCents) || split.amountCents <= 0);
+      if (invalidAmountSplit) {
+        Alert.alert('Pago dividido', 'Cada línea del pago dividido debe tener un monto válido.');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       let localId = generateLocalId();
@@ -178,6 +266,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         })),
         totalCents: getTotal(),
         paymentMethod,
+        transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+        paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         shippingCents: 0,
         status: 'completed',
@@ -241,6 +331,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           customerId,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
+          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+          paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
           createdAt,
           soldAt: createdAt,
           items: items.map((item) => ({
@@ -262,6 +354,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           items,
           totalCents: getTotal(),
           paymentMethod,
+          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+          paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
           status: 'completed',
           createdAt: now,
           soldAt: now,
@@ -310,15 +404,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       const itbisCents = getTotal() - subtotalCents;
       const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
       const paymentMethodLabel =
-        paymentMethod === 'EFECTIVO'
-          ? 'Efectivo'
-          : paymentMethod === 'TARJETA'
-            ? 'Tarjeta'
-            : paymentMethod === 'TRANSFERENCIA'
-              ? 'Transferencia'
-              : paymentMethod === 'CREDITO'
-                ? 'Crédito'
-                : paymentMethod;
+        paymentMethod === 'DIVIDIR_PAGO'
+          ? paymentSplits
+              .map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`)
+              .join(' + ')
+          : formatPaymentWithBank(paymentMethod, transferBankName);
 
       let creditDays = 0;
       if (paymentMethod === 'CREDITO' && customerId) {
@@ -562,14 +652,59 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
                 <Menu.Item
                   key={method.value}
                   onPress={() => {
-                    setPaymentMethod(method.value);
-                    setMenuVisible(false);
+                    handlePaymentMethodSelect(method.value);
                   }}
                   title={method.label}
                 />
               ))}
             </Menu>
           </View>
+
+          {paymentMethod === 'TRANSFERENCIA' && (
+            <View style={styles.selectorBlock}>
+              <Text style={styles.summaryLabel}>Banco:</Text>
+              <Menu
+                visible={transferBankMenuVisible}
+                onDismiss={() => setTransferBankMenuVisible(false)}
+                anchor={
+                  <Button mode="text" onPress={() => setTransferBankMenuVisible(true)}>
+                    {transferBankName || 'Seleccionar banco'}
+                  </Button>
+                }
+              >
+                {DOMINICAN_BANKS.map((bankName) => (
+                  <Menu.Item
+                    key={bankName}
+                    onPress={() => {
+                      setTransferBankName(bankName);
+                      setTransferBankMenuVisible(false);
+                    }}
+                    title={bankName}
+                  />
+                ))}
+              </Menu>
+            </View>
+          )}
+
+          {paymentMethod === 'DIVIDIR_PAGO' && (
+            <View style={styles.selectorBlock}>
+              <Button mode="outlined" onPress={() => setSplitPaymentModalVisible(true)}>
+                Configurar pago dividido
+              </Button>
+              {paymentSplits.length > 0 ? (
+                <View style={styles.splitSummaryWrap}>
+                  {paymentSplits.map((split, index) => (
+                    <Text key={`${split.method}-${index}`} style={styles.splitSummaryText}>
+                      {`${formatPaymentWithBank(split.method, split.transferBankName)}: ${formatCurrency(split.amountCents)}`}
+                    </Text>
+                  ))}
+                  <Text style={[styles.splitSummaryText, splitDifferenceCents === 0 ? styles.splitOk : styles.splitError]}>
+                    Diferencia: {formatCurrency(splitDifferenceCents)}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          )}
 
           <Divider style={styles.divider} />
 
@@ -594,6 +729,105 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           </Surface>
         </BottomDock>
       )}
+
+      <Portal>
+        <Modal
+          visible={splitPaymentModalVisible}
+          onDismiss={() => setSplitPaymentModalVisible(false)}
+          contentContainerStyle={styles.modalCard}
+        >
+          <ScrollView contentContainerStyle={styles.modalContent}>
+            <Text style={styles.modalTitle}>Dividir pago</Text>
+            <Text style={styles.modalMeta}>Total de la venta: {formatCurrency(getTotal())}</Text>
+
+            {paymentSplits.map((split, index) => (
+              <Surface key={`split-${index}`} style={styles.splitCard}>
+                <View style={styles.splitCardHeader}>
+                  <Text style={styles.splitCardTitle}>Método {index + 1}</Text>
+                  <IconButton icon="delete-outline" onPress={() => removePaymentSplit(index)} />
+                </View>
+
+                <Text style={styles.summaryLabel}>Método</Text>
+                <Menu
+                  visible={splitMethodMenuIndex === index}
+                  onDismiss={() => setSplitMethodMenuIndex(null)}
+                  anchor={
+                    <Button mode="outlined" onPress={() => setSplitMethodMenuIndex(index)}>
+                      {getPaymentMethodLabel(split.method)}
+                    </Button>
+                  }
+                >
+                  {splitMethodOptions.map((option) => (
+                    <Menu.Item
+                      key={option.value}
+                      onPress={() => {
+                        updatePaymentSplit(index, { method: option.value });
+                        setSplitMethodMenuIndex(null);
+                      }}
+                      title={option.label}
+                    />
+                  ))}
+                </Menu>
+
+                {split.method === 'TRANSFERENCIA' ? (
+                  <>
+                    <Text style={[styles.summaryLabel, styles.fieldTopMargin]}>Banco</Text>
+                    <Menu
+                      visible={splitBankMenuIndex === index}
+                      onDismiss={() => setSplitBankMenuIndex(null)}
+                      anchor={
+                        <Button mode="outlined" onPress={() => setSplitBankMenuIndex(index)}>
+                          {split.transferBankName || 'Seleccionar banco'}
+                        </Button>
+                      }
+                    >
+                      {DOMINICAN_BANKS.map((bankName) => (
+                        <Menu.Item
+                          key={`${bankName}-${index}`}
+                          onPress={() => {
+                            updatePaymentSplit(index, { transferBankName: bankName });
+                            setSplitBankMenuIndex(null);
+                          }}
+                          title={bankName}
+                        />
+                      ))}
+                    </Menu>
+                  </>
+                ) : null}
+
+                <TextInput
+                  label="Monto (RD$)"
+                  value={split.amountCents > 0 ? (split.amountCents / 100).toFixed(2) : ''}
+                  onChangeText={(value) => {
+                    const parsed = Math.round((parseFloat(value || '0') || 0) * 100);
+                    updatePaymentSplit(index, { amountCents: parsed });
+                  }}
+                  mode="outlined"
+                  keyboardType="decimal-pad"
+                  style={[styles.input, styles.fieldTopMargin]}
+                  outlineColor={ui.colors.border}
+                  activeOutlineColor={ui.colors.primary}
+                />
+              </Surface>
+            ))}
+
+            <Button mode="outlined" onPress={addPaymentSplit} style={styles.addSplitButton}>
+              Agregar método
+            </Button>
+
+            <View style={styles.splitTotals}>
+              <Text style={styles.splitSummaryText}>Total pagado: {formatCurrency(totalSplitCents)}</Text>
+              <Text style={[styles.splitSummaryText, splitDifferenceCents === 0 ? styles.splitOk : styles.splitError]}>
+                Diferencia: {formatCurrency(splitDifferenceCents)}
+              </Text>
+            </View>
+
+            <Button mode="contained" onPress={() => setSplitPaymentModalVisible(false)} buttonColor={ui.colors.primary}>
+              Listo
+            </Button>
+          </ScrollView>
+        </Modal>
+      </Portal>
 
       <View pointerEvents="none" style={[styles.systemBottomBg, { height: systemBottomInset }]} />
     </SafeAreaView>
@@ -694,6 +928,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: ui.colors.textMuted,
   },
+  selectorBlock: {
+    marginBottom: 8,
+  },
+  splitSummaryWrap: {
+    marginTop: 8,
+    gap: 4,
+  },
+  splitSummaryText: {
+    fontSize: 12,
+    color: ui.colors.textMuted,
+  },
+  splitOk: {
+    color: ui.colors.success || '#16A34A',
+    fontWeight: '700',
+  },
+  splitError: {
+    color: ui.colors.danger,
+    fontWeight: '700',
+  },
   divider: {
     marginVertical: 12,
     backgroundColor: ui.colors.border,
@@ -725,6 +978,58 @@ const styles = StyleSheet.create({
   completeButtonLabel: {
     fontSize: 18,
     fontWeight: '800',
+  },
+  modalCard: {
+    backgroundColor: ui.colors.surface,
+    margin: 16,
+    borderRadius: ui.radius.lg,
+    maxHeight: '86%',
+  },
+  modalContent: {
+    padding: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: ui.colors.text,
+    marginBottom: 4,
+  },
+  modalMeta: {
+    fontSize: 13,
+    color: ui.colors.textMuted,
+    marginBottom: 12,
+  },
+  splitCard: {
+    padding: 12,
+    borderRadius: ui.radius.md,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    marginBottom: 12,
+    backgroundColor: ui.colors.surface,
+  },
+  splitCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  splitCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.colors.text,
+  },
+  input: {
+    backgroundColor: ui.colors.surface,
+  },
+  fieldTopMargin: {
+    marginTop: 10,
+  },
+  addSplitButton: {
+    marginBottom: 12,
+  },
+  splitTotals: {
+    marginBottom: 12,
+    gap: 4,
   },
   systemBottomBg: {
     position: 'absolute',

@@ -122,6 +122,8 @@ export async function prepareSyncRequestData(
         customerId: resolvedCustomerId,
         type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
         paymentMethod: data.paymentMethod || null,
+        transferBankName: data.transferBankName || null,
+        paymentSplits: Array.isArray(data.paymentSplits) ? data.paymentSplits : undefined,
         items: saleItems,
         shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
         ...(soldAtIso ? { soldAt: soldAtIso } : {}),
@@ -153,7 +155,8 @@ export async function prepareSyncRequestData(
         arId: resolvedArId,
         amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
         method: data.method || data.paymentMethod,
-        note: data.note || null,
+        transferBankName: data.transferBankName || null,
+        note: data.note || data.notes || null,
       };
       }
     case 'purchase':

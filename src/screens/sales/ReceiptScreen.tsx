@@ -7,8 +7,9 @@ import { Asset } from 'expo-asset';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
-import { Sale, SaleItem } from '../../types';
+import { Sale, SaleItem, SalePaymentSplit } from '../../types';
 import { ui } from '../../theme/ui';
+import { formatPaymentWithBank } from '../../utils/paymentMethods';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -57,11 +58,13 @@ const buildReceiptHtml = (params: {
   createdAt: number;
   customerName?: string | null;
   paymentMethod?: string | null;
+  transferBankName?: string | null;
+  paymentSplits?: SalePaymentSplit[];
   totalCents: number;
   items: SaleItem[];
   logoUri: string;
 }) => {
-  const { invoiceCode, createdAt, customerName, paymentMethod, totalCents, items, logoUri } = params;
+  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, items, logoUri } = params;
 
   const itemsRows = (items || [])
     .map(
@@ -80,6 +83,9 @@ const buildReceiptHtml = (params: {
   const subtotalCents = Math.round(totalCents / 1.18);
   const itbisCents = totalCents - subtotalCents;
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
+  const paymentSummary = paymentMethod === 'DIVIDIR_PAGO'
+    ? (paymentSplits || []).map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`).join(' + ')
+    : formatPaymentWithBank(paymentMethod, transferBankName);
 
   return `
     <html>
@@ -111,7 +117,7 @@ const buildReceiptHtml = (params: {
             <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div>
             <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName || '(General) Cliente general')}</div>
             <div style="margin-top:4px;"><strong>Tipo de venta:</strong> ${escapeHtml(saleTypeLabel)}</div>
-            <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethod || '-')}</div>
+            <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentSummary || '-')}</div>
           </div>
           <div>${itemsRows}</div>
           <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
@@ -182,6 +188,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       createdAt,
       customerName: sale.customerName,
       paymentMethod: sale.paymentMethod,
+      transferBankName: sale.transferBankName,
+      paymentSplits: sale.paymentSplits || [],
       totalCents: sale.totalCents,
       items: sale.items || [],
       logoUri,
@@ -220,6 +228,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       createdAt,
       customerName: sale.customerName,
       paymentMethod: sale.paymentMethod,
+      transferBankName: sale.transferBankName,
+      paymentSplits: sale.paymentSplits || [],
       totalCents: sale.totalCents,
       items: sale.items || [],
       logoUri,
@@ -294,7 +304,13 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
 
           <View style={styles.infoRow}>
             <Text style={styles.label}>Método de Pago:</Text>
-            <Text style={styles.value}>{sale.paymentMethod}</Text>
+            <Text style={styles.value}>
+              {sale.paymentMethod === 'DIVIDIR_PAGO'
+                ? (sale.paymentSplits || [])
+                    .map((split: SalePaymentSplit) => formatPaymentWithBank(split.method, split.transferBankName))
+                    .join(' + ')
+                : formatPaymentWithBank(sale.paymentMethod, sale.transferBankName)}
+            </Text>
           </View>
 
           <Divider style={styles.divider} />
