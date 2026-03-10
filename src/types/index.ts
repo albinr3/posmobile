@@ -46,6 +46,7 @@ export interface Sale {
 }
 
 export interface SaleItem {
+  lineId: string;
   productId: string;
   productName: string;
   quantity: number;
@@ -53,6 +54,8 @@ export interface SaleItem {
   totalCents: number;
   unit?: string;
   productKind?: 'BASIC' | 'MEASURED' | 'RECIPE';
+  recipeItems?: Array<{ ingredientId: string; ingredientName: string; qty: number; ingredientUnit?: string }>;
+  recipeAdjustments?: Array<{ ingredientId: string; ingredientName: string; adjustmentType: 'SIN' | 'EXTRA' }>;
 }
 
 export interface Payment {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image, Platform } from 'react-native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -120,6 +120,8 @@ function InventoryStack() {
       <Stack.Screen name="AddProduct" component={AddProductScreen} />
       <Stack.Screen name="ProductEdit" component={ProductEditScreen} />
       <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
+      <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+      <Stack.Screen name="AddSupplier" component={AddSupplierScreen} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
@@ -475,6 +477,20 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </View>
 
+      {!isBillingBlocked && (
+        <TouchableOpacity
+          style={styles.sellButton}
+          activeOpacity={0.8}
+          onPress={() => navigateFromDrawer('sell', 'Vender')}
+        >
+          <View style={styles.sellButtonIconWrap}>
+            <Icon source="cash-register" size={26} color="#fff" />
+          </View>
+          <Text style={styles.sellButtonText}>VENDER</Text>
+          <Icon source="chevron-right" size={22} color="rgba(255,255,255,0.7)" />
+        </TouchableOpacity>
+      )}
+
       <View style={styles.drawerList}>
         {entries.map((item) => {
           const selected =
@@ -667,7 +683,42 @@ const styles = StyleSheet.create({
   logoImage: { width: 44, height: 26 },
   drawerTitle: { color: ui.colors.text, fontSize: 18, fontWeight: '800' },
   drawerSubtitle: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
-  drawerList: { marginTop: 12, paddingHorizontal: 10 },
+  drawerList: { marginTop: 8, paddingHorizontal: 10 },
+  sellButton: {
+    marginHorizontal: 12,
+    marginTop: 14,
+    borderRadius: 16,
+    backgroundColor: '#16A34A',
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    ...Platform.select({
+      android: { elevation: 6 },
+      ios: {
+        shadowColor: '#16A34A',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+      },
+    }),
+  },
+  sellButtonIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sellButtonText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+  },
   drawerItem: {
     borderRadius: ui.radius.md,
     paddingHorizontal: 12,

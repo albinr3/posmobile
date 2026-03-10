@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image } from 'react-native';
-import { TextInput, Button, Text, Icon, Menu } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image, Modal, FlatList } from 'react-native';
+import { TextInput, Button, Text, Icon, Menu, Divider, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import * as ImagePicker from 'expo-image-picker';
@@ -33,9 +33,10 @@ interface OptionItem {
   internalId?: string | null;
 }
 
-const EDITABLE_PRODUCT_KIND_OPTIONS: Array<{ value: Exclude<MobileProductKind, 'RECIPE'>; label: string }> = [
+const EDITABLE_PRODUCT_KIND_OPTIONS: Array<{ value: MobileProductKind; label: string }> = [
   { value: 'BASIC', label: 'Básico' },
   { value: 'MEASURED', label: 'Con medida' },
+  { value: 'RECIPE', label: 'Por receta' },
 ];
 
 export function ProductEditScreen({ navigation, route }: ProductEditScreenProps) {
@@ -63,6 +64,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   const [price, setPrice] = useState('');
   const [minStock, setMinStock] = useState('0');
   const [taxRate, setTaxRate] = useState<'18' | '16' | '0'>('18');
+  const [isAvailableForSale, setIsAvailableForSale] = useState(true);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [productKind, setProductKind] = useState<MobileProductKind>('BASIC');
   const [unit, setUnit] = useState('UNIDAD');
@@ -72,6 +74,12 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const hasPendingImageSelectionRef = useRef(false);
   const hydratedProductIdRef = useRef<string | null>(null);
+
+  const [recipeItems, setRecipeItems] = useState<{ id: string; ingredientId: string; qty: string }[]>([]);
+  const [availableIngredients, setAvailableIngredients] = useState<any[]>([]);
+  const [ingredientPickerVisible, setIngredientPickerVisible] = useState(false);
+  const [currentIngredientId, setCurrentIngredientId] = useState<string | null>(null);
+  const [ingredientSearchQuery, setIngredientSearchQuery] = useState('');
 
   const loadCatalogOptions = useCallback(async () => {
     try {
@@ -157,10 +165,15 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       setCost(((Number(row.cost_cents || parsed?.costCents || 0) || 0) / 100).toString());
       setPrice(((Number(row.price_cents || parsed?.priceCents || 0) || 0) / 100).toString());
       setMinStock(String(parsed?.minStock ?? 0));
+      setIsAvailableForSale(row.is_available_for_sale === 1);
       setProductKind(nextKind);
       setUnit(nextUnit);
       const taxRaw = String(parsed?.itbisRateBp ?? parsed?.taxRate ?? 18);
       setTaxRate(taxRaw === '16' || taxRaw === '0' ? (taxRaw as '16' | '0') : '18');
+      
+      const loadedRecipeItems = Array.isArray(parsed?.recipeItems) ? parsed.recipeItems : [];
+      setRecipeItems(loadedRecipeItems);
+      
       if (!hasPendingImageSelectionRef.current) {
         setImageUri(imageFromData || row.image_url || parsed?.imageUri || null);
       }
@@ -290,6 +303,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
         stock: currentStock,
         minStock: Number(minStock || 0),
         itbisRateBp: Number(taxRate) * 100,
+        isAvailableForSale,
         imageUri: isLocalImage ? imageUri : null,
         imageUrls,
         recipeItems,
@@ -307,6 +321,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
           price_cents: payload.priceCents,
           stock: currentStock,
           synced: 0,
+          is_available_for_sale: isAvailableForSale ? 1 : 0,
           data: JSON.stringify(payload),
         },
         'local_id'
@@ -389,6 +404,16 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
                     }}
                   />
                 ))}
+                <Divider />
+                <Menu.Item
+                  leadingIcon="plus"
+                  title="Crear nueva"
+                  titleStyle={{ color: ui.colors.primary, fontWeight: '600' }}
+                  onPress={() => {
+                    setSupplierMenuVisible(false);
+                    navigation.navigate('AddSupplier');
+                  }}
+                />
               </Menu>
             </View>
             <View style={styles.half}>
@@ -414,6 +439,16 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
                     }}
                   />
                 ))}
+                <Divider />
+                <Menu.Item
+                  leadingIcon="plus"
+                  title="Crear nueva"
+                  titleStyle={{ color: ui.colors.primary, fontWeight: '600' }}
+                  onPress={() => {
+                    setCategoryMenuVisible(false);
+                    navigation.navigate('AddCategory');
+                  }}
+                />
               </Menu>
             </View>
           </View>
@@ -444,59 +479,55 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
             activeOutlineColor={ui.colors.primary}
           />
 
-          {productKind === 'RECIPE' ? (
-            <Text style={styles.unitHint}>Tipo: RECIPE · Unidad fija: und</Text>
-          ) : (
+          <View style={styles.choiceRow}>
+            {EDITABLE_PRODUCT_KIND_OPTIONS.map((option) => (
+              <TouchableOpacity
+                key={option.value}
+                style={[styles.choiceChip, productKind === option.value && styles.choiceChipOn]}
+                onPress={() => {
+                  setProductKind(option.value);
+                  if (option.value === 'RECIPE' || option.value === 'BASIC') {
+                    setUnit('UNIDAD');
+                  } else if (unit === 'UNIDAD') {
+                    setUnit('KG');
+                  }
+                }}
+              >
+                <Text style={[styles.choiceChipText, productKind === option.value && styles.choiceChipTextOn]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          {productKind === 'MEASURED' ? (
             <>
-              <View style={styles.choiceRow}>
-                {EDITABLE_PRODUCT_KIND_OPTIONS.map((option) => (
-                  <TouchableOpacity
-                    key={option.value}
-                    style={[styles.choiceChip, productKind === option.value && styles.choiceChipOn]}
-                    onPress={() => {
-                      setProductKind(option.value);
-                      if (option.value === 'BASIC') {
-                        setUnit('UNIDAD');
-                      } else if (unit === 'UNIDAD') {
-                        setUnit('KG');
-                      }
-                    }}
-                  >
-                    <Text style={[styles.choiceChipText, productKind === option.value && styles.choiceChipTextOn]}>
-                      {option.label}
-                    </Text>
+              <Menu
+                visible={unitMenuVisible}
+                onDismiss={() => setUnitMenuVisible(false)}
+                anchor={
+                  <TouchableOpacity style={[styles.selectLike, styles.inlineSelect]} onPress={() => setUnitMenuVisible(true)}>
+                    <Text style={styles.selectLikeText}>Unidad: {getUnitAbbreviation(unit)}</Text>
+                    <Icon source="chevron-down" size={18} color="#6B7280" />
                   </TouchableOpacity>
+                }
+              >
+                {PRODUCT_UNIT_OPTIONS.filter((option) => option.value !== 'UNIDAD').map((option) => (
+                  <Menu.Item
+                    key={option.value}
+                    title={option.label}
+                    onPress={() => {
+                      setUnit(option.value);
+                      setUnitMenuVisible(false);
+                    }}
+                  />
                 ))}
-              </View>
-              {productKind === 'MEASURED' ? (
-                <>
-                  <Menu
-                    visible={unitMenuVisible}
-                    onDismiss={() => setUnitMenuVisible(false)}
-                    anchor={
-                      <TouchableOpacity style={[styles.selectLike, styles.inlineSelect]} onPress={() => setUnitMenuVisible(true)}>
-                        <Text style={styles.selectLikeText}>Unidad: {getUnitAbbreviation(unit)}</Text>
-                        <Icon source="chevron-down" size={18} color="#6B7280" />
-                      </TouchableOpacity>
-                    }
-                  >
-                    {PRODUCT_UNIT_OPTIONS.filter((option) => option.value !== 'UNIDAD').map((option) => (
-                      <Menu.Item
-                        key={option.value}
-                        title={option.label}
-                        onPress={() => {
-                          setUnit(option.value);
-                          setUnitMenuVisible(false);
-                        }}
-                      />
-                    ))}
-                  </Menu>
-                  <Text style={styles.unitHint}>La misma unidad aplica a costo, precio, existencia y stock mínimo.</Text>
-                </>
-              ) : (
-                <Text style={styles.unitHint}>Tipo: BASIC · Unidad fija: und</Text>
-              )}
+              </Menu>
+              <Text style={styles.unitHint}>La misma unidad aplica a costo, precio, y existencia.</Text>
             </>
+          ) : productKind === 'RECIPE' ? (
+            <Text style={styles.unitHint}>Los productos por receta usan unidad fija en und.</Text>
+          ) : (
+            <Text style={styles.unitHint}>Los productos básicos usan unidad fija en und.</Text>
           )}
         </View>
 
@@ -532,80 +563,110 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
           />
         </View>
 
-        <View style={styles.sectionCard}>
-          <View style={styles.sectionHeader}>
-            <View style={styles.sectionIcon}>
-              <Text style={styles.sectionIconText}>🖼️</Text>
-            </View>
-            <Text style={styles.sectionTitle}>Imagen (Opcional)</Text>
-          </View>
-          <View style={styles.imageWrap}>
-            {imageUri ? <Image source={{ uri: imageUri }} style={styles.productImage} /> : <Text style={styles.imagePlaceholder}>Sin imagen seleccionada</Text>}
-          </View>
-          <View style={styles.imageButtonsRow}>
-            <TouchableOpacity style={styles.smallBtn} onPress={takePhoto}>
-              <Text style={styles.smallBtnText}>Cámara</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.smallBtn} onPress={pickImage}>
-              <Text style={styles.smallBtnText}>Galería</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+
 
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionIcon}>
               <Text style={styles.sectionIconText}>📦</Text>
             </View>
-            <Text style={styles.sectionTitle}>Inventario</Text>
+            <Text style={styles.sectionTitle}>{productKind === 'RECIPE' ? 'Insumos de Receta' : 'Inventario'}</Text>
           </View>
 
-          <View style={styles.row}>
-            <View style={styles.half}>
-              <Text style={styles.counterLabel}>
-                Existencia Actual {productKind === 'MEASURED' ? `(${getUnitAbbreviation(unit)})` : ''} (solo lectura)
-              </Text>
-              <View style={styles.counterWrapReadOnly}>
-                <Text style={styles.readOnlyStockValue}>{formatProductQty(currentStock, unit)}</Text>
+          {productKind === 'RECIPE' ? (
+             <View style={{ padding: 14 }}>
+               <Text style={{ color: ui.colors.textMuted, fontSize: 13, lineHeight: 18, marginBottom: 10 }}>
+                 Define los insumos que se consumirán por cada unidad vendida.
+               </Text>
+               <Button mode="outlined" icon="plus" onPress={() => {
+                 setRecipeItems([...recipeItems, { id: Date.now().toString(), ingredientId: '', qty: '1' }]);
+               }}>Agregar Insumo</Button>
+
+               <View style={{ marginTop: 14, gap: 10 }}>
+                 {recipeItems.map((item, index) => {
+                   const ingredient = availableIngredients.find(i => i.id === item.ingredientId);
+                   return (
+                     <View key={item.id} style={{ borderWidth: 1, borderColor: ui.colors.border, borderRadius: ui.radius.md, padding: 10, backgroundColor: '#f9fafb' }}>
+                       <Text style={{ fontSize: 12, fontWeight: '600', color: ui.colors.textMuted, marginBottom: 5 }}>Insumo #{index + 1}</Text>
+                       <TouchableOpacity
+                         style={[styles.selectLike, { minHeight: 44, marginBottom: 10, marginHorizontal: 0 }]}
+                         onPress={() => { setCurrentIngredientId(item.id); setIngredientPickerVisible(true); }}
+                       >
+                         <Text style={{ color: ingredient ? ui.colors.text : ui.colors.textMuted, fontSize: 14 }}>
+                           {ingredient ? `${ingredient.productId} - ${ingredient.name}` : 'Selecciona un insumo...'}
+                         </Text>
+                       </TouchableOpacity>
+                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                         <TextInput
+                           label={`Cantidad ${ingredient && ingredient.unit !== 'UNIDAD' ? `(${getUnitAbbreviation(ingredient.unit)})` : ''}`}
+                           value={item.qty}
+                           onChangeText={(val) => setRecipeItems(recipeItems.map(ri => ri.id === item.id ? { ...ri, qty: val } : ri))}
+                           mode="outlined"
+                           keyboardType="decimal-pad"
+                           style={{ flex: 1, height: 44, backgroundColor: '#fff', fontSize: 14 }}
+                           outlineColor={ui.colors.border}
+                           activeOutlineColor={ui.colors.primary}
+                         />
+                         <TouchableOpacity
+                           style={{ width: 44, height: 44, justifyContent: 'center', alignItems: 'center', borderRadius: ui.radius.md, borderWidth: 1, borderColor: '#ef4444', backgroundColor: '#fef2f2' }}
+                           onPress={() => setRecipeItems(recipeItems.filter(ri => ri.id !== item.id))}
+                         >
+                           <Icon source="delete" size={20} color="#ef4444" />
+                         </TouchableOpacity>
+                       </View>
+                     </View>
+                   );
+                 })}
+               </View>
+             </View>
+          ) : (
+            <View style={styles.row}>
+              <View style={styles.half}>
+                <Text style={styles.counterLabel}>
+                  Existencia Actual {productKind === 'MEASURED' ? `(${getUnitAbbreviation(unit)})` : ''} (solo lectura)
+                </Text>
+                <View style={styles.counterWrapReadOnly}>
+                  <Text style={styles.readOnlyStockValue}>{formatProductQty(currentStock, unit)}</Text>
+                </View>
+              </View>
+              <View style={styles.half}>
+                <Text style={styles.counterLabel}>
+                  Stock Mínimo {productKind === 'MEASURED' ? `(${getUnitAbbreviation(unit)})` : ''}
+                </Text>
+                <View style={styles.counterWrap}>
+                  <TouchableOpacity
+                    style={styles.counterBtn}
+                    onPress={() => {
+                      const step = unitAllowsDecimals(unit) ? 0.5 : 1;
+                      const nextValue = Math.max(0, Number(minStock || 0) - step);
+                      setMinStock(String(Math.round(nextValue * 100) / 100));
+                    }}
+                  >
+                    <Icon source="minus" size={16} color={ui.colors.textMuted} />
+                  </TouchableOpacity>
+                  <TextInput
+                    value={minStock}
+                    onChangeText={setMinStock}
+                    mode="flat"
+                    keyboardType={unitAllowsDecimals(unit) ? 'decimal-pad' : 'number-pad'}
+                    style={styles.counterInput}
+                    underlineColor="transparent"
+                    activeUnderlineColor="transparent"
+                  />
+                  <TouchableOpacity
+                    style={styles.counterBtn}
+                    onPress={() => {
+                      const step = unitAllowsDecimals(unit) ? 0.5 : 1;
+                      const nextValue = Number(minStock || 0) + step;
+                      setMinStock(String(Math.round(nextValue * 100) / 100));
+                    }}
+                  >
+                    <Icon source="plus" size={16} color={ui.colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
-            <View style={styles.half}>
-              <Text style={styles.counterLabel}>
-                Stock Mínimo {productKind === 'MEASURED' ? `(${getUnitAbbreviation(unit)})` : ''}
-              </Text>
-              <View style={styles.counterWrap}>
-                <TouchableOpacity
-                  style={styles.counterBtn}
-                  onPress={() => {
-                    const step = unitAllowsDecimals(unit) ? 0.5 : 1;
-                    const nextValue = Math.max(0, Number(minStock || 0) - step);
-                    setMinStock(String(Math.round(nextValue * 100) / 100));
-                  }}
-                >
-                  <Icon source="minus" size={16} color={ui.colors.textMuted} />
-                </TouchableOpacity>
-                <TextInput
-                  value={minStock}
-                  onChangeText={setMinStock}
-                  mode="flat"
-                  keyboardType={unitAllowsDecimals(unit) ? 'decimal-pad' : 'number-pad'}
-                  style={styles.counterInput}
-                  underlineColor="transparent"
-                  activeUnderlineColor="transparent"
-                />
-                <TouchableOpacity
-                  style={styles.counterBtn}
-                  onPress={() => {
-                    const step = unitAllowsDecimals(unit) ? 0.5 : 1;
-                    const nextValue = Number(minStock || 0) + step;
-                    setMinStock(String(Math.round(nextValue * 100) / 100));
-                  }}
-                >
-                  <Icon source="plus" size={16} color={ui.colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
+          )}
         </View>
 
         <View style={styles.sectionCard}>
@@ -631,6 +692,49 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
             ))}
           </View>
         </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Text style={styles.sectionIconText}>👀</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Visibilidad</Text>
+          </View>
+          <View style={[styles.row, { marginTop: 14, justifyContent: 'space-between' }]}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={{ color: ui.colors.text, fontWeight: '700', fontSize: 15 }}>Disponible para venta</Text>
+              <Text style={{ color: ui.colors.textMuted, fontSize: 12, marginTop: 4 }}>
+                Si se desactiva, no aparecerá en ventas, pero podrá seguir usándose como insumo en recetas.
+              </Text>
+            </View>
+            <Switch
+              value={isAvailableForSale}
+              onValueChange={setIsAvailableForSale}
+              color={ui.colors.primary}
+            />
+          </View>
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
+              <Text style={styles.sectionIconText}>🖼️</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Imagen (Opcional)</Text>
+          </View>
+          <View style={styles.imageWrap}>
+            {imageUri ? <Image source={{ uri: imageUri }} style={styles.productImage} /> : <Text style={styles.imagePlaceholder}>Sin imagen seleccionada</Text>}
+          </View>
+          <View style={styles.imageButtonsRow}>
+            <TouchableOpacity style={styles.smallBtn} onPress={takePhoto}>
+              <Text style={styles.smallBtnText}>Cámara</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.smallBtn} onPress={pickImage}>
+              <Text style={styles.smallBtnText}>Galería</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
       </ScrollView>
 
       <BottomDock style={styles.bottomAction}>
@@ -647,6 +751,57 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
           Guardar Cambios
         </Button>
       </BottomDock>
+
+      <Modal
+        visible={ingredientPickerVisible}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setIngredientPickerVisible(false)}
+      >
+        <SafeAreaView style={{ flex: 1, backgroundColor: '#fff' }} edges={['top', 'bottom']}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', padding: 14, borderBottomWidth: 1, borderBottomColor: '#eee' }}>
+            <TouchableOpacity onPress={() => setIngredientPickerVisible(false)} style={{ padding: 5, marginRight: 10 }}>
+              <Icon source="close" size={24} color="#000" />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 18, fontWeight: '700' }}>Seleccionar Insumo</Text>
+          </View>
+          <View style={{ padding: 14 }}>
+            <TextInput
+              placeholder="Buscar por nombre..."
+              value={ingredientSearchQuery}
+              onChangeText={setIngredientSearchQuery}
+              mode="outlined"
+              activeOutlineColor={ui.colors.primary}
+              left={<TextInput.Icon icon="magnify" />}
+              style={{ backgroundColor: '#fff' }}
+            />
+          </View>
+          <FlatList
+            data={availableIngredients.filter(i => i.name.toLowerCase().includes(ingredientSearchQuery.toLowerCase()))}
+            keyExtractor={item => item.id}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={{ padding: 16, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' }}
+                onPress={() => {
+                  if (currentIngredientId) {
+                    setRecipeItems(recipeItems.map(ri => ri.id === currentIngredientId ? { ...ri, ingredientId: item.id } : ri));
+                  }
+                  setIngredientPickerVisible(false);
+                  setIngredientSearchQuery('');
+                }}
+              >
+                <Text style={{ fontSize: 16, fontWeight: '500', color: '#111827' }}>{item.productId} - {item.name}</Text>
+                <Text style={{ fontSize: 13, color: '#6b7280', marginTop: 2 }}>{getUnitAbbreviation(item.unit)}</Text>
+              </TouchableOpacity>
+            )}
+            ListEmptyComponent={
+              <Text style={{ textAlign: 'center', marginTop: 40, color: '#6b7280' }}>No se encontraron insumos.</Text>
+            }
+          />
+        </SafeAreaView>
+      </Modal>
+
     </SafeAreaView>
   );
 }

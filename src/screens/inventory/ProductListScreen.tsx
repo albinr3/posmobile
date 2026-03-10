@@ -81,12 +81,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
           parsedData = null;
         }
 
-        const isActive =
-          typeof parsedData?.isActive === 'boolean'
-            ? parsedData.isActive
-            : typeof parsedData?.active === 'boolean'
-              ? parsedData.active
-              : true;
+        const isActive = row.is_available_for_sale !== 0;
 
         return {
           parsedData,
@@ -125,7 +120,6 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   };
 
   const filteredProducts = products
-    .filter((product: any) => product.isActive !== false)
     .filter(
       (product) =>
         product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -142,8 +136,8 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
     navigation.navigate('ProductEdit', { productId });
   };
 
-  const renderListProduct = ({ item }: { item: Product }) => (
-    <TouchableOpacity style={styles.productCard} onPress={() => goToEditProduct(item.localId)}>
+  const renderListProduct = ({ item }: { item: any }) => (
+    <TouchableOpacity style={[styles.productCard, !item.isActive && { opacity: 0.7 }]} onPress={() => goToEditProduct(item.localId)}>
       <View style={styles.middle}>
         <Text numberOfLines={1} style={styles.name}>
           {item.name}
@@ -151,11 +145,21 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{item.sku ? item.sku : 'Sin SKU'}</Text>
           <Text style={styles.separatorDot}>•</Text>
-          <Text style={[styles.stock, item.stock <= 0 ? styles.out : item.stock <= 10 ? styles.low : styles.ok]}>
-            {item.stock <= 10 && item.stock > 0
-              ? `Bajo: ${formatProductQty(item.stock, item.unit)}`
-              : `Stock: ${formatProductQty(item.stock, item.unit)}`}
-          </Text>
+          {item.productKind === 'RECIPE' ? (
+            <Text style={[styles.stock, styles.ok]}>Receta</Text>
+          ) : (
+            <Text style={[styles.stock, item.stock <= 0 ? styles.out : item.stock <= 10 ? styles.low : styles.ok]}>
+              {item.stock <= 10 && item.stock > 0
+                ? `Bajo: ${formatProductQty(item.stock, item.unit)}`
+                : `Stock: ${formatProductQty(item.stock, item.unit)}`}
+            </Text>
+          )}
+          {!item.isActive && (
+            <>
+              <Text style={styles.separatorDot}>•</Text>
+              <Text style={{ color: '#ef4444', fontSize: 12, fontWeight: '600' }}>No vendible</Text>
+            </>
+          )}
         </View>
       </View>
       <View style={styles.right}>

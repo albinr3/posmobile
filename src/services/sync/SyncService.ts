@@ -161,48 +161,56 @@ class SyncService {
     this.isSyncing = true;
 
     try {
-      // Reintentar devoluciones que quedaron en error por mapeo temporal de item ids
-      await db.runAsync(
-        `UPDATE sync_queue
-         SET status = 'pending', retry_count = 0
-         WHERE status = 'error' AND entity_type = 'return' AND action = 'create'`
-      );
-
-      const pending = await db.query<any>(
-        'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
-        ['pending']
-      );
-      if (SYNC_DEBUG) console.log('[SyncService] processQueue() pending items', { count: pending.length });
-
-      for (const item of pending) {
-        try {
-          if (SYNC_DEBUG) {
-            console.log('[SyncService] processQueue() syncing item', {
-              queueId: item.id,
-              entityType: item.entity_type,
-              action: item.action,
-              entityLocalId: item.entity_local_id,
-              retryCount: item.retry_count,
-            });
-          }
-          await this.syncItem(item);
-          
-          // Marcar como sincronizado
-          await db.update('sync_queue', item.id, {
-            status: 'synced',
-            synced_at: Date.now(),
-          }, 'id');
-        } catch (error) {
-          const stopProcessing = await this.handleSyncError(item, error);
-          if (stopProcessing) {
-            if (SYNC_DEBUG) console.log('[SyncService] processQueue() stopProcessing=true, cortando ciclo');
-            break;
-          }
-        }
-      }
+      await this.processQueueInternal();
     } finally {
       this.isSyncing = false;
       await this.updatePendingCount();
+    }
+  }
+
+  /**
+   * Internal queue processor — does NOT check/set isSyncing.
+   * Called by processQueue (with guard) and uploadPendingChanges (already inside fullSync).
+   */
+  private async processQueueInternal() {
+    // Reintentar devoluciones que quedaron en error por mapeo temporal de item ids
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET status = 'pending', retry_count = 0
+       WHERE status = 'error' AND entity_type = 'return' AND action = 'create'`
+    );
+
+    const pending = await db.query<any>(
+      'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
+      ['pending']
+    );
+    if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() pending items', { count: pending.length });
+
+    for (const item of pending) {
+      try {
+        if (SYNC_DEBUG) {
+          console.log('[SyncService] processQueueInternal() syncing item', {
+            queueId: item.id,
+            entityType: item.entity_type,
+            action: item.action,
+            entityLocalId: item.entity_local_id,
+            retryCount: item.retry_count,
+          });
+        }
+        await this.syncItem(item);
+        
+        // Marcar como sincronizado
+        await db.update('sync_queue', item.id, {
+          status: 'synced',
+          synced_at: Date.now(),
+        }, 'id');
+      } catch (error) {
+        const stopProcessing = await this.handleSyncError(item, error);
+        if (stopProcessing) {
+          if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() stopProcessing=true, cortando ciclo');
+          break;
+        }
+      }
     }
   }
 
@@ -943,7 +951,7 @@ class SyncService {
   }
 
   private async uploadPendingChanges(authToken: string) {
-    await this.processQueue();
+    await this.processQueueInternal();
   }
 
   private async getPendingQueueCount(): Promise<number> {

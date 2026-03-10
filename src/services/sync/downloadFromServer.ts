@@ -166,6 +166,7 @@ export async function downloadFromServer(options: {
         cost_cents: product.costCents || Math.round((product.cost || 0) * 100),
         price_cents: product.priceCents || Math.round((product.price || 0) * 100),
         stock: product.stock || 0,
+        is_available_for_sale: typeof product.isAvailableForSale === 'boolean' ? (product.isAvailableForSale ? 1 : 0) : 1,
         synced: 1,
         data: JSON.stringify(product),
       };
@@ -397,6 +398,8 @@ export async function downloadFromServer(options: {
           quantity,
           priceCents,
           totalCents,
+          wasPriceOverridden: Boolean(item?.wasPriceOverridden),
+          recipeAdjustments: Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [],
         };
       });
 
@@ -643,6 +646,7 @@ export async function downloadFromServer(options: {
           quantity,
           priceCents,
           totalCents,
+          wasPriceOverridden: Boolean(item?.wasPriceOverridden),
         };
       });
 

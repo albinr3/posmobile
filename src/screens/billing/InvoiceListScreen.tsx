@@ -591,7 +591,14 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
 
       <View style={styles.footerRow}>
-        <Text style={styles.syncText}>{item.synced ? 'Sincronizada' : 'Pendiente de sync'}</Text>
+        {item.synced ? (
+          <Text style={styles.syncText}>Sincronizada</Text>
+        ) : (
+          <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, gap: 4 }}>
+            <Icon source="cloud-off-outline" size={13} color="#DC2626" />
+            <Text style={{ color: '#DC2626', fontSize: 11, fontWeight: '700' }}>Sin sincronizar</Text>
+          </View>
+        )}
         <Text style={styles.totalValue}>{formatCurrency(item.totalCents)}</Text>
       </View>
 

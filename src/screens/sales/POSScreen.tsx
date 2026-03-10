@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image } from 'react-native';
-import { Text, Icon, Searchbar, Menu, IconButton } from 'react-native-paper';
+import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image, ScrollView } from 'react-native';
+import { Text, Icon, Searchbar, Menu, IconButton, Modal, Portal, Button, Chip } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
@@ -11,7 +11,8 @@ import { db } from '../../database/Database';
 import { Product, SaleItem } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
-import { formatProductQty, inferProductUnit } from '../../utils/productUnits';
+import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
+import { buildLineId } from '../../store/createCartStore';
 
 interface POSScreenProps {
   navigation: any;
@@ -50,8 +51,15 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const hydratedEditSaleRef = useRef<string | null>(null);
   const internalNavigationRef = useRef(false);
 
+  // Recipe modifier state
+  const [recipeDialogLineId, setRecipeDialogLineId] = useState<string | null>(null);
+  const [recipeDialogMode, setRecipeDialogMode] = useState<'SIN' | 'EXTRA' | null>(null);
+  const [recipeDraft, setRecipeDraft] = useState<Record<string, 'SIN' | 'EXTRA'>>({});
+  const [recipeApplyScope, setRecipeApplyScope] = useState<'ONE' | 'ALL'>('ALL');
+
   const {
     addItem,
+    removeItem,
     getTotal,
     getItemCount,
     customerId,
@@ -174,6 +182,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           if (!Number.isFinite(unitPriceCents) || unitPriceCents <= 0) continue;
 
           resolvedItems.push({
+            lineId: buildLineId(productRow.local_id),
             productId: productRow.local_id,
             productName: String(rawItem?.productName || productRow.name || 'Producto'),
             quantity,
@@ -222,7 +231,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   const loadProducts = async () => {
     try {
-      const result = await db.query<any>('SELECT * FROM products ORDER BY name');
+      const result = await db.query<any>('SELECT * FROM products WHERE is_available_for_sale = 1 ORDER BY name');
       const mapped = result.map((row) => {
         let parsedData: Record<string, unknown> | null = null;
         try {
@@ -241,14 +250,11 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           priceCents: row.price_cents,
           stock: row.stock,
           unit: inferProductUnit(parsedData),
+          productKind: inferProductKind(parsedData),
+          recipeItems: Array.isArray(parsedData?.recipeItems) ? parsedData.recipeItems : [],
           imageUrl: row.image_url,
           synced: row.synced === 1,
-          isActive:
-            typeof parsedData?.isActive === 'boolean'
-              ? parsedData.isActive
-              : typeof parsedData?.active === 'boolean'
-                ? parsedData.active
-                : true,
+          isActive: row.is_available_for_sale === 1,
           data: row.data,
         };
       });
@@ -282,17 +288,17 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const cartQuantityByProduct = useMemo(() => {
     const map = new Map<string, number>();
     for (const item of items) {
-      map.set(item.productId, item.quantity);
+      map.set(item.productId, (map.get(item.productId) || 0) + item.quantity);
     }
     return map;
   }, [items]);
 
-  const handleProductPress = (product: POSProduct) => {
+  const handleProductPress = (product: any) => {
     if (!product.synced || !product.serverId || !product.isActive) {
       Alert.alert('Producto no disponible', 'Este producto no esta activo o no ha sido sincronizado.');
       return;
     }
-    if (product.stock <= 0) {
+    if (product.productKind !== 'RECIPE' && product.stock <= 0) {
       Alert.alert('Sin stock', 'Este producto no tiene stock disponible.');
       return;
     }
@@ -326,17 +332,29 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     </TouchableOpacity>
   );
 
-  const renderProduct = ({ item }: { item: POSProduct }) => {
-    const isOut = item.stock <= 0;
+  const renderProduct = ({ item }: { item: any }) => {
+    const isRecipe = (item as any).productKind === 'RECIPE';
+    const isOut = !isRecipe && item.stock <= 0;
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
-    const stockLabel = `${formatProductQty(item.stock, item.unit)} disponible`;
+    const stockLabel = isRecipe ? 'Receta' : `${formatProductQty(item.stock, item.unit)} disponible`;
     const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
       return (
         <View style={styles.listItemWrap}>
-          <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
+          <TouchableOpacity
+            style={[styles.productCard, styles.productCardList]}
+            onPress={() => handleProductPress(item)}
+            onLongPress={() => {
+              if (selectedQty > 0) {
+                useCartStore.setState({
+                  items: useCartStore.getState().items.filter(i => i.productId !== item.localId),
+                });
+              }
+            }}
+            delayLongPress={1000}
+          >
             {selectedQty > 0 ? (
               <View style={styles.qtyBadge}>
                 <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
@@ -363,7 +381,18 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     }
 
     return (
-      <TouchableOpacity style={styles.productCard} onPress={() => handleProductPress(item)}>
+      <TouchableOpacity
+        style={styles.productCard}
+        onPress={() => handleProductPress(item)}
+        onLongPress={() => {
+          if (selectedQty > 0) {
+            useCartStore.setState({
+              items: useCartStore.getState().items.filter(i => i.productId !== item.localId),
+            });
+          }
+        }}
+        delayLongPress={1000}
+      >
         {selectedQty > 0 ? (
           <View style={styles.qtyBadge}>
             <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
@@ -552,6 +581,219 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <Icon source="arrow-right" size={18} color="#fff" />
         </TouchableOpacity>
       </BottomDock>
+
+      <Portal>
+        <Modal
+          visible={!!recipeDialogLineId}
+          onDismiss={() => { setRecipeDialogLineId(null); setRecipeDialogMode(null); setRecipeDraft({}); setRecipeApplyScope('ALL'); }}
+          contentContainerStyle={{
+            backgroundColor: '#fff',
+            margin: 20,
+            borderRadius: 16,
+            padding: 20,
+            maxHeight: '80%',
+          }}
+        >
+          <ScrollView>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 6 }}>
+              Ajustes de receta
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', marginBottom: 14 }}>
+              Marca cada ingrediente como "Sin" o "Extra" según necesites.
+            </Text>
+
+            {/* Scope selector - only show when qty > 1 */}
+            {(() => {
+              const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+              if (cartItem && cartItem.quantity > 1) {
+                return (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Aplicar a:</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                          backgroundColor: recipeApplyScope === 'ONE' ? ui.colors.primary : '#F3F4F6',
+                        }}
+                        onPress={() => setRecipeApplyScope('ONE')}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: recipeApplyScope === 'ONE' ? '#fff' : '#374151' }}>Solo 1 unidad</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                          backgroundColor: recipeApplyScope === 'ALL' ? ui.colors.primary : '#F3F4F6',
+                        }}
+                        onPress={() => setRecipeApplyScope('ALL')}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: recipeApplyScope === 'ALL' ? '#fff' : '#374151' }}>Todas las unidades</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              }
+              return null;
+            })()}
+
+            {(() => {
+              const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+              const ingredients = cartItem?.recipeItems ?? [];
+              if (ingredients.length === 0) {
+                return <Text style={{ color: '#9CA3AF', fontSize: 13 }}>Este producto no tiene insumos definidos.</Text>;
+              }
+              return ingredients.map((ingredient: any) => {
+                const current = recipeDraft[ingredient.ingredientId] as 'SIN' | 'EXTRA' | undefined;
+                const hasMod = Boolean(current);
+                return (
+                  <View
+                    key={ingredient.ingredientId}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center',
+                      borderWidth: 1, borderColor: hasMod ? (current === 'SIN' ? '#F87171' : '#34D399') : '#E5E7EB',
+                      borderRadius: 10, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 8,
+                      backgroundColor: hasMod ? (current === 'SIN' ? '#FEF2F2' : '#ECFDF5') : '#fff',
+                    }}
+                  >
+                    <View style={{ flex: 1, marginRight: 8 }}>
+                      <Text style={{ fontWeight: '600', color: '#111827', fontSize: 14 }}>{ingredient.ingredientName}</Text>
+                      {current && (
+                        <Text style={{ fontSize: 11, color: current === 'SIN' ? '#DC2626' : '#059669', marginTop: 2, fontWeight: '600' }}>
+                          {current === 'SIN' ? '🚫 Sin este ingrediente' : '➕ Extra de este ingrediente'}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <TouchableOpacity
+                        style={{
+                          paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+                          backgroundColor: current === 'SIN' ? '#DC2626' : '#F3F4F6',
+                          borderWidth: 1, borderColor: current === 'SIN' ? '#DC2626' : '#E5E7EB',
+                        }}
+                        onPress={() => {
+                          setRecipeDraft(prev => {
+                            const next = { ...prev };
+                            if (next[ingredient.ingredientId] === 'SIN') {
+                              delete next[ingredient.ingredientId];
+                            } else {
+                              next[ingredient.ingredientId] = 'SIN';
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: current === 'SIN' ? '#fff' : '#6B7280' }}>SIN</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          paddingHorizontal: 12, paddingVertical: 7, borderRadius: 8,
+                          backgroundColor: current === 'EXTRA' ? '#059669' : '#F3F4F6',
+                          borderWidth: 1, borderColor: current === 'EXTRA' ? '#059669' : '#E5E7EB',
+                        }}
+                        onPress={() => {
+                          setRecipeDraft(prev => {
+                            const next = { ...prev };
+                            if (next[ingredient.ingredientId] === 'EXTRA') {
+                              delete next[ingredient.ingredientId];
+                            } else {
+                              next[ingredient.ingredientId] = 'EXTRA';
+                            }
+                            return next;
+                          });
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '800', color: current === 'EXTRA' ? '#fff' : '#6B7280' }}>EXTRA</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              });
+            })()}
+
+            <TouchableOpacity
+              style={{
+                marginTop: 10, backgroundColor: ui.colors.primary, borderRadius: 10,
+                paddingVertical: 14, alignItems: 'center',
+              }}
+              onPress={() => {
+                const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+                if (cartItem) {
+                  const adjustments = (cartItem.recipeItems ?? []).flatMap((ingredient: any) => {
+                    const adjustmentType = recipeDraft[ingredient.ingredientId];
+                    if (!adjustmentType) return [];
+                    return [{ ingredientId: ingredient.ingredientId, ingredientName: ingredient.ingredientName, adjustmentType }];
+                  });
+                  const newLineId = buildLineId(cartItem.productId, adjustments);
+                  const { items: currentItems } = useCartStore.getState();
+                  const shouldSplit = recipeApplyScope === 'ONE' && cartItem.quantity > 1;
+
+                  if (shouldSplit) {
+                    let nextItems = currentItems.map(item =>
+                      item.lineId === recipeDialogLineId
+                        ? { ...item, quantity: item.quantity - 1, totalCents: (item.quantity - 1) * item.priceCents }
+                        : item
+                    );
+                    const existingNewLine = nextItems.find(i => i.lineId === newLineId);
+                    if (existingNewLine) {
+                      nextItems = nextItems.map(i =>
+                        i.lineId === newLineId
+                          ? { ...i, quantity: i.quantity + 1, totalCents: (i.quantity + 1) * i.priceCents }
+                          : i
+                      );
+                    } else {
+                      const insertIdx = nextItems.findIndex(i => i.lineId === recipeDialogLineId);
+                      const newLine = {
+                        ...cartItem,
+                        lineId: newLineId,
+                        quantity: 1,
+                        totalCents: cartItem.priceCents,
+                        recipeAdjustments: adjustments,
+                      };
+                      nextItems.splice(insertIdx + 1, 0, newLine);
+                    }
+                    useCartStore.setState({ items: nextItems });
+                  } else {
+                    if (newLineId !== recipeDialogLineId) {
+                      const existingTarget = currentItems.find(i => i.lineId === newLineId);
+                      if (existingTarget) {
+                        useCartStore.setState({
+                          items: currentItems
+                            .filter(i => i.lineId !== recipeDialogLineId)
+                            .map(i => i.lineId === newLineId
+                              ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
+                              : i
+                            ),
+                        });
+                      } else {
+                        useCartStore.setState({
+                          items: currentItems.map(item =>
+                            item.lineId === recipeDialogLineId
+                              ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
+                              : item
+                          ),
+                        });
+                      }
+                    } else {
+                      useCartStore.setState({
+                        items: currentItems.map(item =>
+                          item.lineId === recipeDialogLineId
+                            ? { ...item, recipeAdjustments: adjustments }
+                            : item
+                        ),
+                      });
+                    }
+                  }
+                }
+                setRecipeDialogLineId(null);
+                setRecipeDialogMode(null);
+                setRecipeDraft({});
+                setRecipeApplyScope('ALL');
+              }}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Aplicar ajustes</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </Modal>
+      </Portal>
     </SafeAreaView>
   );
 }

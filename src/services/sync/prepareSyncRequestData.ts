@@ -29,9 +29,11 @@ export async function prepareSyncRequestData(
         stock: data.stock || 0,
         minStock: data.minStock || 0,
         itbisRateBp: data.itbisRateBp || 1800,
+        isAvailableForSale: typeof data.isAvailableForSale === 'boolean' ? data.isAvailableForSale : true,
         imageUrls: data.imageUrls || [],
         productKind: inferredKind,
         unit: resolvedUnit,
+        recipeItems: Array.isArray(data.recipeItems) ? data.recipeItems : [],
       };
       }
     case 'customer':
@@ -110,6 +112,8 @@ export async function prepareSyncRequestData(
             quantity: item.quantity || item.qty,
             price: item.price || resolvedUnitPriceCents / 100,
             unitPriceCents: resolvedUnitPriceCents,
+            wasPriceOverridden: Boolean(item.wasPriceOverridden),
+            recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
           };
         })
       );

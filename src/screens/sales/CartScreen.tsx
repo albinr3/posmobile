@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, FlatList, Alert, ScrollView } from 'react-native';
-import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput } from 'react-native-paper';
+import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
+import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,6 +17,7 @@ import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import { SalePaymentSplit } from '../../types';
 import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
+import { buildLineId } from '../../store/createCartStore';
 
 interface CartScreenProps {
   navigation: any;
@@ -82,6 +83,95 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [splitMethodMenuIndex, setSplitMethodMenuIndex] = useState<number | null>(null);
   const [splitBankMenuIndex, setSplitBankMenuIndex] = useState<number | null>(null);
   const { setCustomer } = useCartStore();
+
+  // Recipe modifier state
+  const [recipeDialogLineId, setRecipeDialogLineId] = useState<string | null>(null);
+  const [recipeDialogMode, setRecipeDialogMode] = useState<'SIN' | 'EXTRA' | null>(null);
+  const [recipeDraft, setRecipeDraft] = useState<Record<string, 'SIN' | 'EXTRA'>>({});
+  const [recipeApplyScope, setRecipeApplyScope] = useState<'ONE' | 'ALL'>('ALL');
+
+  const openRecipeDialog = (item: typeof items[0]) => {
+    setRecipeDialogLineId(item.lineId);
+    setRecipeDialogMode(null);
+    setRecipeApplyScope(item.quantity > 1 ? 'ONE' : 'ALL');
+    const existing = item.recipeAdjustments ?? [];
+    const draft: Record<string, 'SIN' | 'EXTRA'> = {};
+    existing.forEach((adj: any) => { draft[adj.ingredientId] = adj.adjustmentType; });
+    setRecipeDraft(draft);
+  };
+
+  const closeRecipeDialog = () => {
+    setRecipeDialogLineId(null);
+    setRecipeDialogMode(null);
+    setRecipeDraft({});
+    setRecipeApplyScope('ALL');
+  };
+
+  const applyRecipeAdjustments = () => {
+    const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+    if (cartItem) {
+      const adjustments = (cartItem.recipeItems ?? []).flatMap((ingredient: any) => {
+        const adjustmentType = recipeDraft[ingredient.ingredientId];
+        if (!adjustmentType) return [];
+        return [{ ingredientId: ingredient.ingredientId, ingredientName: ingredient.ingredientName, adjustmentType }];
+      });
+      const newLineId = buildLineId(cartItem.productId, adjustments);
+      const { items: currentItems } = useCartStore.getState();
+      const shouldSplit = recipeApplyScope === 'ONE' && cartItem.quantity > 1;
+
+      if (shouldSplit) {
+        let nextItems = currentItems.map(item =>
+          item.lineId === recipeDialogLineId
+            ? { ...item, quantity: item.quantity - 1, totalCents: (item.quantity - 1) * item.priceCents }
+            : item
+        );
+        const existingNewLine = nextItems.find(i => i.lineId === newLineId);
+        if (existingNewLine) {
+          nextItems = nextItems.map(i =>
+            i.lineId === newLineId
+              ? { ...i, quantity: i.quantity + 1, totalCents: (i.quantity + 1) * i.priceCents }
+              : i
+          );
+        } else {
+          const insertIdx = nextItems.findIndex(i => i.lineId === recipeDialogLineId);
+          const newLine = { ...cartItem, lineId: newLineId, quantity: 1, totalCents: cartItem.priceCents, recipeAdjustments: adjustments };
+          nextItems.splice(insertIdx + 1, 0, newLine);
+        }
+        useCartStore.setState({ items: nextItems });
+      } else {
+        if (newLineId !== recipeDialogLineId) {
+          const existingTarget = currentItems.find(i => i.lineId === newLineId);
+          if (existingTarget) {
+            useCartStore.setState({
+              items: currentItems
+                .filter(i => i.lineId !== recipeDialogLineId)
+                .map(i => i.lineId === newLineId
+                  ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
+                  : i
+                ),
+            });
+          } else {
+            useCartStore.setState({
+              items: currentItems.map(item =>
+                item.lineId === recipeDialogLineId
+                  ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
+                  : item
+              ),
+            });
+          }
+        } else {
+          useCartStore.setState({
+            items: currentItems.map(item =>
+              item.lineId === recipeDialogLineId
+                ? { ...item, recipeAdjustments: adjustments }
+                : item
+            ),
+          });
+        }
+      }
+    }
+    closeRecipeDialog();
+  };
 
   useFocusEffect(
     useCallback(() => {
@@ -265,6 +355,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           totalCents: item.totalCents,
           unit: item.unit || 'UNIDAD',
           wasPriceOverridden: false,
+          recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
         })),
         totalCents: getTotal(),
         paymentMethod,
@@ -579,24 +670,51 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   const renderItem = ({ item }: { item: typeof items[0] }) => {
     const step = unitAllowsDecimals(item.unit) ? 0.5 : 1;
+    const adjustments = item.recipeAdjustments ?? [];
+    const hasRecipeItems = Array.isArray(item.recipeItems) && item.recipeItems.length > 0;
 
     return (
       <Surface style={styles.itemCard}>
         <View style={styles.itemInfo}>
           <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
           <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
+          {hasRecipeItems && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+              {adjustments.length === 0 ? (
+                <View style={{ backgroundColor: '#F3F4F6', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                  <Text style={{ fontSize: 11, color: '#6B7280' }}>Normal</Text>
+                </View>
+              ) : (
+                adjustments.map((adj: any) => (
+                  <View key={adj.ingredientId} style={{ backgroundColor: adj.adjustmentType === 'SIN' ? '#FEF2F2' : '#F0FDF4', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                    <Text style={{ fontSize: 11, color: adj.adjustmentType === 'SIN' ? '#DC2626' : '#16A34A', fontWeight: '600' }}>
+                      {adj.adjustmentType === 'SIN' ? 'Sin' : 'Extra'} {adj.ingredientName}
+                    </Text>
+                  </View>
+                ))
+              )}
+            </View>
+          )}
+          {hasRecipeItems && (
+            <TouchableOpacity
+              style={{ marginTop: 6, backgroundColor: '#F3F4F6', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 12, alignSelf: 'flex-start' }}
+              onPress={() => openRecipeDialog(item)}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '600', color: ui.colors.primary }}>Personalizar</Text>
+            </TouchableOpacity>
+          )}
         </View>
         <View style={styles.quantityContainer}>
           <IconButton
             icon="minus"
             size={20}
-            onPress={() => updateQuantity(item.productId, Math.max(0, Math.round((item.quantity - step) * 100) / 100))}
+            onPress={() => updateQuantity(item.lineId, Math.max(0, Math.round((item.quantity - step) * 100) / 100))}
           />
           <Text style={styles.quantity}>{formatProductQty(item.quantity, item.unit)}</Text>
           <IconButton
             icon="plus"
             size={20}
-            onPress={() => updateQuantity(item.productId, Math.round((item.quantity + step) * 100) / 100)}
+            onPress={() => updateQuantity(item.lineId, Math.round((item.quantity + step) * 100) / 100)}
           />
         </View>
         <View style={styles.itemTotal}>
@@ -605,7 +723,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             icon="delete"
             size={20}
             iconColor={ui.colors.danger}
-            onPress={() => removeItem(item.productId)}
+            onPress={() => removeItem(item.lineId)}
           />
         </View>
       </Surface>
@@ -617,7 +735,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       <FlatList
         data={items}
         renderItem={renderItem}
-        keyExtractor={(item) => item.productId}
+        keyExtractor={(item) => item.lineId}
         contentContainerStyle={styles.listContent}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -832,6 +950,146 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             <Button mode="contained" onPress={() => setSplitPaymentModalVisible(false)} buttonColor={ui.colors.primary}>
               Listo
             </Button>
+          </ScrollView>
+        </Modal>
+      </Portal>
+
+      <Portal>
+        <Modal
+          visible={!!recipeDialogLineId}
+          onDismiss={closeRecipeDialog}
+          contentContainerStyle={{
+            backgroundColor: '#fff',
+            margin: 20,
+            borderRadius: 16,
+            padding: 20,
+            maxHeight: '80%',
+          }}
+        >
+          <ScrollView>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#111827', marginBottom: 6 }}>
+              Ajustes de receta
+            </Text>
+            <Text style={{ fontSize: 13, color: '#6B7280', marginBottom: 14 }}>
+              Selecciona un modo y marca los ingredientes.
+            </Text>
+
+            <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+              <TouchableOpacity
+                style={{
+                  flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
+                  backgroundColor: recipeDialogMode === 'SIN' ? ui.colors.primary : '#F3F4F6',
+                }}
+                onPress={() => setRecipeDialogMode('SIN')}
+              >
+                <Text style={{ fontWeight: '700', color: recipeDialogMode === 'SIN' ? '#fff' : '#374151' }}>Sin</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={{
+                  flex: 1, paddingVertical: 10, borderRadius: 8, alignItems: 'center',
+                  backgroundColor: recipeDialogMode === 'EXTRA' ? ui.colors.primary : '#F3F4F6',
+                }}
+                onPress={() => setRecipeDialogMode('EXTRA')}
+              >
+                <Text style={{ fontWeight: '700', color: recipeDialogMode === 'EXTRA' ? '#fff' : '#374151' }}>Extra</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Scope selector */}
+            {(() => {
+              const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+              if (cartItem && cartItem.quantity > 1) {
+                return (
+                  <View style={{ marginBottom: 14 }}>
+                    <Text style={{ fontSize: 12, color: '#6B7280', marginBottom: 6 }}>Aplicar a:</Text>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                          backgroundColor: recipeApplyScope === 'ONE' ? ui.colors.primary : '#F3F4F6',
+                        }}
+                        onPress={() => setRecipeApplyScope('ONE')}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: recipeApplyScope === 'ONE' ? '#fff' : '#374151' }}>Solo 1 unidad</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={{
+                          flex: 1, paddingVertical: 8, borderRadius: 8, alignItems: 'center',
+                          backgroundColor: recipeApplyScope === 'ALL' ? ui.colors.primary : '#F3F4F6',
+                        }}
+                        onPress={() => setRecipeApplyScope('ALL')}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: recipeApplyScope === 'ALL' ? '#fff' : '#374151' }}>Todas las unidades</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              }
+              return null;
+            })()}
+
+            {(() => {
+              const cartItem = items.find(i => i.lineId === recipeDialogLineId);
+              const ingredients = cartItem?.recipeItems ?? [];
+              if (ingredients.length === 0) {
+                return <Text style={{ color: '#9CA3AF', fontSize: 13 }}>Este producto no tiene insumos definidos.</Text>;
+              }
+              return ingredients.map((ingredient: any) => {
+                const current = recipeDraft[ingredient.ingredientId];
+                const isChecked = recipeDialogMode ? current === recipeDialogMode : Boolean(current);
+                return (
+                  <TouchableOpacity
+                    key={ingredient.ingredientId}
+                    style={{
+                      flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+                      borderWidth: 1, borderColor: isChecked ? ui.colors.primary : '#E5E7EB',
+                      borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 8,
+                      backgroundColor: isChecked ? '#f0e6ff' : '#fff',
+                    }}
+                    disabled={!recipeDialogMode}
+                    onPress={() => {
+                      if (!recipeDialogMode) return;
+                      setRecipeDraft(prev => {
+                        const next = { ...prev };
+                        if (next[ingredient.ingredientId] === recipeDialogMode) {
+                          delete next[ingredient.ingredientId];
+                        } else {
+                          next[ingredient.ingredientId] = recipeDialogMode;
+                        }
+                        return next;
+                      });
+                    }}
+                  >
+                    <View>
+                      <Text style={{ fontWeight: '600', color: '#111827', fontSize: 14 }}>{ingredient.ingredientName}</Text>
+                      {current && (
+                        <Text style={{ fontSize: 11, color: '#6B7280', marginTop: 2 }}>
+                          Aplicado: {current === 'SIN' ? 'Sin' : 'Extra'}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={{
+                      width: 22, height: 22, borderRadius: 4,
+                      borderWidth: 2, borderColor: isChecked ? ui.colors.primary : '#D1D5DB',
+                      backgroundColor: isChecked ? ui.colors.primary : '#fff',
+                      justifyContent: 'center', alignItems: 'center',
+                    }}>
+                      {isChecked && <Icon source="check" size={14} color="#fff" />}
+                    </View>
+                  </TouchableOpacity>
+                );
+              });
+            })()}
+
+            <TouchableOpacity
+              style={{
+                marginTop: 10, backgroundColor: ui.colors.primary, borderRadius: 10,
+                paddingVertical: 14, alignItems: 'center',
+              }}
+              onPress={applyRecipeAdjustments}
+            >
+              <Text style={{ color: '#fff', fontWeight: '700', fontSize: 15 }}>Aplicar ajustes</Text>
+            </TouchableOpacity>
           </ScrollView>
         </Modal>
       </Portal>

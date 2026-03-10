@@ -250,6 +250,7 @@ class DatabaseService {
         status TEXT DEFAULT 'draft',
         created_at INTEGER NOT NULL,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -264,6 +265,7 @@ class DatabaseService {
         price_cents INTEGER NOT NULL,
         stock REAL DEFAULT 0,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -277,6 +279,13 @@ class DatabaseService {
       `);
     }
 
+    const hasIsAvailable = productColumns.some((column) => column.name === 'is_available_for_sale');
+    if (!hasIsAvailable) {
+      await this.db.execAsync(`
+        ALTER TABLE products ADD COLUMN is_available_for_sale INTEGER DEFAULT 1;
+      `);
+    }
+
     // Tabla de clientes
     await this.db.execAsync(`
       CREATE TABLE IF NOT EXISTS customers (
@@ -285,6 +294,7 @@ class DatabaseService {
         name TEXT NOT NULL,
         phone TEXT,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -299,6 +309,7 @@ class DatabaseService {
         charges_itbis INTEGER DEFAULT 0,
         itbis_rate_bp INTEGER,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -311,6 +322,7 @@ class DatabaseService {
         name TEXT NOT NULL,
         description TEXT,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -324,6 +336,7 @@ class DatabaseService {
         amount_cents INTEGER NOT NULL,
         ar_id TEXT,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -339,6 +352,7 @@ class DatabaseService {
         category TEXT,
         notes TEXT,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -356,6 +370,7 @@ class DatabaseService {
         status TEXT DEFAULT 'PENDIENTE',
         due_date INTEGER,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -370,6 +385,7 @@ class DatabaseService {
         purchased_at INTEGER NOT NULL,
         cancelled_at INTEGER,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -387,6 +403,7 @@ class DatabaseService {
         returned_at INTEGER NOT NULL,
         cancelled_at INTEGER,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -404,6 +421,7 @@ class DatabaseService {
         unit_price_cents INTEGER NOT NULL,
         line_total_cents INTEGER NOT NULL,
         synced INTEGER DEFAULT 0,
+        is_available_for_sale INTEGER DEFAULT 1,
         data TEXT NOT NULL
       );
     `);
@@ -560,3 +578,4 @@ const globalWithDb = globalThis as typeof globalThis & {
 };
 
 export const db = globalWithDb.__movoposDbService ?? (globalWithDb.__movoposDbService = new DatabaseService());
+
