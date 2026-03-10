@@ -14,6 +14,7 @@ import { ui } from '../../theme/ui';
 import { syncService } from '../../services/sync/SyncService';
 import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
+import { formatProductQty } from '../../utils/productUnits';
 
 interface QuoteListItem {
   localId: string;
@@ -194,7 +195,7 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
           <div class="item">
             <div><strong>${String(item.productName || 'Producto')}</strong></div>
             <div class="row">
-              <span>${Number(item.quantity || item.qty || 0)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
+              <span>${formatProductQty(Number(item.quantity || item.qty || 0), item.unit)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
               <span><strong>${formatCurrency(Number(item.totalCents || 0))}</strong></span>
             </div>
           </div>

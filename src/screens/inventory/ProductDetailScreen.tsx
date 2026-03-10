@@ -4,6 +4,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { Surface, Text, Chip } from 'react-native-paper';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
+import { formatProductQty, inferProductUnit } from '../../utils/productUnits';
 
 interface ProductDetailScreenProps {
   route: any;
@@ -13,6 +14,15 @@ export function ProductDetailScreen({ route }: ProductDetailScreenProps) {
   const { productId } = route.params;
   const [product, setProduct] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const parsedProduct = (() => {
+    try {
+      return product?.data ? JSON.parse(product.data) : null;
+    } catch {
+      return null;
+    }
+  })();
+  const unit = inferProductUnit(parsedProduct);
 
   useEffect(() => {
     loadProduct();
@@ -67,7 +77,7 @@ export function ProductDetailScreen({ route }: ProductDetailScreenProps) {
 
           <View style={styles.row}>
             <Text style={styles.label}>Stock:</Text>
-            <Text style={styles.value}>{product.stock ?? 0}</Text>
+            <Text style={styles.value}>{formatProductQty(product.stock ?? 0, unit)}</Text>
           </View>
 
           <View style={styles.row}>

@@ -11,6 +11,7 @@ import { db } from '../../database/Database';
 import { Product, SaleItem } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { formatProductQty, inferProductUnit } from '../../utils/productUnits';
 
 interface POSScreenProps {
   navigation: any;
@@ -154,11 +155,18 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           const sourceId = String(rawItem?.productId || '');
           if (!sourceId) continue;
 
-          const productRow = await db.queryFirst<{ local_id: string; name?: string }>(
-            'SELECT local_id, name FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+          const productRow = await db.queryFirst<{ local_id: string; name?: string; data?: string }>(
+            'SELECT local_id, name, data FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
             [sourceId, sourceId]
           );
           if (!productRow?.local_id) continue;
+
+          let productData: Record<string, unknown> | null = null;
+          try {
+            productData = productRow.data ? JSON.parse(productRow.data) : null;
+          } catch {
+            productData = null;
+          }
 
           const quantity = Number(rawItem?.quantity ?? rawItem?.qty ?? 0);
           const unitPriceCents = Number(rawItem?.priceCents ?? rawItem?.unitPriceCents ?? 0);
@@ -171,6 +179,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             quantity,
             priceCents: unitPriceCents,
             totalCents: Math.round(quantity * unitPriceCents),
+            unit: inferProductUnit({
+              ...(productData || {}),
+              unit: rawItem?.unit ?? rawItem?.product?.unit,
+            }),
           });
         }
 
@@ -211,42 +223,35 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const loadProducts = async () => {
     try {
       const result = await db.query<any>('SELECT * FROM products ORDER BY name');
-      const mapped = result.map((row) => ({
-        parsedData: (() => {
-          try {
-            return row.data ? JSON.parse(row.data) : null;
-          } catch {
-            return null;
-          }
-        })(),
-        localId: row.local_id,
-        serverId: row.server_id,
-        name: row.name,
-        sku: row.sku,
-        reference: (() => {
-          try {
-            const parsed = row.data ? JSON.parse(row.data) : null;
-            return parsed?.reference ? String(parsed.reference) : null;
-          } catch {
-            return null;
-          }
-        })(),
-        priceCents: row.price_cents,
-        stock: row.stock,
-        imageUrl: row.image_url,
-        synced: row.synced === 1,
-        isActive: (() => {
-          try {
-            const parsed = row.data ? JSON.parse(row.data) : null;
-            if (typeof parsed?.isActive === 'boolean') return parsed.isActive;
-            if (typeof parsed?.active === 'boolean') return parsed.active;
-          } catch {
-            return true;
-          }
-          return true;
-        })(),
-        data: row.data,
-      }));
+      const mapped = result.map((row) => {
+        let parsedData: Record<string, unknown> | null = null;
+        try {
+          parsedData = row.data ? JSON.parse(row.data) : null;
+        } catch {
+          parsedData = null;
+        }
+
+        return {
+          parsedData,
+          localId: row.local_id,
+          serverId: row.server_id,
+          name: row.name,
+          sku: row.sku,
+          reference: parsedData?.reference ? String(parsedData.reference) : null,
+          priceCents: row.price_cents,
+          stock: row.stock,
+          unit: inferProductUnit(parsedData),
+          imageUrl: row.image_url,
+          synced: row.synced === 1,
+          isActive:
+            typeof parsedData?.isActive === 'boolean'
+              ? parsedData.isActive
+              : typeof parsedData?.active === 'boolean'
+                ? parsedData.active
+                : true,
+          data: row.data,
+        };
+      });
       setProducts(mapped);
     } catch (error) {
       console.error('Error cargando productos:', error);
@@ -325,6 +330,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     const isOut = item.stock <= 0;
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
+    const stockLabel = `${formatProductQty(item.stock, item.unit)} disponible`;
+    const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
       return (
@@ -332,7 +339,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
             {selectedQty > 0 ? (
               <View style={styles.qtyBadge}>
-                <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+                <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
               </View>
             ) : null}
             <View style={styles.productInfoListOnly}>
@@ -347,7 +354,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                   {item.sku ? `SKU ${item.sku}` : 'Sin SKU'}
                   {item.reference ? ` | Ref ${item.reference}` : ''}
                 </Text>
-                <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+                <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
               </View>
             </View>
           </TouchableOpacity>
@@ -359,7 +366,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
       <TouchableOpacity style={styles.productCard} onPress={() => handleProductPress(item)}>
         {selectedQty > 0 ? (
           <View style={styles.qtyBadge}>
-            <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+            <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
           </View>
         ) : null}
         <View style={styles.imageBox}>
@@ -387,7 +394,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             </Text>
           ) : null}
           <Text style={styles.productPrice}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
-          <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+          <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -530,7 +537,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
             <Text style={styles.totalAmount}>DOP {(getTotal() / 100).toFixed(2)}</Text>
-            <Text style={styles.itemsText}>{getItemCount()} items</Text>
+            <Text style={styles.itemsText}>{items.length} productos</Text>
           </View>
         </View>
         <TouchableOpacity

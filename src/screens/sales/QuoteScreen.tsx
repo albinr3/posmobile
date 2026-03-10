@@ -10,6 +10,7 @@ import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { db } from '../../database/Database';
 import { Product } from '../../types';
 import { ui } from '../../theme/ui';
+import { formatProductQty, inferProductUnit } from '../../utils/productUnits';
 
 interface QuoteScreenProps {
   navigation: any;
@@ -111,11 +112,17 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
         rawItems.map(async (item: any) => {
           const incomingProductId = String(item.productId || '');
           if (!incomingProductId) return null;
-          const productRow = await db.queryFirst<{ local_id: string }>(
-            'SELECT local_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+          const productRow = await db.queryFirst<{ local_id: string; data?: string }>(
+            'SELECT local_id, data FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
             [incomingProductId, incomingProductId]
           );
           const localProductId = productRow?.local_id || incomingProductId;
+          let productData: Record<string, unknown> | null = null;
+          try {
+            productData = productRow?.data ? JSON.parse(productRow.data) : null;
+          } catch {
+            productData = null;
+          }
           const quantity = Number(item.quantity ?? item.qty ?? 1);
           const priceCents = Number(item.priceCents ?? item.unitPriceCents ?? 0);
           if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(priceCents) || priceCents <= 0) return null;
@@ -125,6 +132,10 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
             quantity,
             priceCents,
             totalCents: quantity * priceCents,
+            unit: inferProductUnit({
+              ...(productData || {}),
+              unit: item?.unit ?? item?.product?.unit,
+            }),
           };
         })
       );
@@ -158,34 +169,34 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
   const loadProducts = async () => {
     try {
       const result = await db.query<any>('SELECT * FROM products ORDER BY name');
-      const mapped = result.map((row) => ({
-        parsedData: (() => {
-          try {
-            return row.data ? JSON.parse(row.data) : null;
-          } catch {
-            return null;
-          }
-        })(),
-        localId: row.local_id,
-        serverId: row.server_id,
-        name: row.name,
-        sku: row.sku,
-        priceCents: row.price_cents,
-        stock: row.stock,
-        imageUrl: row.image_url,
-        synced: row.synced === 1,
-        isActive: (() => {
-          try {
-            const parsed = row.data ? JSON.parse(row.data) : null;
-            if (typeof parsed?.isActive === 'boolean') return parsed.isActive;
-            if (typeof parsed?.active === 'boolean') return parsed.active;
-          } catch {
-            return true;
-          }
-          return true;
-        })(),
-        data: row.data,
-      }));
+      const mapped = result.map((row) => {
+        let parsedData: Record<string, unknown> | null = null;
+        try {
+          parsedData = row.data ? JSON.parse(row.data) : null;
+        } catch {
+          parsedData = null;
+        }
+
+        return {
+          parsedData,
+          localId: row.local_id,
+          serverId: row.server_id,
+          name: row.name,
+          sku: row.sku,
+          priceCents: row.price_cents,
+          stock: row.stock,
+          unit: inferProductUnit(parsedData),
+          imageUrl: row.image_url,
+          synced: row.synced === 1,
+          isActive:
+            typeof parsedData?.isActive === 'boolean'
+              ? parsedData.isActive
+              : typeof parsedData?.active === 'boolean'
+                ? parsedData.active
+                : true,
+          data: row.data,
+        };
+      });
       setProducts(mapped);
     } catch (error) {
       console.error('Error cargando productos:', error);
@@ -255,6 +266,8 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
     const isOut = item.stock <= 0;
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
+    const stockLabel = `${formatProductQty(item.stock, item.unit)} disponible`;
+    const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
       return (
@@ -262,7 +275,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           <TouchableOpacity style={[styles.productCard, styles.productCardList]} onPress={() => handleProductPress(item)}>
             {selectedQty > 0 ? (
               <View style={styles.qtyBadge}>
-                <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+                <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
               </View>
             ) : null}
             <View style={styles.productInfoListOnly}>
@@ -274,7 +287,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
               </View>
               <View style={styles.listBottomRow}>
                 <Text style={styles.skuTextList}>{item.sku ? `SKU ${item.sku}` : 'Sin SKU'}</Text>
-                <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+                <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
               </View>
             </View>
           </TouchableOpacity>
@@ -286,7 +299,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
       <TouchableOpacity style={styles.productCard} onPress={() => handleProductPress(item)}>
         {selectedQty > 0 ? (
           <View style={styles.qtyBadge}>
-            <Text style={styles.qtyBadgeText}>{selectedQty}</Text>
+            <Text style={styles.qtyBadgeText}>{selectedQtyLabel}</Text>
           </View>
         ) : null}
         <View style={styles.imageBox}>
@@ -309,7 +322,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
             {item.name}
           </Text>
           <Text style={styles.productPrice}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
-          <Text style={[styles.stockText, isOut && styles.stockOut]}>{item.stock} disponible</Text>
+          <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
         </View>
       </TouchableOpacity>
     );
@@ -413,7 +426,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
             <Text style={styles.totalAmount}>DOP {(getTotal() / 100).toFixed(2)}</Text>
-            <Text style={styles.itemsText}>{getItemCount()} items</Text>
+            <Text style={styles.itemsText}>{items.length} productos</Text>
           </View>
         </View>
         <TouchableOpacity

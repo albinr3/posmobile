@@ -8,6 +8,8 @@ export interface Product {
   priceCents: number;
   costCents?: number;
   stock: number;
+  unit?: string;
+  productKind?: 'BASIC' | 'MEASURED' | 'RECIPE';
   isActive?: boolean;
   imageUrl?: string;
   categoryId?: string;
@@ -49,6 +51,8 @@ export interface SaleItem {
   quantity: number;
   priceCents: number;
   totalCents: number;
+  unit?: string;
+  productKind?: 'BASIC' | 'MEASURED' | 'RECIPE';
 }
 
 export interface Payment {

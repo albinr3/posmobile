@@ -55,6 +55,8 @@ function createBaseCartSlice<TState extends BaseCartState>(
               quantity,
               priceCents: product.priceCents,
               totalCents: quantity * product.priceCents,
+              unit: product.unit,
+              productKind: product.productKind,
             },
           ],
         } as Partial<TState>;

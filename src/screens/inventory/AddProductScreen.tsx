@@ -12,6 +12,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useAuthStore } from '../../store/authStore';
+import { PRODUCT_UNIT_OPTIONS, getUnitAbbreviation, type MobileProductKind, unitAllowsDecimals } from '../../utils/productUnits';
 
 interface AddProductScreenProps {
   navigation: any;
@@ -22,6 +23,11 @@ interface OptionItem {
   name: string;
   internalId?: string | null;
 }
+
+const CREATE_PRODUCT_KIND_OPTIONS: Array<{ value: Exclude<MobileProductKind, 'RECIPE'>; label: string }> = [
+  { value: 'BASIC', label: 'Básico' },
+  { value: 'MEASURED', label: 'Con medida' },
+];
 
 export function AddProductScreen({ navigation }: AddProductScreenProps) {
   const insets = useSafeAreaInsets();
@@ -42,6 +48,9 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   const [price, setPrice] = useState('');
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('5');
+  const [productKind, setProductKind] = useState<Exclude<MobileProductKind, 'RECIPE'>>('BASIC');
+  const [unit, setUnit] = useState('KG');
+  const [unitMenuVisible, setUnitMenuVisible] = useState(false);
   const [taxRate, setTaxRate] = useState<'18' | '16' | '0'>('18');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -50,6 +59,8 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const nextIdLoadedRef = useRef(false);
   const catalogsLoadedRef = useRef(false);
+  const activeUnit = productKind === 'MEASURED' ? unit : 'UNIDAD';
+  const stockStep = unitAllowsDecimals(activeUnit) ? 0.5 : 1;
 
   const resolveNextIdFromResponse = (payload: any): string | null => {
     const source = payload?.data ?? payload;
@@ -269,6 +280,8 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         apiProductId: apiNextProductId !== 'No disponible' && apiNextProductId !== 'Cargando...' ? apiNextProductId : null,
         name: name.trim(),
         sku: sku.trim() || null,
+        productKind,
+        unit: activeUnit,
         costCents,
         priceCents,
         stock: stockValue,
@@ -430,13 +443,70 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionIcon}>
+              <Text style={styles.sectionIconText}>⚖️</Text>
+            </View>
+            <Text style={styles.sectionTitle}>Tipo y Unidad</Text>
+          </View>
+
+          <View style={styles.choiceRow}>
+            {CREATE_PRODUCT_KIND_OPTIONS.map((option) => (
+              <TouchableOpacity
+                key={option.value}
+                style={[styles.choiceChip, productKind === option.value && styles.choiceChipOn]}
+                onPress={() => {
+                  setProductKind(option.value);
+                  if (option.value === 'BASIC') {
+                    setUnit('KG');
+                  }
+                }}
+              >
+                <Text style={[styles.choiceChipText, productKind === option.value && styles.choiceChipTextOn]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {productKind === 'MEASURED' ? (
+            <>
+              <Menu
+                visible={unitMenuVisible}
+                onDismiss={() => setUnitMenuVisible(false)}
+                anchor={
+                  <TouchableOpacity style={[styles.selectLike, styles.inlineSelect]} onPress={() => setUnitMenuVisible(true)}>
+                    <Text style={styles.selectLikeText}>Unidad: {getUnitAbbreviation(unit)}</Text>
+                    <Icon source="chevron-down" size={18} color="#6B7280" />
+                  </TouchableOpacity>
+                }
+              >
+                {PRODUCT_UNIT_OPTIONS.filter((option) => option.value !== 'UNIDAD').map((option) => (
+                  <Menu.Item
+                    key={option.value}
+                    title={option.label}
+                    onPress={() => {
+                      setUnit(option.value);
+                      setUnitMenuVisible(false);
+                    }}
+                  />
+                ))}
+              </Menu>
+              <Text style={styles.unitHint}>La misma unidad aplica a costo, precio, existencia y stock mínimo.</Text>
+            </>
+          ) : (
+            <Text style={styles.unitHint}>Los productos básicos usan unidad fija en und.</Text>
+          )}
+        </View>
+
+        <View style={styles.sectionCard}>
+          <View style={styles.sectionHeader}>
+            <View style={styles.sectionIcon}>
               <Text style={styles.sectionIconText}>💰</Text>
             </View>
             <Text style={styles.sectionTitle}>Precios y Costos</Text>
           </View>
 
           <TextInput
-            label="Precio de Venta (RD$) *"
+            label={productKind === 'MEASURED' ? `Precio de Venta por ${getUnitAbbreviation(activeUnit)} (RD$) *` : 'Precio de Venta (RD$) *'}
             value={price}
             onChangeText={setPrice}
             mode="outlined"
@@ -447,7 +517,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             activeOutlineColor={ui.colors.primary}
           />
           <TextInput
-            label="Costo Unitario (RD$) *"
+            label={productKind === 'MEASURED' ? `Costo por ${getUnitAbbreviation(activeUnit)} (RD$) *` : 'Costo Unitario (RD$) *'}
             value={cost}
             onChangeText={setCost}
             mode="outlined"
@@ -489,41 +559,57 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
           <View style={styles.row}>
             <View style={styles.half}>
-              <Text style={styles.counterLabel}>Existencia Actual</Text>
+              <Text style={styles.counterLabel}>
+                Existencia Actual {productKind === 'MEASURED' ? `(${getUnitAbbreviation(activeUnit)})` : ''}
+              </Text>
               <View style={styles.counterWrap}>
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setStock(String(Math.max(0, Number(stock || 0) - 1)))}>
+                <TouchableOpacity
+                  style={styles.counterBtn}
+                  onPress={() => setStock(String(Math.max(0, Math.round((Number(stock || 0) - stockStep) * 100) / 100)))}
+                >
                   <Icon source="minus" size={16} color={ui.colors.textMuted} />
                 </TouchableOpacity>
                 <TextInput
                   value={stock}
                   onChangeText={setStock}
                   mode="flat"
-                  keyboardType="decimal-pad"
+                  keyboardType={unitAllowsDecimals(activeUnit) ? 'decimal-pad' : 'number-pad'}
                   style={styles.counterInput}
                   underlineColor="transparent"
                   activeUnderlineColor="transparent"
                 />
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setStock(String(Number(stock || 0) + 1))}>
+                <TouchableOpacity
+                  style={styles.counterBtn}
+                  onPress={() => setStock(String(Math.round((Number(stock || 0) + stockStep) * 100) / 100))}
+                >
                   <Icon source="plus" size={16} color={ui.colors.textMuted} />
                 </TouchableOpacity>
               </View>
             </View>
             <View style={styles.half}>
-              <Text style={styles.counterLabel}>Stock Mínimo</Text>
+              <Text style={styles.counterLabel}>
+                Stock Mínimo {productKind === 'MEASURED' ? `(${getUnitAbbreviation(activeUnit)})` : ''}
+              </Text>
               <View style={styles.counterWrap}>
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setMinStock(String(Math.max(0, Number(minStock || 0) - 1)))}>
+                <TouchableOpacity
+                  style={styles.counterBtn}
+                  onPress={() => setMinStock(String(Math.max(0, Math.round((Number(minStock || 0) - stockStep) * 100) / 100)))}
+                >
                   <Icon source="minus" size={16} color={ui.colors.textMuted} />
                 </TouchableOpacity>
                 <TextInput
                   value={minStock}
                   onChangeText={setMinStock}
                   mode="flat"
-                  keyboardType="number-pad"
+                  keyboardType={unitAllowsDecimals(activeUnit) ? 'decimal-pad' : 'number-pad'}
                   style={styles.counterInput}
                   underlineColor="transparent"
                   activeUnderlineColor="transparent"
                 />
-                <TouchableOpacity style={styles.counterBtn} onPress={() => setMinStock(String(Number(minStock || 0) + 1))}>
+                <TouchableOpacity
+                  style={styles.counterBtn}
+                  onPress={() => setMinStock(String(Math.round((Number(minStock || 0) + stockStep) * 100) / 100))}
+                >
                   <Icon source="plus" size={16} color={ui.colors.textMuted} />
                 </TouchableOpacity>
               </View>
@@ -653,6 +739,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
+  inlineSelect: {
+    marginHorizontal: 14,
+    marginBottom: 10,
+  },
   selectLikeText: { color: '#111827', fontSize: 14 },
   input: { marginHorizontal: 14, marginBottom: 10, backgroundColor: ui.colors.surface },
   scanButton: {
@@ -713,6 +803,28 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   smallBtnText: { color: ui.colors.text, fontWeight: '600' },
+  choiceRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 14, paddingTop: 14, paddingBottom: 10 },
+  choiceChip: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: ui.radius.md,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    backgroundColor: '#fff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  choiceChipOn: { backgroundColor: '#EEE1FF', borderColor: '#D9C2FF' },
+  choiceChipText: { color: ui.colors.text, fontWeight: '600' },
+  choiceChipTextOn: { color: ui.colors.primary, fontWeight: '800' },
+  unitHint: {
+    marginHorizontal: 14,
+    marginBottom: 14,
+    color: ui.colors.textMuted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
   taxChips: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 10, gap: 8 },
   taxChip: {
     height: 38,

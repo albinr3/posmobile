@@ -13,6 +13,7 @@ import { getBottomSafeInset } from '../../utils/safeArea';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { Asset } from 'expo-asset';
+import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -169,7 +170,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
               <td>${escapeHtml(item.productName)}</td>
               <td style="text-align:center;">—</td>
               <td style="text-align:center;">—</td>
-              <td style="text-align:center;">${item.quantity}</td>
+              <td style="text-align:center;">${formatProductQty(item.quantity, item.unit)}</td>
               <td style="text-align:right;">${formatCurrency(item.priceCents)}</td>
               <td style="text-align:right;">${formatCurrency(item.totalCents)}</td>
             </tr>
@@ -249,25 +250,37 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     }
   };
 
-  const renderItem = ({ item }: { item: typeof items[0] }) => (
-    <Surface style={styles.itemCard}>
-      <View style={styles.itemInfo}>
-        <Text style={styles.itemName} numberOfLines={2}>
-          {item.productName}
-        </Text>
-        <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
-      </View>
-      <View style={styles.quantityContainer}>
-        <IconButton icon="minus" size={20} onPress={() => updateQuantity(item.productId, item.quantity - 1)} />
-        <Text style={styles.quantity}>{item.quantity}</Text>
-        <IconButton icon="plus" size={20} onPress={() => updateQuantity(item.productId, item.quantity + 1)} />
-      </View>
-      <View style={styles.itemTotal}>
-        <Text style={styles.itemTotalText}>{formatCurrency(item.totalCents)}</Text>
-        <IconButton icon="delete" size={20} iconColor={ui.colors.danger} onPress={() => removeItem(item.productId)} />
-      </View>
-    </Surface>
-  );
+  const renderItem = ({ item }: { item: typeof items[0] }) => {
+    const step = unitAllowsDecimals(item.unit) ? 0.5 : 1;
+
+    return (
+      <Surface style={styles.itemCard}>
+        <View style={styles.itemInfo}>
+          <Text style={styles.itemName} numberOfLines={2}>
+            {item.productName}
+          </Text>
+          <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
+        </View>
+        <View style={styles.quantityContainer}>
+          <IconButton
+            icon="minus"
+            size={20}
+            onPress={() => updateQuantity(item.productId, Math.max(0, Math.round((item.quantity - step) * 100) / 100))}
+          />
+          <Text style={styles.quantity}>{formatProductQty(item.quantity, item.unit)}</Text>
+          <IconButton
+            icon="plus"
+            size={20}
+            onPress={() => updateQuantity(item.productId, Math.round((item.quantity + step) * 100) / 100)}
+          />
+        </View>
+        <View style={styles.itemTotal}>
+          <Text style={styles.itemTotalText}>{formatCurrency(item.totalCents)}</Text>
+          <IconButton icon="delete" size={20} iconColor={ui.colors.danger} onPress={() => removeItem(item.productId)} />
+        </View>
+      </Surface>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>

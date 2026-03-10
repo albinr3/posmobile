@@ -11,6 +11,7 @@ import { db } from '../../database/Database';
 import { Product } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { formatProductQty, inferProductKind, inferProductUnit } from '../../utils/productUnits';
 
 interface ProductListScreenProps {
   navigation: any;
@@ -72,35 +73,38 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   const loadProducts = async () => {
     try {
       const result = await db.query<any>('SELECT * FROM products ORDER BY name');
-      const mapped = result.map((row) => ({
-        parsedData: (() => {
-          try {
-            return row.data ? JSON.parse(row.data) : null;
-          } catch {
-            return null;
-          }
-        })(),
-        isActive: (() => {
-          try {
-            const parsed = row.data ? JSON.parse(row.data) : null;
-            if (typeof parsed?.isActive === 'boolean') return parsed.isActive;
-            if (typeof parsed?.active === 'boolean') return parsed.active;
-          } catch {
-            return true;
-          }
-          return true;
-        })(),
-        localId: row.local_id,
-        serverId: row.server_id,
-        name: row.name,
-        sku: row.sku,
-        priceCents: row.price_cents,
-        costCents: row.cost_cents,
-        stock: row.stock,
-        imageUrl: row.image_url || null,
-        synced: row.synced === 1,
-        data: row.data,
-      }));
+      const mapped = result.map((row) => {
+        let parsedData: Record<string, unknown> | null = null;
+        try {
+          parsedData = row.data ? JSON.parse(row.data) : null;
+        } catch {
+          parsedData = null;
+        }
+
+        const isActive =
+          typeof parsedData?.isActive === 'boolean'
+            ? parsedData.isActive
+            : typeof parsedData?.active === 'boolean'
+              ? parsedData.active
+              : true;
+
+        return {
+          parsedData,
+          isActive,
+          localId: row.local_id,
+          serverId: row.server_id,
+          name: row.name,
+          sku: row.sku,
+          priceCents: row.price_cents,
+          costCents: row.cost_cents,
+          stock: row.stock,
+          unit: inferProductUnit(parsedData),
+          productKind: inferProductKind(parsedData),
+          imageUrl: row.image_url || null,
+          synced: row.synced === 1,
+          data: row.data,
+        };
+      });
       setProducts(mapped);
     } catch (error) {
       console.error('Error cargando productos:', error);
@@ -148,7 +152,9 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
           <Text style={styles.meta}>{item.sku ? item.sku : 'Sin SKU'}</Text>
           <Text style={styles.separatorDot}>•</Text>
           <Text style={[styles.stock, item.stock <= 0 ? styles.out : item.stock <= 10 ? styles.low : styles.ok]}>
-            {item.stock <= 10 && item.stock > 0 ? `Bajo: ${item.stock}` : `Stock: ${item.stock}`}
+            {item.stock <= 10 && item.stock > 0
+              ? `Bajo: ${formatProductQty(item.stock, item.unit)}`
+              : `Stock: ${formatProductQty(item.stock, item.unit)}`}
           </Text>
         </View>
       </View>
@@ -190,7 +196,9 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
           <Text style={styles.gridMetaSku}>{item.sku ? item.sku : 'Sin SKU'}</Text>
           <Text style={styles.gridMetaDot}>•</Text>
           <Text style={[styles.gridStock, item.stock <= 0 ? styles.out : item.stock <= 10 ? styles.low : styles.ok]}>
-            {item.stock <= 10 && item.stock > 0 ? `Bajo: ${item.stock}` : `Stock: ${item.stock}`}
+            {item.stock <= 10 && item.stock > 0
+              ? `Bajo: ${formatProductQty(item.stock, item.unit)}`
+              : `Stock: ${formatProductQty(item.stock, item.unit)}`}
           </Text>
         </View>
       </View>

@@ -10,6 +10,7 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { Sale, SaleItem, SalePaymentSplit } from '../../types';
 import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
+import { formatProductQty } from '../../utils/productUnits';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -72,7 +73,7 @@ const buildReceiptHtml = (params: {
         <div class="item">
           <div class="item-name">${escapeHtml(item.productName)}</div>
           <div class="item-line">
-            <span>${item.quantity} x ${formatCurrency(item.priceCents)}</span>
+            <span>${formatProductQty(item.quantity, item.unit)} x ${formatCurrency(item.priceCents)}</span>
             <span class="item-total">${formatCurrency(item.totalCents)}</span>
           </div>
         </div>
@@ -320,7 +321,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
             <View key={index} style={styles.itemRow}>
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.productName}</Text>
-                <Text style={styles.itemQty}>x{item.quantity} @ {formatCurrency(item.priceCents)}</Text>
+                <Text style={styles.itemQty}>{formatProductQty(item.quantity, item.unit)} @ {formatCurrency(item.priceCents)}</Text>
               </View>
               <Text style={styles.itemTotal}>{formatCurrency(item.totalCents)}</Text>
             </View>

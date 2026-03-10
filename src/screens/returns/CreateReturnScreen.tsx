@@ -11,6 +11,7 @@ import { db } from '../../database/Database';
 import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
 import { useAuthStore } from '../../store/authStore';
+import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 
 interface CreateReturnScreenProps {
   navigation: any;
@@ -41,7 +42,7 @@ interface SaleDetailItem {
     name: string;
     sku?: string | null;
     reference?: string | null;
-    saleUnit?: string | null;
+    unit?: string | null;
   } | null;
 }
 
@@ -75,6 +76,7 @@ interface ReturnDraftItem {
   availableQty: number;
   unitPriceCents: number;
   qty: number;
+  unit?: string | null;
 }
 
 interface CustomerOption {
@@ -112,6 +114,7 @@ interface ReturnListItem {
     lineTotalCents: number;
     product?: {
       name?: string | null;
+      unit?: string | null;
     } | null;
   }>;
 }
@@ -129,6 +132,7 @@ interface ReturnReceiptPayload {
     qty: number;
     unitPriceCents: number;
     lineTotalCents: number;
+    unit?: string | null;
   }>;
 }
 
@@ -277,6 +281,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
                   returnItemRow.product_name ||
                   'Producto'
               ),
+              unit: inferProductUnit({
+                unit: returnItemParsed?.product?.unit,
+              }),
             },
           };
         });
@@ -350,6 +357,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       lineTotalCents:
         Number(returnItem.lineTotalCents) ||
         (Number(returnItem.unitPriceCents) || 0) * (Number(returnItem.qty) || 0),
+      unit: inferProductUnit({ unit: returnItem.product?.unit }),
     })),
   });
 
@@ -626,6 +634,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           const availableQty = Math.max(0, soldQty - returnedQty);
           const unitPriceCents = Number(item?.unitPriceCents ?? item?.priceCents ?? item?.price ?? 0);
           const productId = String(item?.productId || '');
+          const productUnit = inferProductUnit({
+            unit: item?.product?.unit ?? item?.unit ?? item?.product?.saleUnit,
+          });
 
           return {
             saleItemId,
@@ -639,7 +650,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
               name: String(item?.product?.name || item?.productName || 'Producto'),
               sku: item?.product?.sku ? String(item.product.sku) : null,
               reference: item?.product?.reference ? String(item.product.reference) : null,
-              saleUnit: item?.product?.saleUnit ? String(item.product.saleUnit) : null,
+              unit: productUnit,
             },
           };
         })
@@ -761,6 +772,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       return;
     }
     if (item.availableQty <= 0) return;
+    const step = unitAllowsDecimals(item.product?.unit) ? 0.5 : 1;
+    const initialQty = Math.min(step, item.availableQty);
 
     setReturnItems((prev) => {
       const existing = prev.find((x) => x.saleItemId === item.saleItemId);
@@ -768,7 +781,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         if (existing.qty >= existing.availableQty) return prev;
         return prev.map((x) =>
           x.saleItemId === item.saleItemId
-            ? { ...x, qty: Math.min(x.qty + 1, x.availableQty) }
+            ? { ...x, qty: Math.min(Math.round((x.qty + step) * 100) / 100, x.availableQty) }
             : x
         );
       }
@@ -780,7 +793,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           productName: item.product?.name || 'Producto',
           availableQty: item.availableQty,
           unitPriceCents: item.unitPriceCents,
-          qty: 1,
+          qty: initialQty,
+          unit: item.product?.unit || 'UNIDAD',
         },
       ];
     });
@@ -790,7 +804,13 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     setReturnItems((prev) =>
       prev.map((item) =>
         item.saleItemId === saleItemId
-          ? { ...item, qty: Math.max(1, Math.min(nextQty, item.availableQty)) }
+          ? {
+              ...item,
+              qty: Math.max(
+                Math.min(unitAllowsDecimals(item.unit) ? 0.5 : 1, item.availableQty),
+                Math.min(Math.round(nextQty * 100) / 100, item.availableQty)
+              ),
+            }
           : item
       )
     );
@@ -837,6 +857,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         productId: item.productId,
         qty: item.qty,
         unitPriceCents: item.unitPriceCents,
+        unit: item.unit || 'UNIDAD',
       }));
       const totalReturnCents = returnItemsSnapshot.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0);
       const returnData = {
@@ -867,6 +888,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           lineTotalCents: item.unitPriceCents * item.qty,
           product: {
             name: item.productName,
+            unit: item.unit || 'UNIDAD',
           },
         })),
       };
@@ -908,7 +930,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             qty: item.qty,
             unitPriceCents: item.unitPriceCents,
             lineTotalCents,
-            product: { name: item.productName },
+            product: { name: item.productName, unit: item.unit || 'UNIDAD' },
           }),
         });
       }
@@ -971,6 +993,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           qty: item.qty,
           unitPriceCents: item.unitPriceCents,
           lineTotalCents: item.unitPriceCents * item.qty,
+          unit: item.unit || 'UNIDAD',
         })),
       };
 
@@ -1202,7 +1225,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             <View style={{ flex: 1 }}>
               <Text style={styles.itemName}>{item.product?.name || 'Producto'}</Text>
               <Text style={styles.itemMeta}>
-                Vendido: {item.qty} · Devuelto: {item.returnedQty} · Disponible: {item.availableQty}
+                Vendido: {formatProductQty(item.qty, item.product?.unit)} · Devuelto: {formatProductQty(item.returnedQty, item.product?.unit)} · Disponible: {formatProductQty(item.availableQty, item.product?.unit)}
               </Text>
               <Text style={styles.itemMeta}>{formatCurrency(item.unitPriceCents)}</Text>
             </View>
@@ -1226,7 +1249,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.itemName}>{item.productName}</Text>
                   <Text style={styles.itemMeta}>
-                    Máximo: {item.availableQty} · {formatCurrency(item.unitPriceCents)} c/u
+                    Máximo: {formatProductQty(item.availableQty, item.unit)} · {formatCurrency(item.unitPriceCents)} c/u
                   </Text>
                 </View>
                 <View style={styles.qtyBox}>
@@ -1234,14 +1257,14 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
                     icon="minus"
                     size={18}
                     disabled={isReturnBlocked}
-                    onPress={() => changeItemQty(item.saleItemId, item.qty - 1)}
+                    onPress={() => changeItemQty(item.saleItemId, item.qty - (unitAllowsDecimals(item.unit) ? 0.5 : 1))}
                   />
-                  <Text style={styles.qtyText}>{item.qty}</Text>
+                  <Text style={styles.qtyText}>{formatProductQty(item.qty, item.unit)}</Text>
                   <IconButton
                     icon="plus"
                     size={18}
                     disabled={isReturnBlocked}
-                    onPress={() => changeItemQty(item.saleItemId, item.qty + 1)}
+                    onPress={() => changeItemQty(item.saleItemId, item.qty + (unitAllowsDecimals(item.unit) ? 0.5 : 1))}
                   />
                 </View>
                 <IconButton

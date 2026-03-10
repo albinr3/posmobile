@@ -7,12 +7,14 @@ import { Asset } from 'expo-asset';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { formatProductQty } from '../../utils/productUnits';
 
 interface ReturnReceiptItem {
   productName: string;
   qty: number;
   unitPriceCents: number;
   lineTotalCents: number;
+  unit?: string | null;
 }
 
 interface ReturnReceiptPayload {
@@ -51,7 +53,7 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
         <div class="item">
           <div class="item-name">${escapeHtml(item.productName)}</div>
           <div class="item-line">
-            <span>${item.qty} x ${formatCurrency(item.unitPriceCents)}</span>
+            <span>${formatProductQty(item.qty, item.unit)} x ${formatCurrency(item.unitPriceCents)}</span>
             <span class="item-total">${formatCurrency(item.lineTotalCents)}</span>
           </div>
         </div>
@@ -209,7 +211,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.productName}</Text>
                 <Text style={styles.itemQty}>
-                  x{item.qty} @ {formatCurrency(item.unitPriceCents)}
+                  {formatProductQty(item.qty, item.unit)} @ {formatCurrency(item.unitPriceCents)}
                 </Text>
               </View>
               <Text style={styles.itemTotal}>{formatCurrency(item.lineTotalCents)}</Text>

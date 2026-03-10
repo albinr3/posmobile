@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, normalizeCategoryIdForApi, summarizeError } from './syncShared';
+import { inferProductKind, inferProductUnit } from '../../utils/productUnits';
 
 export async function prepareSyncRequestData(
   entityType: string,
@@ -10,6 +11,13 @@ export async function prepareSyncRequestData(
 ): Promise<any> {
   switch (entityType) {
     case 'product':
+      {
+      const inferredUnit = inferProductUnit(data as Record<string, unknown>);
+      const inferredKind = inferProductKind({
+        ...(data as Record<string, unknown>),
+        unit: inferredUnit,
+      });
+      const resolvedUnit = inferredKind === 'MEASURED' ? inferredUnit : 'UNIDAD';
       return {
         name: data.name,
         sku: data.sku || null,
@@ -22,9 +30,10 @@ export async function prepareSyncRequestData(
         minStock: data.minStock || 0,
         itbisRateBp: data.itbisRateBp || 1800,
         imageUrls: data.imageUrls || [],
-        purchaseUnit: data.purchaseUnit || 'UNIDAD',
-        saleUnit: data.saleUnit || 'UNIDAD',
+        productKind: inferredKind,
+        unit: resolvedUnit,
       };
+      }
     case 'customer':
       return {
         name: data.name,
@@ -502,4 +511,3 @@ export async function prepareSyncRequestData(
       return data;
   }
 }
-
