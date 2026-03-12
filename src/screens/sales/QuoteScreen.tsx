@@ -10,7 +10,8 @@ import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { db } from '../../database/Database';
 import { Product } from '../../types';
 import { ui } from '../../theme/ui';
-import { formatProductQty, inferProductUnit } from '../../utils/productUnits';
+import { formatProductQty, inferProductKind, inferProductUnit } from '../../utils/productUnits';
+import { buildLineId } from '../../store/createCartStore';
 
 interface QuoteScreenProps {
   navigation: any;
@@ -25,6 +26,7 @@ interface QuoteScreenProps {
 interface QuoteProduct extends Product {
   isActive: boolean;
   parsedData?: any;
+  reference?: string | null;
 }
 
 type ViewMode = 'LISTA' | 'IMAGENES';
@@ -126,7 +128,10 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           const quantity = Number(item.quantity ?? item.qty ?? 1);
           const priceCents = Number(item.priceCents ?? item.unitPriceCents ?? 0);
           if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(priceCents) || priceCents <= 0) return null;
+          const recipeAdjustments = Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [];
+          const lineId = buildLineId(localProductId, recipeAdjustments);
           return {
+            lineId,
             productId: localProductId,
             productName: String(item.productName || 'Producto'),
             quantity,
@@ -136,6 +141,9 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
               ...(productData || {}),
               unit: item?.unit ?? item?.product?.unit,
             }),
+            productKind: inferProductKind(productData),
+            recipeItems: Array.isArray((productData as any)?.recipeItems) ? (productData as any).recipeItems : [],
+            recipeAdjustments,
           };
         })
       );
@@ -168,7 +176,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
 
   const loadProducts = async () => {
     try {
-      const result = await db.query<any>('SELECT * FROM products ORDER BY name');
+      const result = await db.query<any>('SELECT * FROM products WHERE is_available_for_sale = 1 ORDER BY name');
       const mapped = result.map((row) => {
         let parsedData: Record<string, unknown> | null = null;
         try {
@@ -183,17 +191,15 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           serverId: row.server_id,
           name: row.name,
           sku: row.sku,
+          reference: parsedData?.reference ? String(parsedData.reference) : null,
           priceCents: row.price_cents,
           stock: row.stock,
           unit: inferProductUnit(parsedData),
+          productKind: inferProductKind(parsedData),
+          recipeItems: Array.isArray(parsedData?.recipeItems) ? parsedData.recipeItems : [],
           imageUrl: row.image_url,
           synced: row.synced === 1,
-          isActive:
-            typeof parsedData?.isActive === 'boolean'
-              ? parsedData.isActive
-              : typeof parsedData?.active === 'boolean'
-                ? parsedData.active
-                : true,
+          isActive: row.is_available_for_sale === 1,
           data: row.data,
         };
       });
@@ -218,7 +224,8 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
         .filter(
           (product) =>
             product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase()))
+            (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
+            (product.reference && product.reference.toLowerCase().includes(searchQuery.toLowerCase()))
         ),
     [products, searchQuery]
   );
@@ -226,7 +233,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
   const cartQuantityByProduct = useMemo(() => {
     const map = new Map<string, number>();
     for (const item of items) {
-      map.set(item.productId, item.quantity);
+      map.set(item.productId, (map.get(item.productId) || 0) + item.quantity);
     }
     return map;
   }, [items]);
@@ -236,7 +243,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
       Alert.alert('Producto no disponible', 'Este producto no esta activo o no ha sido sincronizado.');
       return;
     }
-    if (product.stock <= 0) {
+    if (product.productKind !== 'RECIPE' && product.stock <= 0) {
       Alert.alert('Sin stock', 'Este producto no tiene stock disponible.');
       return;
     }
@@ -263,10 +270,11 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
   );
 
   const renderProduct = ({ item }: { item: QuoteProduct }) => {
-    const isOut = item.stock <= 0;
+    const isRecipe = item.productKind === 'RECIPE';
+    const isOut = !isRecipe && item.stock <= 0;
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
-    const stockLabel = `${formatProductQty(item.stock, item.unit)} disponible`;
+    const stockLabel = isRecipe ? 'Receta' : `${formatProductQty(item.stock, item.unit)} disponible`;
     const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
@@ -286,7 +294,10 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
                 <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
               </View>
               <View style={styles.listBottomRow}>
-                <Text style={styles.skuTextList}>{item.sku ? `SKU ${item.sku}` : 'Sin SKU'}</Text>
+                <Text style={styles.skuTextList}>
+                  {item.sku ? `SKU ${item.sku}` : 'Sin SKU'}
+                  {item.reference ? ` | Ref ${item.reference}` : ''}
+                </Text>
                 <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
               </View>
             </View>
@@ -321,6 +332,11 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           <Text style={styles.productName} numberOfLines={2}>
             {item.name}
           </Text>
+          {item.reference ? (
+            <Text style={styles.referenceText} numberOfLines={1}>
+              Ref: {item.reference}
+            </Text>
+          ) : null}
           <Text style={styles.productPrice}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
           <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
         </View>
@@ -615,6 +631,7 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontSize: 12,
   },
+  referenceText: { color: '#6B7280', fontSize: 11, marginTop: 4 },
   productName: { textAlign: 'center', color: '#111827', fontWeight: '600', fontSize: 13 },
   productPrice: { color: ui.colors.primary, marginTop: 8, fontWeight: '800' },
   stockText: { color: '#6B7280', fontSize: 11, marginTop: 4 },

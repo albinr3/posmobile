@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image, Modal, FlatList } from 'react-native';
 import { TextInput, Button, Text, Icon, Menu, Divider, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -235,27 +235,40 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
     loadCatalogOptions();
   }, [loadCatalogOptions, subUserToken]);
 
-  useEffect(() => {
-    const loadIngredients = async () => {
-      try {
-        const rows = await db.query<any>('SELECT data, local_id FROM products ORDER BY name ASC');
-        const ingredients = rows.map(r => {
-          const content = JSON.parse(r.data);
-          let id = content.id || r.local_id || content.localId;
-          return {
-            id,
-            name: content.name,
-            productId: content.productId || '?',
-            unit: content.unit
-          };
-        });
-        setAvailableIngredients(ingredients);
-      } catch (err) {
-        console.error('Error loading ingredients', err);
-      }
-    };
-    loadIngredients();
+  const loadIngredients = useCallback(async () => {
+    try {
+      const rows = await db.query<any>('SELECT data, local_id FROM products ORDER BY name ASC');
+      const ingredients = rows.map(r => {
+        const content = JSON.parse(r.data);
+        const id = content.id || r.local_id || content.localId;
+        return {
+          id,
+          name: content.name,
+          productId: content.productId || '?',
+          unit: content.unit
+        };
+      });
+      setAvailableIngredients(ingredients);
+    } catch (err) {
+      console.error('Error loading ingredients', err);
+    }
   }, []);
+
+  useEffect(() => {
+    loadIngredients();
+  }, [loadIngredients]);
+
+  const openIngredientPicker = useCallback(async (recipeItemId: string) => {
+    setCurrentIngredientId(recipeItemId);
+    setIngredientSearchQuery('');
+    await loadIngredients();
+    setIngredientPickerVisible(true);
+  }, [loadIngredients]);
+
+  const filteredIngredients = useMemo(
+    () => availableIngredients.filter(i => i.name.toLowerCase().includes(ingredientSearchQuery.toLowerCase())),
+    [availableIngredients, ingredientSearchQuery]
+  );
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -611,7 +624,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
                        <Text style={{ fontSize: 12, fontWeight: '600', color: ui.colors.textMuted, marginBottom: 5 }}>Insumo #{index + 1}</Text>
                        <TouchableOpacity
                          style={[styles.selectLike, { minHeight: 44, marginBottom: 10, marginHorizontal: 0 }]}
-                         onPress={() => { setCurrentIngredientId(item.id); setIngredientPickerVisible(true); }}
+                         onPress={() => { openIngredientPicker(item.id); }}
                        >
                          <Text style={{ color: ingredient ? ui.colors.text : ui.colors.textMuted, fontSize: 14 }}>
                            {ingredient ? `${ingredient.productId} - ${ingredient.name}` : 'Selecciona un insumo...'}
@@ -810,7 +823,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             />
           </View>
           <FlatList
-            data={availableIngredients.filter(i => i.name.toLowerCase().includes(ingredientSearchQuery.toLowerCase()))}
+            data={filteredIngredients}
             keyExtractor={item => item.id}
             keyboardShouldPersistTaps="handled"
             renderItem={({ item }) => (
@@ -829,7 +842,45 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
               </TouchableOpacity>
             )}
             ListEmptyComponent={
-              <Text style={{ textAlign: 'center', marginTop: 40, color: '#6b7280' }}>No se encontraron insumos.</Text>
+              <View style={{ paddingHorizontal: 20, marginTop: 40 }}>
+                <Text style={{ textAlign: 'center', color: '#6b7280' }}>
+                  {availableIngredients.length === 0
+                    ? 'No hay insumos creados todavía.'
+                    : 'No se encontraron insumos.'}
+                </Text>
+                {availableIngredients.length === 0 ? (
+                  <Text style={{ textAlign: 'center', color: '#6b7280', marginTop: 8 }}>
+                    Primero debes crear los ingredientes que utilizarás.
+                  </Text>
+                ) : null}
+              </View>
+            }
+            ListFooterComponent={
+              <View style={{ paddingHorizontal: 14, paddingTop: 8, paddingBottom: 16 }}>
+                <Divider />
+                <TouchableOpacity
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    minHeight: 56,
+                    marginTop: 10,
+                    borderRadius: ui.radius.md,
+                    borderWidth: 1,
+                    borderColor: '#D9C2FF',
+                    backgroundColor: '#F5EEFF',
+                  }}
+                  onPress={() => {
+                    setIngredientPickerVisible(false);
+                    setIngredientSearchQuery('');
+                    navigation.navigate('AddProduct');
+                  }}
+                >
+                  <Icon source="plus" size={22} color={ui.colors.primary} />
+                  <Text style={{ color: ui.colors.primary, fontWeight: '800', fontSize: 16 }}>Crear insumo</Text>
+                </TouchableOpacity>
+              </View>
             }
           />
         </SafeAreaView>

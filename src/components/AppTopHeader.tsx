@@ -192,7 +192,7 @@ export function AppTopHeader() {
       <View style={styles.topHeader}>
         <View style={styles.topLeft}>
           <TouchableOpacity style={styles.menuButton} onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())}>
-            <Icon source="menu" size={22} color={ui.colors.textMuted} />
+            <Icon source="menu" size={30} color={ui.colors.textMuted} />
           </TouchableOpacity>
           <View style={styles.userBadge}>
             <Image source={require('../../assets/movoLogo.png')} style={styles.userBadgeLogo} resizeMode="contain" />
@@ -251,7 +251,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   topLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 8 },
-  menuButton: { borderRadius: 16, marginRight: 6, padding: 2 },
+  menuButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    marginRight: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   userBadge: {
     width: 30,
     height: 24,

@@ -43,6 +43,7 @@ const VIEW_MODE_STORAGE_KEY = 'pos_view_mode';
 
 export function POSScreen({ navigation, route }: POSScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [scanExactSkuQuery, setScanExactSkuQuery] = useState<string | null>(null);
   const [products, setProducts] = useState<POSProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
@@ -272,18 +273,26 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     return fromParsed || fromLocalPending || item.imageUrl || null;
   };
 
-  const filteredProducts = useMemo(
-    () =>
-      products
-        .filter((product) => product.synced && !!product.serverId && product.isActive)
-        .filter(
-          (product) =>
-            product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
-            (product.reference && product.reference.toLowerCase().includes(searchQuery.toLowerCase()))
-        ),
-    [products, searchQuery]
-  );
+  const filteredProducts = useMemo(() => {
+    const activeProducts = products.filter((product) => product.synced && !!product.serverId && product.isActive);
+
+    if (scanExactSkuQuery) {
+      const exactSkuMatches = activeProducts.filter(
+        (product) => (product.sku || '').trim().toLowerCase() === scanExactSkuQuery
+      );
+      if (exactSkuMatches.length > 0) {
+        return exactSkuMatches;
+      }
+    }
+
+    const normalizedSearch = searchQuery.toLowerCase();
+    return activeProducts.filter(
+      (product) =>
+        product.name.toLowerCase().includes(normalizedSearch) ||
+        (product.sku && product.sku.toLowerCase().includes(normalizedSearch)) ||
+        (product.reference && product.reference.toLowerCase().includes(normalizedSearch))
+    );
+  }, [products, searchQuery, scanExactSkuQuery]);
 
   const cartQuantityByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -308,7 +317,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const handleScanBarcode = () => {
     internalNavigationRef.current = true;
     navigation.navigate('BarcodeScanner', {
-      onScan: (barcode: string) => setSearchQuery(barcode),
+      scannerMode: 'CART_SPLIT',
     });
   };
 
@@ -496,14 +505,17 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <Searchbar
             placeholder="Buscar productos..."
             placeholderTextColor="#B8B2C8"
-            onChangeText={setSearchQuery}
+            onChangeText={(value) => {
+              setScanExactSkuQuery(null);
+              setSearchQuery(value);
+            }}
             value={searchQuery}
             style={styles.searchbar}
             inputStyle={styles.searchInput}
             iconColor="#9CA3AF"
           />
           <TouchableOpacity style={styles.qrBtn} onPress={handleScanBarcode}>
-            <Icon source="qrcode-scan" size={22} color="#9CA3AF" />
+            <Icon source="qrcode-scan" size={28} color="#6B7280" />
           </TouchableOpacity>
         </View>
 
@@ -805,7 +817,17 @@ const styles = StyleSheet.create({
   searchWrap: { position: 'relative', marginBottom: 5 },
   searchbar: { backgroundColor: '#fff', borderRadius: 12, elevation: 1 },
   searchInput: { minHeight: 44, fontSize: 14 },
-  qrBtn: { position: 'absolute', right: 14, top: 10 },
+  qrBtn: {
+    position: 'absolute',
+    right: 8,
+    top: 6,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#EEF2F7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   saleCard: {
     backgroundColor: '#fff',
     borderRadius: 12,

@@ -5,12 +5,21 @@ export const PRODUCT_UNIT_OPTIONS = [
   { value: 'KG', label: 'Kilogramo (kg)' },
   { value: 'LIBRA', label: 'Libra (lb)' },
   { value: 'GRAMO', label: 'Gramo (g)' },
+  { value: 'MILIGRAMO', label: 'Miligramo (mg)' },
+  { value: 'ONZA', label: 'Onza (oz)' },
+  { value: 'TONELADA', label: 'Tonelada (t)' },
   { value: 'LITRO', label: 'Litro (L)' },
   { value: 'ML', label: 'Mililitro (ml)' },
+  { value: 'ONZA_LIQUIDA', label: 'Onza líquida (fl oz)' },
+  { value: 'CC', label: 'Centímetro cúbico (cc)' },
   { value: 'GALON', label: 'Galón (gal)' },
   { value: 'METRO', label: 'Metro (m)' },
+  { value: 'MM', label: 'Milímetro (mm)' },
   { value: 'CM', label: 'Centímetro (cm)' },
+  { value: 'PULGADA', label: 'Pulgada (in)' },
   { value: 'PIE', label: 'Pie (ft)' },
+  { value: 'YARDA', label: 'Yarda (yd)' },
+  { value: 'M3', label: 'Metro cúbico (m3)' },
 ] as const;
 
 const UNIT_ABBREVIATIONS: Record<string, string> = {
@@ -18,12 +27,21 @@ const UNIT_ABBREVIATIONS: Record<string, string> = {
   KG: 'kg',
   LIBRA: 'lb',
   GRAMO: 'g',
+  MILIGRAMO: 'mg',
+  ONZA: 'oz',
+  TONELADA: 't',
   LITRO: 'L',
   ML: 'ml',
+  ONZA_LIQUIDA: 'fl oz',
+  CC: 'cc',
   GALON: 'gal',
   METRO: 'm',
+  MM: 'mm',
   CM: 'cm',
+  PULGADA: 'in',
   PIE: 'ft',
+  YARDA: 'yd',
+  M3: 'm3',
 };
 
 export function inferProductUnit(source: Record<string, unknown> | null | undefined): string {
