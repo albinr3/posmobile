@@ -42,7 +42,12 @@
         "BLUETOOTH_CONNECT",
         "BLUETOOTH_SCAN",
         "VIBRATE",
-        "RECEIVE_BOOT_COMPLETED"
+        "RECEIVE_BOOT_COMPLETED",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -67,6 +72,10 @@
       "expo-web-browser",
       "expo-audio"
     ],
-    "extra": {}
+    "extra": {
+      "eas": {
+        "projectId": "59b5e5bf-ada1-4727-9376-d8d92466ad7a"
+      }
+    }
   }
 }
