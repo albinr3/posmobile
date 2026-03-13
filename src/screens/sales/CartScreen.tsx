@@ -5,19 +5,19 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Print from 'expo-print';
 import { useCartStore } from '../../store/cartStore';
 import { formatCurrency, generateInvoiceCode, generateLocalId } from '../../utils/helpers';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
-import { Asset } from 'expo-asset';
 import { getBottomSafeInset } from '../../utils/safeArea';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import { SalePaymentSplit } from '../../types';
 import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
+import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterService';
+import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
 
 interface CartScreenProps {
   navigation: any;
@@ -29,30 +29,6 @@ interface CartScreenProps {
     };
   };
 }
-
-const escapeHtml = (value: string) =>
-  String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-const formatDateTime = (timestamp: number) =>
-  new Date(timestamp).toLocaleString('es-DO', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-
-const formatDateOnly = (timestamp: number) =>
-  new Date(timestamp).toLocaleDateString('es-DO', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
 
 export function CartScreen({ navigation, route }: CartScreenProps) {
   const insets = useSafeAreaInsets();
@@ -75,7 +51,6 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     editingInvoiceCode,
     clearEditContext,
   } = useCartStore();
-  const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
   const [loading, setLoading] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [transferBankMenuVisible, setTransferBankMenuVisible] = useState(false);
@@ -479,180 +454,27 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         }
       }
 
-      const itemsRows = items
-        .map(
-          (item) => `
-            <div class="item">
-              <div class="item-name">${escapeHtml(item.productName)}</div>
-              <div class="item-meta">Cod: — · Ref: —</div>
-              <div class="item-line">
-                <span>${formatProductQty(item.quantity, item.unit)} x ${formatCurrency(item.priceCents)}</span>
-                <span class="item-total">${formatCurrency(item.totalCents)}</span>
-              </div>
-            </div>
-          `
-        )
-        .join('');
+      const printResult = await autoPrintSaleTicket({
+        invoiceCode: resolvedInvoiceCode,
+        createdAt,
+        customerName,
+        paymentMethod,
+        transferBankName,
+        paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+        totalCents: getTotal(),
+        items: items.map((item) => ({
+          productName: item.productName,
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          totalCents: item.totalCents,
+          unit: item.unit || 'UNIDAD',
+        })),
+      });
 
-      const subtotalCents = Math.round(getTotal() / 1.18);
-      const itbisCents = getTotal() - subtotalCents;
-      const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
-      const paymentMethodLabel =
-        paymentMethod === 'DIVIDIR_PAGO'
-          ? paymentSplits
-              .map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`)
-              .join(' + ')
-          : formatPaymentWithBank(paymentMethod, transferBankName);
-
-      let creditDays = 0;
-      if (paymentMethod === 'CREDITO' && customerId) {
-        const customerRow = await db.queryFirst<{ data?: string }>(
-          'SELECT data FROM customers WHERE local_id = ?',
-          [customerId]
-        );
-        try {
-          const customerData = customerRow?.data ? JSON.parse(customerRow.data) : null;
-          creditDays = Number(
-            customerData?.creditDays ??
-            customerData?.credit_days ??
-            0
-          ) || 0;
-        } catch {
-          creditDays = 0;
-        }
+      if (!printResult.printed && printResult.reason === 'missing_native_module') {
+        Alert.alert('Impresion', 'No se encontro soporte de impresora termica en esta app. Usa un build nativo con modulo ESC/POS.');
       }
-      const creditDueDate = createdAt + (Math.max(creditDays, 0) * 24 * 60 * 60 * 1000);
-      const showCreditDueDate = paymentMethod === 'CREDITO';
-
-      const html = `
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <style>
-              @page {
-                size: 80mm auto;
-                margin: 0;
-              }
-              * {
-                box-sizing: border-box;
-              }
-              body {
-                margin: 0;
-                padding: 0;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-                color: #000;
-                background: #fff;
-              }
-              .ticket {
-                width: 80mm;
-                margin: 0 auto;
-                padding: 10px 10px 14px;
-                font-size: 14px;
-                line-height: 1.25;
-              }
-              .brand {
-                text-align: center;
-                margin-bottom: 6px;
-              }
-              .logo {
-                height: 28px;
-                width: auto;
-              }
-              .sep {
-                border-top: 1px dashed #444;
-                border-bottom: 1px dashed #444;
-                padding: 7px 0;
-                margin: 7px 0;
-              }
-              .row {
-                display: flex;
-                justify-content: space-between;
-                gap: 8px;
-                margin: 3px 0;
-              }
-              .row span:last-child {
-                text-align: right;
-              }
-              .item {
-                border-bottom: 1px dashed #c4c4c4;
-                padding-bottom: 7px;
-                margin-bottom: 7px;
-              }
-              .item-name {
-                font-weight: 700;
-              }
-              .item-meta {
-                font-size: 12px;
-                color: #666;
-                margin-top: 1px;
-              }
-              .item-line {
-                display: flex;
-                justify-content: space-between;
-                margin-top: 4px;
-              }
-              .item-total {
-                font-weight: 700;
-              }
-              .totals .row {
-                margin: 4px 0;
-              }
-              .total {
-                border-top: 1px dashed #444;
-                padding-top: 7px;
-                margin-top: 6px;
-                font-size: 18px;
-                font-weight: 800;
-              }
-              .credit {
-                border-top: 1px dashed #444;
-                padding-top: 7px;
-                margin-top: 7px;
-                text-align: center;
-                font-weight: 700;
-              }
-              .thanks {
-                text-align: center;
-                margin-top: 10px;
-                font-weight: 600;
-              }
-            </style>
-          </head>
-          <body>
-            <div class="ticket">
-              <div class="brand">
-                <img src="${escapeHtml(logoUri)}" class="logo" />
-              </div>
-
-              <div class="sep">
-                <div class="row"><span>Factura:</span><span><strong>${escapeHtml(resolvedInvoiceCode)}</strong></span></div>
-                <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div>
-                <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName || '(General) Cliente general')}</div>
-                <div style="margin-top:4px;"><strong>Tipo de venta:</strong> ${escapeHtml(saleTypeLabel)}</div>
-                <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel)}</div>
-              </div>
-
-              <div>${itemsRows}</div>
-
-              <div class="totals">
-                <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-                <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
-                <div class="row total"><span>TOTAL</span><span>${formatCurrency(getTotal())}</span></div>
-              </div>
-
-              ${paymentMethod === 'CREDITO' ? `
-                <div class="credit">
-                  <div>VENTA A CREDITO</div>
-                  ${showCreditDueDate ? `<div style="margin-top:2px;font-weight:500;">Vence: ${escapeHtml(formatDateOnly(creditDueDate))}</div>` : ''}
-                </div>
-              ` : ''}
-              <div class="thanks">Gracias por su compra</div>
-            </div>
-          </body>
-        </html>
-      `;
-
-      await Print.printAsync({ html });
+      await playSaleSuccessSound();
 
       // Limpiar carrito
       clear();

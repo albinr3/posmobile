@@ -172,7 +172,12 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       setTaxRate(taxRaw === '16' || taxRaw === '0' ? (taxRaw as '16' | '0') : '18');
       
       const loadedRecipeItems = Array.isArray(parsed?.recipeItems) ? parsed.recipeItems : [];
-      setRecipeItems(loadedRecipeItems);
+      const normalizedRecipeItems = loadedRecipeItems.map((entry: any, index: number) => ({
+        id: String(entry?.id || entry?.ingredientId || `${Date.now()}-${index}`),
+        ingredientId: String(entry?.ingredientId || ''),
+        qty: String(entry?.qty ?? '1'),
+      }));
+      setRecipeItems(normalizedRecipeItems);
       
       if (!hasPendingImageSelectionRef.current) {
         setImageUri(imageFromData || row.image_url || parsed?.imageUri || null);

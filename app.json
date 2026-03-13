@@ -64,7 +64,8 @@
       ],
       "expo-sharing",
       "expo-sqlite",
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-audio"
     ],
     "extra": {}
   }

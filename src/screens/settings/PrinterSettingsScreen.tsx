@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid } from 'react-native';
+import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid, NativeModules } from 'react-native';
 import { Text, Surface, Button, ActivityIndicator, List, Divider, Switch } from 'react-native-paper';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -10,6 +10,7 @@ import { useSyncStore } from '../../store/syncStore';
 import { useAuthStore } from '../../store/authStore';
 import { useCartStore } from '../../store/cartStore';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
+import { isSaleSoundEnabled, setSaleSoundEnabled } from '../../services/feedback/saleFeedbackService';
 
 interface PrinterDevice {
   id: string;
@@ -22,6 +23,33 @@ interface PrinterSettingsScreenProps {
   navigation: any;
 }
 
+const parseNativeDevice = (raw: any, index: number): PrinterDevice | null => {
+  if (!raw) return null;
+
+  if (typeof raw === 'string') {
+    const parts = raw.split('#');
+    const name = String(parts[0] || '').trim();
+    const address = String(parts[1] || '').trim();
+    if (!address) return null;
+    return {
+      id: address,
+      name: name || `Impresora ${index + 1}`,
+      address,
+      connected: false,
+    };
+  }
+
+  const address = String(raw.address || raw.macAddress || raw.id || '').trim();
+  if (!address) return null;
+
+  return {
+    id: address,
+    name: String(raw.name || raw.deviceName || `Impresora ${index + 1}`),
+    address,
+    connected: false,
+  };
+};
+
 export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps) {
   const { getToken } = useAuth();
   const { isOnline } = useSyncStore();
@@ -29,6 +57,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const [devices, setDevices] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<PrinterDevice | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
+  const [saleSoundEnabled, setSaleSoundEnabledState] = useState(true);
   const [resettingData, setResettingData] = useState(false);
 
   useEffect(() => {
@@ -39,6 +68,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
     try {
       const savedPrinter = await AsyncStorage.getItem('connected_printer');
       const savedAutoPrint = await AsyncStorage.getItem('auto_print');
+      const savedSaleSoundEnabled = await isSaleSoundEnabled();
       
       if (savedPrinter) {
         setConnectedPrinter(JSON.parse(savedPrinter));
@@ -46,6 +76,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       if (savedAutoPrint) {
         setAutoPrint(savedAutoPrint === 'true');
       }
+      setSaleSoundEnabledState(savedSaleSoundEnabled);
     } catch (error) {
       console.error('Error cargando configuración:', error);
     }
@@ -79,32 +110,49 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
 
     setScanning(true);
     setDevices([]);
-
-    // TODO: Implementar escaneo real con react-native-ble-plx
-    // Por ahora, simulamos dispositivos para desarrollo
-    setTimeout(() => {
-      setDevices([
-        { id: '1', name: 'Printer-58mm', address: 'AA:BB:CC:DD:EE:FF', connected: false },
-        { id: '2', name: 'POS-Thermal', address: '11:22:33:44:55:66', connected: false },
-      ]);
+    try {
+      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
+      if (bluetoothManager && typeof bluetoothManager.enableBluetooth === 'function') {
+        const pairedDevices = await bluetoothManager.enableBluetooth();
+        const normalized = (Array.isArray(pairedDevices) ? pairedDevices : [])
+          .map((entry, index) => parseNativeDevice(entry, index))
+          .filter(Boolean) as PrinterDevice[];
+        setDevices(normalized);
+      } else {
+        setDevices([
+          { id: '1', name: 'Printer-58mm', address: 'AA:BB:CC:DD:EE:FF', connected: false },
+          { id: '2', name: 'POS-Thermal', address: '11:22:33:44:55:66', connected: false },
+        ]);
+      }
+    } catch (error) {
+      console.error('Error escaneando impresoras:', error);
+      Alert.alert('Impresoras', 'No se pudieron cargar impresoras Bluetooth.');
+    } finally {
       setScanning(false);
-    }, 3000);
+    }
   };
 
   const connectToPrinter = async (device: PrinterDevice) => {
     try {
-      // TODO: Implementar conexión real con BLE
+      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
+      if (bluetoothManager && typeof bluetoothManager.connect === 'function') {
+        await bluetoothManager.connect(device.address);
+      }
       setConnectedPrinter({ ...device, connected: true });
       await AsyncStorage.setItem('connected_printer', JSON.stringify({ ...device, connected: true }));
       Alert.alert('Éxito', `Conectado a ${device.name}`);
     } catch (error) {
+      console.error('Error conectando impresora:', error);
       Alert.alert('Error', 'No se pudo conectar a la impresora');
     }
   };
 
   const disconnectPrinter = async () => {
     try {
-      // TODO: Implementar desconexión real
+      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
+      if (connectedPrinter?.address && bluetoothManager && typeof bluetoothManager.unpaire === 'function') {
+        await bluetoothManager.unpaire(connectedPrinter.address);
+      }
       setConnectedPrinter(null);
       await AsyncStorage.removeItem('connected_printer');
       Alert.alert('Desconectado', 'Impresora desconectada');
@@ -119,13 +167,44 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       return;
     }
 
-    // TODO: Implementar impresión de prueba
-    Alert.alert('Impresión de Prueba', 'Enviando página de prueba a la impresora...');
+    try {
+      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
+      const escposPrinter = (NativeModules as any)?.BluetoothEscposPrinter;
+      if (!bluetoothManager || !escposPrinter) {
+        Alert.alert('Impresora', 'Esta compilación no incluye el módulo nativo de impresión térmica.');
+        return;
+      }
+
+      if (typeof bluetoothManager.connect === 'function' && connectedPrinter.address) {
+        try {
+          await bluetoothManager.connect(connectedPrinter.address);
+        } catch (error: any) {
+          const msg = String(error?.message || error || '').toLowerCase();
+          if (!msg.includes('already')) {
+            throw error;
+          }
+        }
+      }
+      if (typeof escposPrinter.printerInit === 'function') {
+        await escposPrinter.printerInit();
+      }
+      await escposPrinter.printText('PRUEBA MOVOPOS\nImpresora configurada correctamente\n\n\n', {});
+
+      Alert.alert('Impresión de prueba', 'Se envió la prueba a la impresora térmica.');
+    } catch (error) {
+      console.error('Error en impresión de prueba:', error);
+      Alert.alert('Error', 'No se pudo imprimir la prueba.');
+    }
   };
 
   const toggleAutoPrint = async (value: boolean) => {
     setAutoPrint(value);
     await AsyncStorage.setItem('auto_print', value.toString());
+  };
+
+  const toggleSaleSound = async (value: boolean) => {
+    setSaleSoundEnabledState(value);
+    await setSaleSoundEnabled(value);
   };
 
   const executeLocalDataReset = async () => {
@@ -245,6 +324,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
             <Text style={styles.settingDescription}>Imprimir recibo al completar venta</Text>
           </View>
           <Switch value={autoPrint} onValueChange={toggleAutoPrint} />
+        </View>
+        <Divider style={{ marginVertical: 12 }} />
+        <View style={styles.settingRow}>
+          <View>
+            <Text style={styles.settingTitle}>Sonido al vender</Text>
+            <Text style={styles.settingDescription}>Reproduce un sonido al completar una venta</Text>
+          </View>
+          <Switch value={saleSoundEnabled} onValueChange={toggleSaleSound} />
         </View>
       </Surface>
 
