@@ -472,7 +472,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       });
 
       if (!printResult.printed && printResult.reason === 'missing_native_module') {
-        Alert.alert('Impresion', 'No se encontro soporte de impresora termica en esta app. Usa un build nativo con modulo ESC/POS.');
+        Alert.alert(
+          'Impresion',
+          'No se encontro soporte de impresora termica Bluetooth en esta app. Instala el modulo nativo y genera un nuevo build.'
+        );
       }
       await playSaleSuccessSound();
 

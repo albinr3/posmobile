@@ -10,8 +10,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
+import { OtaUpdateBanner } from './src/components/OtaUpdateBanner';
 import { db } from './src/database/Database';
+import {
+  getBiometricEnabled,
+  hasStoredSubUserSession,
+  promptBiometric,
+} from './src/services/auth/biometricAuthService';
 import { syncService } from './src/services/sync/SyncService';
+import { useOtaUpdates } from './src/services/updates/useOtaUpdates';
 import { useAuthStore } from './src/store/authStore';
 import { useSyncStore } from './src/store/syncStore';
 
@@ -49,9 +56,11 @@ const tokenCache = {
 function RootApp() {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { setLoading, setUser, isAuthenticated, loadSubUserToken, logout } = useAuthStore();
+  const { setLoading, setUser, isAuthenticated, loadSubUserToken, logout, setBiometricEnabled } = useAuthStore();
   const { syncBlockedReason } = useSyncStore();
+  const otaUpdates = useOtaUpdates();
   const lastSyncBlockedReasonRef = useRef<string | null>(null);
+  const authHydratedRef = useRef(false);
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
 
@@ -124,10 +133,28 @@ function RootApp() {
           role: '',
         });
 
+        if (authHydratedRef.current) return;
+        authHydratedRef.current = true;
+
+        const biometricEnabled = await getBiometricEnabled();
+        setBiometricEnabled(biometricEnabled);
+
+        const hasStoredSession = await hasStoredSubUserSession();
+        if (biometricEnabled && hasStoredSession) {
+          const biometricResult = await promptBiometric('Desbloquea MOVOPos para continuar');
+          if (!biometricResult.success) {
+            await useAuthStore.getState().setSubUser(null, null, null);
+            return;
+          }
+        }
+
         // Restaurar subusuario persistido para evitar relogin tras cerrar app.
         await loadSubUserToken();
         return;
       }
+
+      authHydratedRef.current = false;
+      setBiometricEnabled(false);
 
       if (!isSignedIn && isAuthenticated) {
         if (APP_AUTH_DEBUG) console.log('[App] Clerk no firmado pero authStore autenticado -> logout()');
@@ -145,6 +172,11 @@ function RootApp() {
     if (APP_AUTH_DEBUG) console.log('[App] syncBlockedReason:', syncBlockedReason);
     Alert.alert('Sincronizacion en espera', syncBlockedReason);
   }, [isReady, syncBlockedReason]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    void otaUpdates.checkForUpdates();
+  }, [isReady, otaUpdates.checkForUpdates]);
 
   const initializeApp = async () => {
     try {
@@ -245,6 +277,15 @@ function RootApp() {
           <ErrorBoundary>
             <AppNavigator />
           </ErrorBoundary>
+          <OtaUpdateBanner
+            visible={otaUpdates.visible}
+            status={otaUpdates.status}
+            errorMessage={otaUpdates.errorMessage}
+            onCheckNow={otaUpdates.checkForUpdates}
+            onDownloadNow={otaUpdates.downloadUpdate}
+            onReloadNow={otaUpdates.reloadApp}
+            onDismiss={otaUpdates.dismiss}
+          />
           <StatusBar style="auto" translucent={false} />
         </PaperProvider>
       </SafeAreaProvider>

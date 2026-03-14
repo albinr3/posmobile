@@ -1,9 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NativeModules } from 'react-native';
 import { formatCurrency } from '../../utils/helpers';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
 import { SalePaymentSplit } from '../../types';
+import {
+  getBlePrinterMissingModuleMessage,
+  isBlePrinterModuleAvailable,
+  printBleText,
+} from './blePrinterService';
 
 interface StoredPrinter {
   id?: string;
@@ -103,34 +107,17 @@ export const autoPrintSaleTicket = async (payload: SaleTicketPayload): Promise<T
     return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
   }
 
-  const bluetoothManager = (NativeModules as any)?.BluetoothManager;
-  const escposPrinter = (NativeModules as any)?.BluetoothEscposPrinter;
-  if (!bluetoothManager || !escposPrinter) {
+  if (!isBlePrinterModuleAvailable()) {
     return {
       printed: false,
       reason: 'missing_native_module',
-      message: 'La impresion termica directa requiere un build nativo con modulo ESC/POS.',
+      message: getBlePrinterMissingModuleMessage(),
     };
   }
 
   try {
-    if (typeof bluetoothManager.connect === 'function') {
-      try {
-        await bluetoothManager.connect(printer.address);
-      } catch (connectError: any) {
-        const msg = String(connectError?.message || connectError || '').toLowerCase();
-        if (!msg.includes('already')) {
-          throw connectError;
-        }
-      }
-    }
-
-    if (typeof escposPrinter.printerInit === 'function') {
-      await escposPrinter.printerInit();
-    }
-
     const text = buildSaleTicketText(payload);
-    await escposPrinter.printText(text, {});
+    await printBleText(text, printer.address);
 
     return { printed: true };
   } catch (error: any) {

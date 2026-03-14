@@ -7,6 +7,14 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "scheme": "movopos",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/59b5e5bf-ada1-4727-9376-d8d92466ad7a",
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
     "backgroundColor": "#ffffff",
     "androidStatusBar": {
       "backgroundColor": "#1a73e8",

@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Alert } from 'react-native';
 import { Button, Text, Surface } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
-import * as LocalAuthentication from 'expo-local-authentication';
 import { useAuthStore } from '../../store/authStore';
 import { useUser } from '@clerk/clerk-expo';
+import {
+  isBiometricAvailable,
+  promptBiometric,
+  setBiometricEnabledPreference,
+} from '../../services/auth/biometricAuthService';
 
 interface BiometricSetupScreenProps {
   navigation: any;
@@ -22,24 +26,31 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
   }, []);
 
   const checkBiometricSupport = async () => {
-    const hardware = await LocalAuthentication.hasHardwareAsync();
-    const enrolled = await LocalAuthentication.isEnrolledAsync();
-    setHasHardware(hardware);
-    setIsEnrolled(enrolled);
+    try {
+      const availability = await isBiometricAvailable();
+      setHasHardware(availability.hasHardware);
+      setIsEnrolled(availability.isEnrolled);
+    } catch (error) {
+      console.error('Error validando biometria:', error);
+      setHasHardware(false);
+      setIsEnrolled(false);
+    }
   };
 
   const handleEnableBiometric = async () => {
     setLoading(true);
     try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Confirma tu identidad',
-        fallbackLabel: 'Usar código',
-        cancelLabel: 'Cancelar',
-      });
+      const availability = await isBiometricAvailable();
+      if (!availability.isAvailable) {
+        Alert.alert('Biometria', 'Tu dispositivo no tiene biometria disponible o configurada.');
+        return;
+      }
+
+      const result = await promptBiometric('Activa acceso biometrico en MOVOPos');
 
       if (result.success) {
+        await setBiometricEnabledPreference(true);
         setBiometricEnabled(true);
-        // TODO: Guardar preferencia en SecureStore
         if (user) {
           setUser({
             id: user.id,
@@ -51,9 +62,13 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
           });
         }
         navigateToHome();
+        return;
       }
+      await setBiometricEnabledPreference(false);
+      setBiometricEnabled(false);
     } catch (error) {
       console.error('Error configurando biométrico:', error);
+      Alert.alert('Biometria', 'No se pudo activar el acceso biometrico.');
     } finally {
       setLoading(false);
     }
@@ -65,6 +80,7 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
   };
 
   const handleSkip = () => {
+    setBiometricEnabled(false);
     if (user) {
       setUser({
         id: user.id,

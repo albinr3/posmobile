@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid, NativeModules } from 'react-native';
+import { View, StyleSheet, FlatList, Alert, Platform, PermissionsAndroid, Linking } from 'react-native';
 import { Text, Surface, Button, ActivityIndicator, List, Divider, Switch } from 'react-native-paper';
 import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -11,6 +11,20 @@ import { useAuthStore } from '../../store/authStore';
 import { useCartStore } from '../../store/cartStore';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { isSaleSoundEnabled, setSaleSoundEnabled } from '../../services/feedback/saleFeedbackService';
+import {
+  getBiometricEnabled,
+  isBiometricAvailable,
+  promptBiometric,
+  setBiometricEnabledPreference,
+} from '../../services/auth/biometricAuthService';
+import {
+  connectBlePrinter,
+  disconnectBlePrinter,
+  getBlePrinterMissingModuleMessage,
+  isBlePrinterModuleAvailable,
+  listBlePrinters,
+  printBleText,
+} from '../../services/printing/blePrinterService';
 
 interface PrinterDevice {
   id: string;
@@ -23,41 +37,17 @@ interface PrinterSettingsScreenProps {
   navigation: any;
 }
 
-const parseNativeDevice = (raw: any, index: number): PrinterDevice | null => {
-  if (!raw) return null;
-
-  if (typeof raw === 'string') {
-    const parts = raw.split('#');
-    const name = String(parts[0] || '').trim();
-    const address = String(parts[1] || '').trim();
-    if (!address) return null;
-    return {
-      id: address,
-      name: name || `Impresora ${index + 1}`,
-      address,
-      connected: false,
-    };
-  }
-
-  const address = String(raw.address || raw.macAddress || raw.id || '').trim();
-  if (!address) return null;
-
-  return {
-    id: address,
-    name: String(raw.name || raw.deviceName || `Impresora ${index + 1}`),
-    address,
-    connected: false,
-  };
-};
-
 export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps) {
   const { getToken } = useAuth();
   const { isOnline } = useSyncStore();
+  const { setBiometricEnabled } = useAuthStore();
   const [scanning, setScanning] = useState(false);
   const [devices, setDevices] = useState<PrinterDevice[]>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [connectedPrinter, setConnectedPrinter] = useState<PrinterDevice | null>(null);
   const [autoPrint, setAutoPrint] = useState(false);
   const [saleSoundEnabled, setSaleSoundEnabledState] = useState(true);
+  const [biometricLoginEnabled, setBiometricLoginEnabled] = useState(false);
   const [resettingData, setResettingData] = useState(false);
 
   useEffect(() => {
@@ -69,6 +59,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       const savedPrinter = await AsyncStorage.getItem('connected_printer');
       const savedAutoPrint = await AsyncStorage.getItem('auto_print');
       const savedSaleSoundEnabled = await isSaleSoundEnabled();
+      const savedBiometricEnabled = await getBiometricEnabled();
       
       if (savedPrinter) {
         setConnectedPrinter(JSON.parse(savedPrinter));
@@ -77,56 +68,84 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         setAutoPrint(savedAutoPrint === 'true');
       }
       setSaleSoundEnabledState(savedSaleSoundEnabled);
+      setBiometricLoginEnabled(savedBiometricEnabled);
+      setBiometricEnabled(savedBiometricEnabled);
     } catch (error) {
       console.error('Error cargando configuración:', error);
     }
   };
 
-  const requestBluetoothPermissions = async () => {
+  const requestBluetoothPermissions = async (): Promise<{ granted: boolean; blocked: boolean; message?: string }> => {
     if (Platform.OS === 'android') {
       try {
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
         ]);
-        
-        return Object.values(granted).every(
-          permission => permission === PermissionsAndroid.RESULTS.GRANTED
+
+        const denied = Object.entries(granted).filter(
+          ([, status]) => status !== PermissionsAndroid.RESULTS.GRANTED
         );
+
+        if (denied.length === 0) {
+          return { granted: true, blocked: false };
+        }
+
+        const blocked = denied.some(([, status]) => status === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN);
+        const shortNames = denied.map(([permission]) => permission.split('.').pop()).join(', ');
+
+        return {
+          granted: false,
+          blocked,
+          message: blocked
+            ? `Permisos bloqueados (${shortNames}). Debes habilitarlos desde Ajustes de Android.`
+            : `Permisos denegados (${shortNames}).`,
+        };
       } catch (error) {
         console.error('Error solicitando permisos:', error);
-        return false;
+        return { granted: false, blocked: false, message: 'No se pudieron solicitar permisos Bluetooth.' };
       }
     }
-    return true;
+    return { granted: true, blocked: false };
   };
 
   const scanForPrinters = async () => {
-    const hasPermission = await requestBluetoothPermissions();
-    if (!hasPermission) {
-      Alert.alert('Permisos', 'Se necesitan permisos de Bluetooth para buscar impresoras');
+    setScanError(null);
+    const permissionResult = await requestBluetoothPermissions();
+    if (!permissionResult.granted) {
+      const message = permissionResult.message || 'Se necesitan permisos de Bluetooth para buscar impresoras.';
+      setScanError(message);
+      if (permissionResult.blocked) {
+        Alert.alert('Permisos Bluetooth', message, [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Abrir ajustes', onPress: () => void Linking.openSettings() },
+        ]);
+      } else {
+        Alert.alert('Permisos Bluetooth', message);
+      }
       return;
     }
 
     setScanning(true);
     setDevices([]);
     try {
-      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
-      if (bluetoothManager && typeof bluetoothManager.enableBluetooth === 'function') {
-        const pairedDevices = await bluetoothManager.enableBluetooth();
-        const normalized = (Array.isArray(pairedDevices) ? pairedDevices : [])
-          .map((entry, index) => parseNativeDevice(entry, index))
-          .filter(Boolean) as PrinterDevice[];
-        setDevices(normalized);
-      } else {
-        setDevices([
-          { id: '1', name: 'Printer-58mm', address: 'AA:BB:CC:DD:EE:FF', connected: false },
-          { id: '2', name: 'POS-Thermal', address: '11:22:33:44:55:66', connected: false },
-        ]);
+      if (!isBlePrinterModuleAvailable()) {
+        const message = getBlePrinterMissingModuleMessage();
+        setScanError(message);
+        Alert.alert('Impresora', message);
+        return;
+      }
+
+      const pairedDevices = await listBlePrinters();
+      setDevices(pairedDevices);
+      if (pairedDevices.length === 0) {
+        setScanError('No se encontraron impresoras emparejadas. Verifica que la impresora esté vinculada en Bluetooth del sistema.');
       }
     } catch (error) {
       console.error('Error escaneando impresoras:', error);
-      Alert.alert('Impresoras', 'No se pudieron cargar impresoras Bluetooth.');
+      const message = 'No se pudieron cargar impresoras Bluetooth. Verifica que el Bluetooth esté encendido.';
+      setScanError(message);
+      Alert.alert('Impresoras', message);
     } finally {
       setScanning(false);
     }
@@ -134,10 +153,11 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
 
   const connectToPrinter = async (device: PrinterDevice) => {
     try {
-      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
-      if (bluetoothManager && typeof bluetoothManager.connect === 'function') {
-        await bluetoothManager.connect(device.address);
+      if (!isBlePrinterModuleAvailable()) {
+        Alert.alert('Impresora', getBlePrinterMissingModuleMessage());
+        return;
       }
+      await connectBlePrinter(device.address);
       setConnectedPrinter({ ...device, connected: true });
       await AsyncStorage.setItem('connected_printer', JSON.stringify({ ...device, connected: true }));
       Alert.alert('Éxito', `Conectado a ${device.name}`);
@@ -149,9 +169,8 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
 
   const disconnectPrinter = async () => {
     try {
-      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
-      if (connectedPrinter?.address && bluetoothManager && typeof bluetoothManager.unpaire === 'function') {
-        await bluetoothManager.unpaire(connectedPrinter.address);
+      if (connectedPrinter?.address && isBlePrinterModuleAvailable()) {
+        await disconnectBlePrinter();
       }
       setConnectedPrinter(null);
       await AsyncStorage.removeItem('connected_printer');
@@ -168,27 +187,11 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
     }
 
     try {
-      const bluetoothManager = (NativeModules as any)?.BluetoothManager;
-      const escposPrinter = (NativeModules as any)?.BluetoothEscposPrinter;
-      if (!bluetoothManager || !escposPrinter) {
-        Alert.alert('Impresora', 'Esta compilación no incluye el módulo nativo de impresión térmica.');
+      if (!isBlePrinterModuleAvailable()) {
+        Alert.alert('Impresora', getBlePrinterMissingModuleMessage());
         return;
       }
-
-      if (typeof bluetoothManager.connect === 'function' && connectedPrinter.address) {
-        try {
-          await bluetoothManager.connect(connectedPrinter.address);
-        } catch (error: any) {
-          const msg = String(error?.message || error || '').toLowerCase();
-          if (!msg.includes('already')) {
-            throw error;
-          }
-        }
-      }
-      if (typeof escposPrinter.printerInit === 'function') {
-        await escposPrinter.printerInit();
-      }
-      await escposPrinter.printText('PRUEBA MOVOPOS\nImpresora configurada correctamente\n\n\n', {});
+      await printBleText('PRUEBA MOVOPOS\nImpresora configurada correctamente\n\n\n', connectedPrinter.address);
 
       Alert.alert('Impresión de prueba', 'Se envió la prueba a la impresora térmica.');
     } catch (error) {
@@ -205,6 +208,40 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const toggleSaleSound = async (value: boolean) => {
     setSaleSoundEnabledState(value);
     await setSaleSoundEnabled(value);
+  };
+
+  const toggleBiometricLogin = async (value: boolean) => {
+    if (!value) {
+      await setBiometricEnabledPreference(false);
+      setBiometricLoginEnabled(false);
+      setBiometricEnabled(false);
+      return;
+    }
+
+    try {
+      const availability = await isBiometricAvailable();
+      if (!availability.hasHardware) {
+        Alert.alert('Biometria', 'Este dispositivo no tiene hardware biometrico.');
+        return;
+      }
+      if (!availability.isEnrolled) {
+        Alert.alert('Biometria', 'Debes registrar huella o Face ID en el dispositivo.');
+        return;
+      }
+
+      const result = await promptBiometric('Confirma para activar login biometrico');
+      if (!result.success) {
+        Alert.alert('Biometria', 'No se activo el login biometrico.');
+        return;
+      }
+
+      await setBiometricEnabledPreference(true);
+      setBiometricLoginEnabled(true);
+      setBiometricEnabled(true);
+    } catch (error) {
+      console.error('Error activando biometria:', error);
+      Alert.alert('Biometria', 'No se pudo activar el login biometrico.');
+    }
   };
 
   const executeLocalDataReset = async () => {
@@ -333,6 +370,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
           </View>
           <Switch value={saleSoundEnabled} onValueChange={toggleSaleSound} />
         </View>
+        <Divider style={{ marginVertical: 12 }} />
+        <View style={styles.settingRow}>
+          <View>
+            <Text style={styles.settingTitle}>Login con biometria</Text>
+            <Text style={styles.settingDescription}>Protege el reingreso con huella o Face ID</Text>
+          </View>
+          <Switch value={biometricLoginEnabled} onValueChange={toggleBiometricLogin} />
+        </View>
       </Surface>
 
       <Divider style={styles.divider} />
@@ -350,6 +395,8 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         >
           {scanning ? 'Buscando...' : 'Buscar Impresoras'}
         </Button>
+
+        {scanError ? <Text style={styles.errorBanner}>{scanError}</Text> : null}
 
         {devices.length > 0 && (
           <FlatList
@@ -490,6 +537,17 @@ const styles = StyleSheet.create({
   scanningText: {
     marginLeft: 8,
     color: '#666',
+  },
+  errorBanner: {
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+    color: '#991B1B',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
+    fontSize: 12,
   },
   dangerSection: {
     margin: 12,
