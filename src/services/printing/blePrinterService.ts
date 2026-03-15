@@ -1,4 +1,8 @@
-import { BLEPrinter, IBLEPrinter } from '@poriyaalar/react-native-thermal-receipt-printer';
+import {
+  BLEPrinter,
+  IBLEPrinter,
+  PrinterWidth,
+} from '@poriyaalar/react-native-thermal-receipt-printer';
 import { NativeModules } from 'react-native';
 
 export interface BlePrinterDevice {
@@ -70,6 +74,30 @@ export const printBleText = async (text: string, address?: string): Promise<void
     BLEPrinter.printText(
       text,
       { encoding: 'UTF8', keepConnection: true },
+      () => resolve(),
+      (error) => reject(error)
+    );
+  });
+};
+
+export const printBleImageBase64 = async (
+  base64: string,
+  address?: string,
+  options?: { imageWidth?: number; imageHeight?: number; printerWidthMm?: 58 | 80 }
+): Promise<void> => {
+  await ensureInitialized();
+  if (address) {
+    await BLEPrinter.connectPrinter(address);
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    BLEPrinter.printImageBase64(
+      base64,
+      {
+        imageWidth: options?.imageWidth || 280,
+        imageHeight: options?.imageHeight || 120,
+        printerWidthType: options?.printerWidthMm === 80 ? PrinterWidth['80mm'] : PrinterWidth['58mm'],
+      },
       () => resolve(),
       (error) => reject(error)
     );

@@ -252,6 +252,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   const handleCompleteSale = async () => {
     if (items.length === 0) return;
+    let creditDueDate: number | null = null;
 
     if (paymentMethod === 'CREDITO') {
       if (!customerId) {
@@ -265,12 +266,16 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       );
 
       let creditEnabled = false;
+      let creditDays = 0;
       try {
         const customerData = customerRow?.data ? JSON.parse(customerRow.data) : null;
         const rawCreditEnabled = customerData?.creditEnabled ?? customerData?.credit_enabled ?? false;
+        const rawCreditDays = Number(customerData?.creditDays ?? customerData?.credit_days ?? 0);
+        creditDays = Number.isFinite(rawCreditDays) ? Math.max(0, Math.round(rawCreditDays)) : 0;
         creditEnabled = rawCreditEnabled === true || rawCreditEnabled === 1 || rawCreditEnabled === '1';
       } catch {
         creditEnabled = false;
+        creditDays = 0;
       }
 
       if (!creditEnabled) {
@@ -279,6 +284,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           `El cliente ${customerRow?.name || customerName || ''} no tiene crédito habilitado.`
         );
         return;
+      }
+
+      if (creditDays > 0) {
+        creditDueDate = Date.now() + creditDays * 24 * 60 * 60 * 1000;
       }
     }
 
@@ -324,6 +333,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         items: items.map((item) => ({
           productId: item.productId,
           productName: item.productName,
+          sku: item.sku,
           quantity: item.quantity,
           priceCents: item.priceCents,
           unitPriceCents: item.priceCents,
@@ -405,6 +415,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           soldAt: createdAt,
           items: items.map((item) => ({
             productId: item.productId,
+            sku: item.sku,
             quantity: item.quantity,
             unitPriceCents: item.priceCents,
             unit: item.unit || 'UNIDAD',
@@ -461,6 +472,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         paymentMethod,
         transferBankName,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+        type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
+        dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
         totalCents: getTotal(),
         items: items.map((item) => ({
           productName: item.productName,
@@ -468,6 +481,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           priceCents: item.priceCents,
           totalCents: item.totalCents,
           unit: item.unit || 'UNIDAD',
+          reference: item.sku || null,
+          productId: item.productId,
+          sku: item.sku || null,
         })),
       });
 

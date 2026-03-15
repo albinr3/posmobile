@@ -1,7 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText } from 'react-native';
 import { Searchbar, Text, Icon } from 'react-native-paper';
-import * as Print from 'expo-print';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
@@ -11,6 +10,7 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
+import { printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -31,52 +31,6 @@ interface PaymentReceiptItem {
   createdAt: number;
   cancelledAt?: number | null;
   arId?: string | null;
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function buildPaymentReceiptHtml(payment: PaymentReceiptItem): string {
-  return `
-    <html>
-      <head>
-        <meta charset="UTF-8" />
-        <style>
-          body { font-family: Arial, sans-serif; font-size: 12px; color: #111; }
-          .wrap { max-width: 280px; margin: 0 auto; }
-          .title { text-align: center; font-size: 16px; font-weight: 800; margin: 8px 0 2px; }
-          .subtitle { text-align: center; color: #666; margin-bottom: 10px; }
-          .row { display: flex; justify-content: space-between; margin: 3px 0; }
-          .divider { border-top: 1px dashed #999; margin: 10px 0; }
-          .total { font-size: 16px; font-weight: 800; text-align: right; margin-top: 8px; }
-          .cancelled { color: #b91c1c; font-weight: 800; text-align: center; margin-top: 8px; }
-        </style>
-      </head>
-      <body>
-        <div class="wrap">
-          <div class="title">RECIBO DE PAGO</div>
-          <div class="subtitle">Cuentas por cobrar</div>
-          <div class="divider"></div>
-          <div class="row"><span>Recibo:</span><strong>${escapeHtml(payment.receiptCode)}</strong></div>
-          <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(payment.createdAt))}</span></div>
-          <div class="row"><span>Cliente:</span><span>${escapeHtml(payment.customerName)}</span></div>
-          <div class="row"><span>Factura:</span><span>${escapeHtml(payment.invoiceCode || '-')}</span></div>
-          <div class="row"><span>Método:</span><span>${escapeHtml(formatPaymentWithBank(payment.paymentMethod, payment.transferBankName))}</span></div>
-          <div class="row"><span>Referencia:</span><span>${escapeHtml(payment.reference || '-')}</span></div>
-          ${payment.notes ? `<div style="margin-top:6px;"><strong>Notas:</strong> ${escapeHtml(payment.notes)}</div>` : ''}
-          <div class="divider"></div>
-          <div class="total">TOTAL: ${escapeHtml(formatCurrency(payment.amountCents))}</div>
-          ${payment.cancelledAt ? `<div class="cancelled">RECIBO CANCELADO</div>` : ''}
-        </div>
-      </body>
-    </html>
-  `;
 }
 
 export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps) {
@@ -229,7 +183,29 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
 
   const handleReprint = async (item: PaymentReceiptItem) => {
     try {
-      await Print.printAsync({ html: buildPaymentReceiptHtml(item) });
+      const printResult = await printPaymentReceiptDirect({
+        receiptCode: item.receiptCode,
+        createdAt: item.createdAt,
+        customerName: item.customerName,
+        invoiceCode: item.invoiceCode || null,
+        paymentMethod: item.paymentMethod,
+        transferBankName: item.transferBankName || null,
+        reference: item.reference || null,
+        notes: item.notes || null,
+        amountCents: item.amountCents,
+        cancelledAt: item.cancelledAt || null,
+      });
+
+      if (printResult.printed) return;
+      if (printResult.reason === 'missing_config') {
+        Alert.alert('Impresión', 'No hay impresora térmica conectada. Ve a Ajustes > Impresora.');
+        return;
+      }
+      if (printResult.reason === 'missing_native_module') {
+        Alert.alert('Impresión', 'Esta app no tiene soporte nativo para impresora térmica Bluetooth. Genera un nuevo build.');
+        return;
+      }
+      Alert.alert('Impresión', printResult.message || 'No se pudo imprimir el recibo.');
     } catch (error) {
       console.error('Error imprimiendo recibo de pago:', error);
       Alert.alert('Impresión', 'No se pudo imprimir el recibo.');
@@ -413,4 +389,3 @@ const styles = StyleSheet.create({
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });
-

@@ -20,9 +20,8 @@ import {
   getBlePrinterMissingModuleMessage,
   isBlePrinterModuleAvailable,
   listBlePrinters,
-  printBleText,
 } from '../../services/printing/blePrinterService';
-import { buildSaleTicketText } from '../../services/printing/thermalPrinterService';
+import { printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
 import { ui } from '../../theme/ui';
 
 interface PrinterDevicesScreenProps {
@@ -209,7 +208,7 @@ export function PrinterDevicesScreen({ navigation }: PrinterDevicesScreenProps) 
         return;
       }
 
-      const sampleTicket = buildSaleTicketText({
+      const printResult = await printSaleTicketDirect({
         invoiceCode: `TEST-${Date.now().toString().slice(-6)}`,
         createdAt: Date.now(),
         customerName: 'Cliente de prueba',
@@ -233,7 +232,15 @@ export function PrinterDevicesScreen({ navigation }: PrinterDevicesScreenProps) 
         ],
       });
 
-      await printBleText(sampleTicket, connectedPrinter.address);
+      if (!printResult.printed) {
+        if (printResult.reason === 'missing_config') {
+          Alert.alert('Impresión de prueba', 'No hay una impresora conectada.');
+          return;
+        }
+        Alert.alert('Impresión de prueba', printResult.message || 'No se pudo imprimir la prueba.');
+        return;
+      }
+
       Alert.alert('Impresión de prueba', 'Se envió la prueba a la impresora térmica.');
     } catch (error) {
       console.error('Error en impresión de prueba:', error);
@@ -289,7 +296,7 @@ export function PrinterDevicesScreen({ navigation }: PrinterDevicesScreenProps) 
           </TouchableOpacity>
 
           {paperSize === '80' ? (
-            <Text style={styles.paperHint}>80 mm está en preparación. Por ahora la impresión usa formato de 58 mm.</Text>
+            <Text style={styles.paperHint}>Formato 80 mm activo para facturas y recibos térmicos.</Text>
           ) : null}
         </View>
 

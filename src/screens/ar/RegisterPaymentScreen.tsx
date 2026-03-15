@@ -9,6 +9,7 @@ import { generateLocalId, generateReceiptCode, formatCurrency } from '../../util
 import { AccountReceivable } from '../../types';
 import { ui } from '../../theme/ui';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
+import { printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
 
 interface RegisterPaymentScreenProps {
   navigation: any;
@@ -138,7 +139,43 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       // Agregar a cola de sincronización
       await syncService.queueOperation('payment', 'create', paymentData, localId);
 
-      Alert.alert('Éxito', `Pago de ${formatCurrency(amountCents)} registrado\nRecibo: ${receiptCode}`, [
+      let invoiceCode: string | null = null;
+      try {
+        const parsedArData = arItem?.data ? JSON.parse(arItem.data) : null;
+        invoiceCode = String(parsedArData?.sale?.invoiceCode || parsedArData?.invoiceCode || '').trim() || null;
+      } catch {
+        invoiceCode = null;
+      }
+
+      let printNotice = '';
+      try {
+        const printResult = await printPaymentReceiptDirect({
+          receiptCode,
+          createdAt: now,
+          customerName: arItem.customerName,
+          invoiceCode,
+          paymentMethod,
+          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+          reference: reference.trim() || null,
+          notes: notes.trim() || null,
+          amountCents,
+          cancelledAt: null,
+        });
+
+        if (!printResult.printed) {
+          if (printResult.reason === 'missing_config') {
+            printNotice = '\n\nPago guardado, pero no hay impresora térmica conectada.';
+          } else if (printResult.reason === 'missing_native_module') {
+            printNotice = '\n\nPago guardado, pero esta app no tiene soporte nativo para impresora térmica.';
+          } else {
+            printNotice = `\n\nPago guardado, pero no se pudo imprimir: ${printResult.message || 'error de impresión'}.`;
+          }
+        }
+      } catch {
+        printNotice = '\n\nPago guardado, pero no se pudo imprimir el recibo.';
+      }
+
+      Alert.alert('Éxito', `Pago de ${formatCurrency(amountCents)} registrado\nRecibo: ${receiptCode}${printNotice}`, [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
     } catch (error) {

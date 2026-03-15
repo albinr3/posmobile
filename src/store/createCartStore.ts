@@ -78,6 +78,7 @@ function createBaseCartSlice<TState extends BaseCartState>(
               lineId,
               productId: product.localId,
               productName: product.name,
+              sku: product.sku,
               quantity,
               priceCents: product.priceCents,
               totalCents: quantity * product.priceCents,

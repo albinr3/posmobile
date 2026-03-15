@@ -29,6 +29,7 @@ import {
   listBlePrinters,
   printBleText,
 } from '../../services/printing/blePrinterService';
+import { COMPANY_SETTINGS_SNAPSHOT_KEY } from '../../services/printing/thermalPrinterService';
 import { ui } from '../../theme/ui';
 
 interface PrinterDevice {
@@ -81,6 +82,22 @@ function normalizeCompanySettings(apiUrl: string, payload: CompanySettingsRespon
     address: payload?.company?.direccion?.trim() || payload?.address?.trim() || '',
     logoUrl,
   };
+}
+
+async function cacheCompanySettingsSnapshot(data: CompanySettingsData): Promise<void> {
+  try {
+    await AsyncStorage.setItem(
+      COMPANY_SETTINGS_SNAPSHOT_KEY,
+      JSON.stringify({
+        name: String(data.name || 'MOVOpos').trim() || 'MOVOpos',
+        phone: String(data.phone || '').trim(),
+        address: String(data.address || '').trim(),
+        logoUrl: data.logoUrl ? String(data.logoUrl).trim() : null,
+      })
+    );
+  } catch {
+    // no-op
+  }
 }
 
 export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps) {
@@ -149,12 +166,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       setCompanySettingsSuccess(null);
 
       if (!subUserToken) {
-        setCompanySettings({
+        const fallbackCompany = {
           name: 'MOVOpos',
           phone: '',
           address: '',
           logoUrl: null,
-        });
+        };
+        setCompanySettings(fallbackCompany);
+        await cacheCompanySettingsSnapshot(fallbackCompany);
         setCompanyLogoError(false);
         return;
       }
@@ -176,6 +195,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       });
 
       setCompanySettings(normalizeCompanySettings(API_URL, response.data));
+      await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
       setCompanyLogoError(false);
       setIsEditingCompany(false);
       setDefaultViewMode(response.data?.defaultViewMode === 'grid' ? 'grid' : 'list');
@@ -264,6 +284,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       }
 
       setCompanySettings(normalizeCompanySettings(API_URL, response.data));
+      await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
       setCompanyLogoError(false);
       setIsEditingCompany(false);
       const marginBpFromForm = Math.max(0, marginBp);
@@ -359,6 +380,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         showItbisOnReceipts: Boolean(response.data?.showItbisOnReceipts ?? showItbisOnReceipts),
         defaultProfitMarginBp: Math.max(0, Number.isFinite(marginBpFromApi) ? marginBpFromApi : marginBp),
       });
+      await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
       setCompanySettingsSuccess('Configuración de ventas guardada.');
     } catch (error) {
       console.error('Error guardando configuración de ventas:', error);

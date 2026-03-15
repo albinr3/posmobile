@@ -17,6 +17,7 @@ import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface InvoiceListItem {
   localId: string;
@@ -264,8 +265,6 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
     try {
-      const logoDataUri = await getLogoDataUri();
-
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
         Alert.alert('Factura', 'No se encontró la factura.');
@@ -283,76 +282,80 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
       const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
-      const paymentMethodLabel = getInvoicePaymentSummary({
+      const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
+        ? 'CREDITO'
+        : String(parsedData?.paymentMethod || invoice.paymentMethod || '').toUpperCase() === 'CREDITO'
+          ? 'CREDITO'
+          : 'CONTADO';
+      let dueDate: number | null = null;
+      if (saleType === 'CREDITO') {
+        const arRows = await db.query<any>(
+          `SELECT due_date, data
+           FROM accounts_receivable
+           WHERE due_date IS NOT NULL
+           ORDER BY rowid DESC`
+        );
+
+        const saleServerId = String(row.server_id || '').trim();
+        for (const arRow of arRows) {
+          let arData: any = null;
+          try {
+            arData = arRow?.data ? JSON.parse(arRow.data) : null;
+          } catch {
+            arData = null;
+          }
+
+          const arInvoiceCode = String(arData?.sale?.invoiceCode || arData?.invoiceCode || '').trim();
+          const arSaleServerId = String(arData?.sale?.id || '').trim();
+          const matchesInvoice = arInvoiceCode && arInvoiceCode === invoiceCode;
+          const matchesSaleId = saleServerId && arSaleServerId && arSaleServerId === saleServerId;
+          if (!matchesInvoice && !matchesSaleId) continue;
+
+          const parsedDueDate = Number(arRow?.due_date);
+          dueDate = Number.isFinite(parsedDueDate) ? parsedDueDate : null;
+          if (dueDate) break;
+        }
+      }
+      const printResult = await printSaleTicketDirect({
+        invoiceCode,
+        createdAt,
+        customerName,
         paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
         transferBankName: parsedData?.transferBankName || invoice.transferBankName,
         paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+        type: saleType,
+        dueDate,
+        totalCents,
+        items: items.map((item: any) => ({
+          productName: String(item.productName || 'Producto'),
+          quantity: Number(item.quantity || item.qty || 0),
+          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+          totalCents: Number(item.totalCents || 0),
+          unit: item.unit || 'UNIDAD',
+          reference: String(item.reference || item.sku || '').trim() || null,
+          productId: String(item.productId || '').trim() || null,
+        })),
       });
-      const subtotalCents = Math.round(totalCents / 1.18);
-      const itbisCents = totalCents - subtotalCents;
-      const taxRows = showItbisBreakdown
-        ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-              <div class="row"><span>ITBIS (18%)</span><span>${formatCurrency(itbisCents)}</span></div>`
-        : '';
 
-      const itemsRows = items
-        .map(
-          (item: any) => `
-            <div class="item">
-              <div><strong>${String(item.productName || 'Producto')}</strong></div>
-              <div class="row">
-                <span>${formatProductQty(Number(item.quantity || item.qty || 0), item.unit)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
-                <span><strong>${formatCurrency(Number(item.totalCents || 0))}</strong></span>
-              </div>
-            </div>
-          `
-        )
-        .join('');
+      if (printResult.printed) return;
 
-      const html = `
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <style>
-              @page { size: 80mm auto; margin: 0; }
-              body { font-family: Arial, sans-serif; margin: 0; }
-              .ticket { width: 80mm; padding: 10px; font-size: 13px; color: #000; }
-              .brand { text-align: center; margin-bottom: 6px; }
-              .logo { height: 28px; width: auto; }
-              .row { display: flex; justify-content: space-between; margin: 3px 0; }
-              .sep { border-top: 1px dashed #444; margin: 7px 0; }
-              .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; }
-              .total { font-size: 17px; font-weight: 800; margin-top: 6px; }
-              .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }
-            </style>
-          </head>
-          <body>
-            <div class="ticket">
-              <div class="brand">
-                ${
-                  logoDataUri
-                    ? `<img src="${logoDataUri}" class="logo" />`
-                    : '<div style="font-weight:800;">MOVOpos</div>'
-                }
-              </div>
-              <div class="row"><span>Factura:</span><span><strong>${invoiceCode}</strong></span></div>
-              <div class="row"><span>Fecha:</span><span>${formatDateTime(createdAt)}</span></div>
-              <div style="margin-top:4px;"><strong>Cliente:</strong> ${customerName}</div>
-              <div style="margin-top:4px;"><strong>Método:</strong> ${paymentMethodLabel}</div>
-              <div class="sep"></div>
-              <div>${itemsRows}</div>
-              ${taxRows}
-              <div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
-              ${String(row.status || '').toLowerCase() === 'cancelled' ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}
-            </div>
-          </body>
-        </html>
-      `;
+      if (printResult.reason === 'missing_config') {
+        Alert.alert('Impresión', 'No hay impresora térmica conectada. Ve a Ajustes > Impresora.');
+        return;
+      }
 
-      await Print.printAsync({ html });
+      if (printResult.reason === 'missing_native_module') {
+        Alert.alert(
+          'Impresión',
+          'No se encontró soporte de impresora térmica Bluetooth en esta app. Instala el módulo nativo y genera un nuevo build.'
+        );
+        return;
+      }
+
+      Alert.alert('Impresión', printResult.message || `No se pudo reimprimir ${invoiceCode}.`);
     } catch (error) {
       console.error('Error reimprimiendo factura:', error);
-      Alert.alert('Error', 'No se pudo abrir la impresión de la factura.');
+      Alert.alert('Error', 'No se pudo reimprimir la factura.');
     }
   };
 

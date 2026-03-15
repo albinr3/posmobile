@@ -49,6 +49,7 @@ export interface SaleItem {
   lineId: string;
   productId: string;
   productName: string;
+  sku?: string;
   quantity: number;
   priceCents: number;
   totalCents: number;
