@@ -20,10 +20,46 @@ type BillingStateCacheEntry = {
   data: BillingStateResponse | null;
 };
 
+type CompanySettingsResponse = {
+  company?: {
+    logo?: string | null;
+    nombre?: string | null;
+    telefono?: string | null;
+    direccion?: string | null;
+  } | null;
+  name?: string | null;
+  logoUrl?: string | null;
+  phone?: string | null;
+  address?: string | null;
+};
+
+type CompanyHeaderData = {
+  name: string;
+  phone: string;
+  logoUrl: string | null;
+};
+
 const BILLING_STATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const BILLING_STATE_STORAGE_PREFIX = 'movopos_billing_state_v1:';
 const billingStateCache = new Map<string, BillingStateCacheEntry>();
 const billingStateInFlight = new Map<string, Promise<BillingStateResponse | null>>();
+
+function normalizeCompanySettings(apiUrl: string, payload: CompanySettingsResponse | null | undefined): CompanyHeaderData {
+  const rawLogo = payload?.company?.logo ?? payload?.logoUrl ?? null;
+  const trimmedLogo = rawLogo && String(rawLogo).trim() ? String(rawLogo).trim() : null;
+  const isAbsoluteLogo = !!trimmedLogo && /^https?:\/\//i.test(trimmedLogo);
+  const logoUrl = trimmedLogo
+    ? isAbsoluteLogo
+      ? trimmedLogo
+      : `${apiUrl}${trimmedLogo.startsWith('/') ? '' : '/'}${trimmedLogo}`
+    : null;
+
+  return {
+    name: payload?.company?.nombre?.trim() || payload?.name?.trim() || 'MOVOpos',
+    phone: payload?.company?.telefono?.trim() || payload?.phone?.trim() || '',
+    logoUrl,
+  };
+}
 
 function getBillingStateStorageKey(cacheKey: string): string {
   return `${BILLING_STATE_STORAGE_PREFIX}${cacheKey}`;
@@ -58,12 +94,14 @@ export function AppTopHeader() {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
   const { user: clerkUser } = useUser();
-  const { user, subUser, subUserToken, accountId } = useAuthStore();
+  const { user, subUser, subUserToken, accountId, setSubUser } = useAuthStore();
   const displayName = subUser?.name || user?.name || 'Usuario';
   const subUserName = subUser?.name || subUser?.username || 'Sin subusuario';
   const clerkEmail = clerkUser?.primaryEmailAddress?.emailAddress || user?.email || 'Sin correo en Clerk';
   const avatarLetter = (displayName || 'U').charAt(0).toUpperCase();
   const [billingState, setBillingState] = useState<BillingStateResponse | null>(null);
+  const [companyData, setCompanyData] = useState<CompanyHeaderData>({ name: 'MOVOpos', phone: '', logoUrl: null });
+  const [logoLoadError, setLogoLoadError] = useState(false);
   const [profileMenuVisible, setProfileMenuVisible] = useState(false);
   const getTokenRef = useRef(getToken);
   const refreshBillingStateRef = useRef<(forceRefresh?: boolean) => Promise<void>>(async () => {});
@@ -135,6 +173,12 @@ export function AppTopHeader() {
       } catch (error) {
         if (!mounted) return;
         if (axios.isAxiosError(error)) {
+          const status = error.response?.status;
+          if (status === 401 || status === 403) {
+            await setSubUser(null, null, null);
+            setBillingState(null);
+            return;
+          }
           // En mobile dev es normal perder conectividad al volver del background.
           // Evitamos LogBox rojo por errores de red esperados.
           const isNetworkError = !error.response && error.message === 'Network Error';
@@ -162,6 +206,59 @@ export function AppTopHeader() {
     return () => {
       mounted = false;
       refreshBillingStateRef.current = async () => {};
+    };
+  }, [accountId, subUserToken]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadCompanySettings = async () => {
+      try {
+        if (!subUserToken) {
+          if (mounted) {
+            setCompanyData({ name: 'MOVOpos', phone: '', logoUrl: null });
+            setLogoLoadError(false);
+          }
+          return;
+        }
+
+        const clerkToken = await getTokenRef.current();
+        if (!clerkToken) return;
+
+        const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+        const response = await axios.get(`${API_URL}/api/company-settings`, {
+          headers: {
+            Authorization: `Bearer ${clerkToken}`,
+            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+            'X-SubUser-Token': subUserToken,
+            ...(accountId ? { 'X-Account-Id': accountId } : {}),
+          },
+        });
+
+        if (!mounted) return;
+        setCompanyData(normalizeCompanySettings(API_URL, response.data));
+        setLogoLoadError(false);
+      } catch (error) {
+        if (!mounted) return;
+        if (axios.isAxiosError(error)) {
+          const status = error.response?.status;
+          if (status === 401 || status === 403) {
+            await setSubUser(null, null, null);
+            return;
+          }
+          console.warn('No se pudo cargar informacion de empresa.', {
+            status: error.response?.status,
+            message: error.message,
+          });
+        } else {
+          console.warn('No se pudo cargar informacion de empresa.');
+        }
+      }
+    };
+
+    loadCompanySettings();
+    return () => {
+      mounted = false;
     };
   }, [accountId, subUserToken]);
 
@@ -195,11 +292,22 @@ export function AppTopHeader() {
             <Icon source="menu" size={30} color={ui.colors.textMuted} />
           </TouchableOpacity>
           <View style={styles.userBadge}>
-            <Image source={require('../../assets/movoLogo.png')} style={styles.userBadgeLogo} resizeMode="contain" />
+            <Image
+              source={
+                companyData.logoUrl && !logoLoadError
+                  ? { uri: companyData.logoUrl }
+                  : require('../../assets/movoLogo.png')
+              }
+              style={styles.userBadgeLogo}
+              resizeMode="contain"
+              onError={() => setLogoLoadError(true)}
+            />
           </View>
-          <Text style={styles.userName} numberOfLines={1}>
-            {displayName}
-          </Text>
+          <View style={styles.companyMeta}>
+            <Text style={styles.userName} numberOfLines={1}>
+              {companyData.name}
+            </Text>
+          </View>
         </View>
         <Menu
           visible={profileMenuVisible}
@@ -218,6 +326,14 @@ export function AppTopHeader() {
           }
         >
           <View style={styles.profileMenuContent}>
+            <Text style={styles.profileLabel}>Empresa</Text>
+            <Text style={styles.profileValue}>{companyData.name}</Text>
+            {companyData.phone ? (
+              <>
+                <Text style={styles.profileLabel}>Telefono</Text>
+                <Text style={styles.profileValue}>{companyData.phone}</Text>
+              </>
+            ) : null}
             <Text style={styles.profileLabel}>Subusuario</Text>
             <Text style={styles.profileValue}>{subUserName}</Text>
             <Text style={styles.profileLabel}>Correo Clerk</Text>
@@ -260,15 +376,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   userBadge: {
-    width: 30,
-    height: 24,
-    borderRadius: 6,
+    width: 50,
+    height: 36,
+    borderRadius: 9,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 8,
   },
-  userBadgeLogo: { width: 24, height: 14 },
+  userBadgeLogo: { width: 46, height: 30 },
+  companyMeta: { flex: 1, minWidth: 0 },
   userName: { color: ui.colors.text, fontWeight: '700', fontSize: 14, flexShrink: 1 },
   avatarButton: { borderRadius: 20 },
   avatarCircle: {

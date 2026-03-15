@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import axios from 'axios';
 import { Text, Icon, ActivityIndicator } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
@@ -20,6 +21,7 @@ import { AccountsReceivableReportScreen } from '../screens/reports/AccountsRecei
 import { ReceiptsReportScreen } from '../screens/reports/ReceiptsReportScreen';
 import { ProfitReportScreen } from '../screens/reports/ProfitReportScreen';
 import { InventoryReportScreen } from '../screens/reports/InventoryReportScreen';
+import { OperatingExpensesReportScreen } from '../screens/reports/OperatingExpensesReportScreen';
 import { POSScreen } from '../screens/sales/POSScreen';
 import { QuoteScreen } from '../screens/sales/QuoteScreen';
 import { QuoteListScreen } from '../screens/sales/QuoteListScreen';
@@ -47,6 +49,7 @@ import { ARListScreen } from '../screens/ar/ARListScreen';
 import { RegisterPaymentScreen } from '../screens/ar/RegisterPaymentScreen';
 import { PaymentReceiptsScreen } from '../screens/ar/PaymentReceiptsScreen';
 import { PrinterSettingsScreen } from '../screens/settings/PrinterSettingsScreen';
+import { PrinterDevicesScreen } from '../screens/settings/PrinterDevicesScreen';
 import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
 import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
 import { InvoiceListScreen } from '../screens/billing/InvoiceListScreen';
@@ -72,6 +75,7 @@ const DRAWER_ENTRIES = [
   { key: 'categories', label: 'Categorías', icon: 'tag-outline' },
   { key: 'suppliers', label: 'Proveedores', icon: 'store-outline' },
   { key: 'purchases', label: 'Compras', icon: 'basket-outline' },
+  { key: 'ar', label: 'Cuentas por Cobrar', icon: 'cash-plus' },
   { key: 'payment_receipts', label: 'Recibos de pago', icon: 'receipt-text-outline' },
   { key: 'daily_closing', label: 'Cuadre diario', icon: 'clipboard-text-outline' },
   { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
@@ -150,6 +154,7 @@ function PurchasesStack() {
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="PurchaseList" component={PurchaseListScreen} />
       <Stack.Screen name="AddPurchase" component={AddPurchaseScreen} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -185,6 +190,7 @@ function SettingsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="PrinterSettings" component={PrinterSettingsScreen} />
+      <Stack.Screen name="Printers" component={PrinterDevicesScreen} />
     </Stack.Navigator>
   );
 }
@@ -241,6 +247,7 @@ function ReportsStack() {
       <Stack.Screen name="ReceiptsReport" component={ReceiptsReportScreen} />
       <Stack.Screen name="ProfitReport" component={ProfitReportScreen} />
       <Stack.Screen name="InventoryReport" component={InventoryReportScreen} />
+      <Stack.Screen name="OperatingExpensesReport" component={OperatingExpensesReportScreen} />
     </Stack.Navigator>
   );
 }
@@ -469,11 +476,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
     >
       <View style={styles.drawerHeader}>
         <View style={styles.logoWrap}>
-          <Image source={require('../../assets/movoLogo.png')} style={styles.logoImage} resizeMode="contain" />
-        </View>
-        <View>
-          <Text style={styles.drawerTitle}>MOVOpos</Text>
-          <Text style={styles.drawerSubtitle}>Panel principal</Text>
+          <Image source={require('../../assets/movoLogoDark.png')} style={styles.logoImage} resizeMode="contain" />
         </View>
       </View>
 
@@ -564,7 +567,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 
 export function MainNavigator() {
   const { getToken } = useAuth();
-  const { subUserToken, accountId, isBillingBlocked, setBillingState } = useAuthStore();
+  const { subUserToken, accountId, isBillingBlocked, setBillingState, setSubUser } = useAuthStore();
   const [checkingBillingAccess, setCheckingBillingAccess] = useState(true);
   const getTokenRef = useRef(getToken);
   const setBillingStateRef = useRef(setBillingState);
@@ -601,7 +604,11 @@ export function MainNavigator() {
         if (!mounted) return;
         setBillingStateRef.current(overview.state);
       } catch (error) {
-        console.error('Error validando acceso por facturación:', error);
+        if (axios.isAxiosError(error) && (error.response?.status === 401 || error.response?.status === 403)) {
+          await setSubUser(null, null, null);
+        } else {
+          console.error('Error validando acceso por facturación:', error);
+        }
         if (!mounted) return;
         setBillingStateRef.current(null);
       } finally {
@@ -668,21 +675,20 @@ const styles = StyleSheet.create({
     borderRadius: ui.radius.lg,
     marginHorizontal: 12,
     padding: 14,
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'center',
   },
   logoWrap: {
-    width: 52,
-    height: 52,
+    width: 170,
+    height: 62,
     borderRadius: 12,
     backgroundColor: '#fff',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  logoImage: { width: 44, height: 26 },
-  drawerTitle: { color: ui.colors.text, fontSize: 18, fontWeight: '800' },
-  drawerSubtitle: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
+  logoImage: { width: '96%', height: '86%' },
   drawerList: { marginTop: 8, paddingHorizontal: 10 },
   sellButton: {
     marginHorizontal: 12,

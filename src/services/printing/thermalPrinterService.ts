@@ -24,7 +24,7 @@ interface TicketItem {
   unit?: string;
 }
 
-interface SaleTicketPayload {
+export interface SaleTicketPayload {
   invoiceCode: string;
   createdAt: number;
   customerName?: string | null;
@@ -68,7 +68,7 @@ const readPrinterSettings = async (): Promise<{ autoPrint: boolean; printer: Sto
   };
 };
 
-const buildSaleTicketText = (payload: SaleTicketPayload): string => {
+export const buildSaleTicketText = (payload: SaleTicketPayload): string => {
   const paymentSummary = payload.paymentMethod === 'DIVIDIR_PAGO'
     ? (payload.paymentSplits || [])
       .map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`)

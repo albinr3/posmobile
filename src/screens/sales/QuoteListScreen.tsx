@@ -15,6 +15,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
+import { getSalesSettings } from '../../services/settings/salesSettings';
 
 interface QuoteListItem {
   localId: string;
@@ -52,6 +53,7 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
   const [quotes, setQuotes] = useState<QuoteListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
   const { getToken } = useAuth();
   const { subUserToken } = useAuthStore();
   const { isOnline } = useSyncStore();
@@ -93,6 +95,22 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
       return () => {
         active = false;
         isSyncingOnFocusRef.current = false;
+      };
+    }, [])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      getSalesSettings()
+        .then((settings) => {
+          if (active) setShowItbisBreakdown(settings.showItbisOnReceipts);
+        })
+        .catch(() => {
+          if (active) setShowItbisBreakdown(true);
+        });
+      return () => {
+        active = false;
       };
     }, [])
   );
@@ -187,6 +205,10 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
     const customerName = parsedData?.customerName || quote.customerName || '(General) Cliente general';
     const subtotalCents = Math.round(totalCents / 1.18);
     const itbisCents = totalCents - subtotalCents;
+    const taxRows = showItbisBreakdown
+      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
+            <div class="row"><span>ITBIS (18%)</span><span>${formatCurrency(itbisCents)}</span></div>`
+      : '';
     const logoDataUri = await getLogoDataUri();
 
     const itemsRows = items
@@ -233,8 +255,7 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
             <div style="margin-top:4px;"><strong>Cliente:</strong> ${customerName}</div>
             <div class="sep"></div>
             <div>${itemsRows}</div>
-            <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-            <div class="row"><span>ITBIS (18%)</span><span>${formatCurrency(itbisCents)}</span></div>
+            ${taxRows}
             <div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
           </div>
         </body>

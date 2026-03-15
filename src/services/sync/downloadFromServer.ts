@@ -1002,6 +1002,13 @@ export async function downloadFromServer(options: {
         expenseDate: new Date(expenseDateMs).toISOString(),
         category: expense?.category ? String(expense.category) : null,
         notes: expense?.notes ? String(expense.notes) : null,
+        user: expense?.user
+          ? {
+              id: String(expense.user.id || ''),
+              name: expense.user.name ? String(expense.user.name) : null,
+              username: expense.user.username ? String(expense.user.username) : null,
+            }
+          : null,
         createdAt: expense?.createdAt ? String(expense.createdAt) : null,
         updatedAt: expense?.updatedAt ? String(expense.updatedAt) : null,
       };

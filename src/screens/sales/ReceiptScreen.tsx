@@ -11,6 +11,7 @@ import { Sale, SaleItem, SalePaymentSplit } from '../../types';
 import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
+import { getSalesSettings } from '../../services/settings/salesSettings';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -64,8 +65,9 @@ const buildReceiptHtml = (params: {
   totalCents: number;
   items: SaleItem[];
   logoUri: string;
+  showItbisBreakdown: boolean;
 }) => {
-  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, items, logoUri } = params;
+  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, items, logoUri, showItbisBreakdown } = params;
 
   const itemsRows = (items || [])
     .map(
@@ -83,6 +85,12 @@ const buildReceiptHtml = (params: {
 
   const subtotalCents = Math.round(totalCents / 1.18);
   const itbisCents = totalCents - subtotalCents;
+  const taxRows = showItbisBreakdown
+    ? `
+          <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
+          <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
+      `
+    : '';
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
   const paymentSummary = paymentMethod === 'DIVIDIR_PAGO'
     ? (paymentSplits || []).map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`).join(' + ')
@@ -121,8 +129,7 @@ const buildReceiptHtml = (params: {
             <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentSummary || '-')}</div>
           </div>
           <div>${itemsRows}</div>
-          <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-          <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
+          ${taxRows}
           <div class="total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
           <div class="thanks">Gracias por su compra</div>
         </div>
@@ -137,9 +144,13 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
   const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
   const [sale, setSale] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
 
   useEffect(() => {
     loadSale();
+    getSalesSettings()
+      .then((settings) => setShowItbisBreakdown(settings.showItbisOnReceipts))
+      .catch(() => setShowItbisBreakdown(true));
   }, []);
 
   useEffect(() => {
@@ -194,6 +205,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       totalCents: sale.totalCents,
       items: sale.items || [],
       logoUri,
+      showItbisBreakdown,
     });
 
     try {
@@ -234,6 +246,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       totalCents: sale.totalCents,
       items: sale.items || [],
       logoUri,
+      showItbisBreakdown,
     });
 
     try {

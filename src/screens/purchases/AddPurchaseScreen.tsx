@@ -10,6 +10,7 @@ import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { getSalesSettings } from '../../services/settings/salesSettings';
 
 interface AddPurchaseScreenProps {
   navigation: any;
@@ -42,6 +43,7 @@ interface PurchaseStoredItem {
   productId: string;
   productServerId?: string | null;
   productName?: string;
+  productReference?: string | null;
   qty: number;
   unitCostCents: number;
   discountPercentBp?: number;
@@ -62,6 +64,7 @@ interface PurchaseFormItem {
   key: string;
   productId: string | null;
   productName: string;
+  productReference: string | null;
   qty: string;
   unitCost: string;
   discountPercent: string;
@@ -77,6 +80,7 @@ function createEmptyItem(defaultSaleMarginPercent = DEFAULT_SALE_MARGIN_PERCENT)
     key: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     productId: null,
     productName: '',
+    productReference: null,
     qty: '1',
     unitCost: '',
     discountPercent: '',
@@ -129,6 +133,7 @@ function normalizeStoredItems(raw: unknown): PurchaseStoredItem[] {
         productId,
         productServerId: asString(entry.productServerId),
         productName: asString(entry.productName) || undefined,
+        productReference: asString(entry.productReference) || undefined,
         qty: asNumber(entry.qty) ?? 0,
         unitCostCents: asNumber(entry.unitCostCents) ?? 0,
         discountPercentBp: asNumber(entry.discountPercentBp) ?? undefined,
@@ -219,7 +224,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const [notes, setNotes] = useState('');
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [updateProductPrice, setUpdateProductPrice] = useState(true);
-  const [items, setItems] = useState<PurchaseFormItem[]>([createEmptyItem()]);
+  const [defaultSaleMarginPercent, setDefaultSaleMarginPercent] = useState(DEFAULT_SALE_MARGIN_PERCENT);
+  const [items, setItems] = useState<PurchaseFormItem[]>([createEmptyItem(DEFAULT_SALE_MARGIN_PERCENT)]);
 
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
@@ -405,7 +411,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       setUpdateProductPrice(asBoolean(parsed?.updateProductPrice, true));
 
       if (parsedItems.length === 0) {
-        setItems([createEmptyItem()]);
+        setItems([createEmptyItem(defaultSaleMarginPercent)]);
         return;
       }
 
@@ -425,6 +431,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           key: `${item.id || item.productId}_${index}_${Math.random().toString(36).slice(2, 6)}`,
           productId: resolvedProductId,
           productName: item.productName || matchedProduct?.name || 'Producto',
+          productReference: item.productReference || matchedProduct?.reference || null,
           qty: String(Number(item.qty || 0)),
           unitCost: String(Number(item.unitCostCents || 0) / 100),
           discountPercent:
@@ -434,7 +441,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           saleMarginPercent:
             item.saleMarginBp !== null && item.saleMarginBp !== undefined
               ? String(Number(item.saleMarginBp) / 100)
-              : DEFAULT_SALE_MARGIN_PERCENT,
+              : defaultSaleMarginPercent,
           salePrice:
             item.salePriceCents !== null && item.salePriceCents !== undefined && Number(item.salePriceCents) > 0
               ? String(Number(item.salePriceCents) / 100)
@@ -442,9 +449,9 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         } as PurchaseFormItem;
       });
 
-      setItems(mappedItems.length > 0 ? mappedItems : [createEmptyItem()]);
+      setItems(mappedItems.length > 0 ? mappedItems : [createEmptyItem(defaultSaleMarginPercent)]);
     },
-    [isEditMode, navigation, purchaseId, resolveLocalProductId]
+    [defaultSaleMarginPercent, isEditMode, navigation, purchaseId, resolveLocalProductId]
   );
 
   const syncBestEffort = useCallback(async (): Promise<boolean> => {
@@ -475,6 +482,10 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       const loadInitial = async () => {
         setLoadingInitialData(true);
         try {
+          const salesSettings = await getSalesSettings();
+          const nextDefaultMarginPercent = (Math.max(0, Number(salesSettings.defaultProfitMarginBp || 3000)) / 100).toFixed(2);
+          setDefaultSaleMarginPercent(nextDefaultMarginPercent);
+
           let catalog = await loadLocalCatalogsRef.current();
           if (isOnlineRef.current) {
             const synced = await syncBestEffort();
@@ -489,6 +500,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           } else {
             setPersistedLocalId(null);
             setPersistedServerId(null);
+            setItems([createEmptyItem(nextDefaultMarginPercent)]);
           }
         } catch (error) {
           if (!isMounted) return;
@@ -512,7 +524,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
     setItems((prev) => prev.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   };
 
-  const addItem = () => setItems((prev) => [...prev, createEmptyItem()]);
+  const addItem = () => setItems((prev) => [...prev, createEmptyItem(defaultSaleMarginPercent)]);
   const removeItem = (index: number) =>
     setItems((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
 
@@ -615,17 +627,18 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       }
 
       const emptyIdx = prev.findIndex((x) => !x.productId);
-      const targetItem = emptyIdx >= 0 ? prev[emptyIdx] : createEmptyItem();
+      const targetItem = emptyIdx >= 0 ? prev[emptyIdx] : createEmptyItem(defaultSaleMarginPercent);
 
       const patch: Partial<PurchaseFormItem> = {
         productId: product.id,
         productName: product.name,
+        productReference: product.reference || null,
         unitCost: (product.costCents / 100).toString(),
         ...(targetItem.discountPercent.trim().length === 0 && selectedSupplierDiscountPercent
           ? { discountPercent: selectedSupplierDiscountPercent }
           : {}),
-        ...(targetItem.saleMarginPercent.trim().length === 0 && DEFAULT_SALE_MARGIN_PERCENT
-          ? { saleMarginPercent: DEFAULT_SALE_MARGIN_PERCENT }
+        ...(targetItem.saleMarginPercent.trim().length === 0 && defaultSaleMarginPercent
+          ? { saleMarginPercent: defaultSaleMarginPercent }
           : {}),
       };
 
@@ -633,7 +646,66 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         return prev.map((x, i) => (i === emptyIdx ? recalcItemPricing(x, 'margin', patch) : x));
       }
 
-      return [...prev, recalcItemPricing(createEmptyItem(), 'margin', patch)];
+      return [...prev, recalcItemPricing(createEmptyItem(defaultSaleMarginPercent), 'margin', patch)];
+    });
+  };
+
+  const addScannedProducts = (scannedItems: Array<{ productId: string; qty: number }>) => {
+    if (!Array.isArray(scannedItems) || scannedItems.length === 0) return;
+
+    setItems((prev) => {
+      let next = [...prev];
+      const firstEmptyIdx = next.findIndex((item) => !item.productId);
+
+      scannedItems.forEach((scanned, scannedIndex) => {
+        const product = products.find((p) => p.id === scanned.productId);
+        if (!product) return;
+        const scannedQty = Math.max(1, Math.round(Number(scanned.qty || 0)));
+
+        const existingIdx = next.findIndex((x) => x.productId === product.id);
+        if (existingIdx >= 0) {
+          const existing = next[existingIdx];
+          next[existingIdx] = {
+            ...existing,
+            qty: String(Math.max(1, Number(existing.qty || 0) + scannedQty)),
+          };
+          return;
+        }
+
+        const targetIdx = scannedIndex === 0 && firstEmptyIdx >= 0 ? firstEmptyIdx : -1;
+        const baseItem = targetIdx >= 0 ? next[targetIdx] : createEmptyItem(defaultSaleMarginPercent);
+        const patch: Partial<PurchaseFormItem> = {
+          productId: product.id,
+          productName: product.name,
+          productReference: product.reference || null,
+          qty: String(scannedQty),
+          unitCost: (product.costCents / 100).toString(),
+          ...(baseItem.discountPercent.trim().length === 0 && selectedSupplierDiscountPercent
+            ? { discountPercent: selectedSupplierDiscountPercent }
+            : {}),
+          ...(baseItem.saleMarginPercent.trim().length === 0 && defaultSaleMarginPercent
+            ? { saleMarginPercent: defaultSaleMarginPercent }
+            : {}),
+        };
+
+        if (targetIdx >= 0) {
+          next[targetIdx] = recalcItemPricing(next[targetIdx], 'margin', patch);
+        } else {
+          next.push(recalcItemPricing(createEmptyItem(defaultSaleMarginPercent), 'margin', patch));
+        }
+      });
+
+      return next;
+    });
+  };
+
+  const handleScanBarcode = () => {
+    navigation.navigate('BarcodeScanner', {
+      scannerMode: 'PURCHASE_SPLIT',
+      onSubmitScanned: (scanned: Array<{ productId: string; qty: number }>) => {
+        if (!scanned || scanned.length === 0) return;
+        addScannedProducts(scanned);
+      },
     });
   };
 
@@ -776,6 +848,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         productId: String(item.productId || ''),
         productServerId: matchedProduct?.serverId || null,
         productName: item.productName || matchedProduct?.name || 'Producto',
+        productReference: item.productReference || matchedProduct?.reference || null,
         qty,
         unitCostCents,
         discountPercentBp: resolvedDiscountPercentBp,
@@ -889,6 +962,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         items: normalizedItems.map((item) => ({
           productId: item.productId,
           productServerId: item.productServerId || null,
+          ...(item.productReference ? { productReference: item.productReference } : {}),
           qty: item.qty,
           unitCostCents: item.unitCostCents,
           ...(typeof item.discountPercentBp === 'number' ? { discountPercentBp: item.discountPercentBp } : {}),
@@ -1039,15 +1113,20 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
             </Button>
           </View>
 
-          <TextInput
-            label="Buscar producto"
-            value={productSearchQuery}
-            onChangeText={setProductSearchQuery}
-            mode="outlined"
-            style={styles.input}
-            outlineColor={ui.colors.border}
-            activeOutlineColor={ui.colors.primary}
-          />
+          <View style={styles.searchRow}>
+            <TextInput
+              label="Buscar producto"
+              value={productSearchQuery}
+              onChangeText={setProductSearchQuery}
+              mode="outlined"
+              style={[styles.input, styles.searchInput]}
+              outlineColor={ui.colors.border}
+              activeOutlineColor={ui.colors.primary}
+            />
+            <TouchableOpacity style={styles.scanButton} onPress={handleScanBarcode}>
+              <Icon source="barcode-scan" size={22} color={ui.colors.primary} />
+            </TouchableOpacity>
+          </View>
 
           {productSearchQuery.trim().length > 0 ? (
             <View style={styles.suggestionBox}>
@@ -1081,7 +1160,10 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
               </View>
 
               {item.productName ? (
-                <Text style={styles.selectedProduct}>Producto: {item.productName}</Text>
+                <>
+                  <Text style={styles.selectedProduct}>Producto: {item.productName}</Text>
+                  {item.productReference ? <Text style={styles.selectedProductRef}>Ref: {item.productReference}</Text> : null}
+                </>
               ) : (
                 <Text style={styles.suggestionEmpty}>Selecciona un producto desde la búsqueda superior.</Text>
               )}
@@ -1196,6 +1278,19 @@ const styles = StyleSheet.create({
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 10 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   row: { flexDirection: 'row', gap: 10 },
+  searchRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
+  searchInput: { flex: 1 },
+  scanButton: {
+    width: 48,
+    height: 48,
+    borderRadius: ui.radius.md,
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    backgroundColor: '#EEE1FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
   input: { marginBottom: 10, backgroundColor: ui.colors.surface },
   halfInput: { flex: 1 },
   selectLike: {
@@ -1221,6 +1316,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FBFAFD',
   },
   selectedProduct: { color: ui.colors.primary, fontSize: 12, fontWeight: '700', marginBottom: 10 },
+  selectedProductRef: { color: ui.colors.textMuted, fontSize: 12, marginBottom: 10, marginTop: -6 },
   suggestionBox: {
     borderWidth: 1,
     borderColor: ui.colors.border,

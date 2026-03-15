@@ -11,7 +11,6 @@ import { ui } from '../../theme/ui';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import {
   isCancelledStatus,
-  normalizeSaleType,
   parseJsonObject,
   rangeToTimestamps,
   resolveSaleTimestamp,
@@ -20,28 +19,58 @@ import {
 } from './reportUtils';
 
 interface ProfitMetrics {
+  grossSalesTotalCents: number;
   salesTotalCents: number;
   salesCount: number;
-  cashReturnsCount: number;
-  cashReturnsTotalCents: number;
+  returnsCount: number;
+  returnsTotalCents: number;
   paymentsTotalCents: number;
   paymentsCount: number;
   totalRevenueCents: number;
+  grossCostOfSalesCents: number;
   costOfSalesCents: number;
-  cashReturnsCostCents: number;
+  returnsCostCents: number;
   grossProfitCents: number;
   operatingExpensesCents: number;
   operatingExpensesCount: number;
   operatingProfitCents: number;
   otherIncomeExpensesCents: number;
+  grossSalesItbisCents: number;
   salesItbisCents: number;
-  cashReturnsItbisCents: number;
+  returnsItbisCents: number;
   purchasesItbisCents: number;
   taxesCents: number;
   netProfitCents: number;
   accountsReceivableTotalCents: number;
   accountsReceivableCount: number;
 }
+
+const ZERO_METRICS: ProfitMetrics = {
+  grossSalesTotalCents: 0,
+  salesTotalCents: 0,
+  salesCount: 0,
+  returnsCount: 0,
+  returnsTotalCents: 0,
+  paymentsTotalCents: 0,
+  paymentsCount: 0,
+  totalRevenueCents: 0,
+  grossCostOfSalesCents: 0,
+  costOfSalesCents: 0,
+  returnsCostCents: 0,
+  grossProfitCents: 0,
+  operatingExpensesCents: 0,
+  operatingExpensesCount: 0,
+  operatingProfitCents: 0,
+  otherIncomeExpensesCents: 0,
+  grossSalesItbisCents: 0,
+  salesItbisCents: 0,
+  returnsItbisCents: 0,
+  purchasesItbisCents: 0,
+  taxesCents: 0,
+  netProfitCents: 0,
+  accountsReceivableTotalCents: 0,
+  accountsReceivableCount: 0,
+};
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -71,30 +100,29 @@ function buildProfitReportHtml(metrics: ProfitMetrics, from: string, to: string)
         </style>
       </head>
       <body>
-        <div class="title">Estado de resultados</div>
+        <div class="title">Estado de Resultados (Ganancia)</div>
         <div class="muted">Periodo: ${escapeHtml(from)} a ${escapeHtml(to)} | Generado: ${escapeHtml(formatDateTime(Date.now()))}</div>
 
         <div class="card">
           <div class="card-title">Ingresos / Ventas</div>
-          <div class="row"><span class="label">Ventas al contado (${metrics.salesCount})</span><span class="value positive">${escapeHtml(formatCurrency(metrics.salesTotalCents))}</span></div>
-          <div class="row"><span class="label">Pagos recibidos (${metrics.paymentsCount})</span><span class="value positive">${escapeHtml(formatCurrency(metrics.paymentsTotalCents))}</span></div>
-          <div class="row"><span class="label">Devoluciones contado (${metrics.cashReturnsCount})</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.cashReturnsTotalCents))}</span></div>
+          <div class="row"><span class="label">Ventas del periodo (${metrics.salesCount} facturas)</span><span class="value positive">${escapeHtml(formatCurrency(metrics.grossSalesTotalCents))}</span></div>
+          <div class="row"><span class="label">Cobros de credito (${metrics.paymentsCount} pagos)</span><span class="value">${escapeHtml(formatCurrency(metrics.paymentsTotalCents))}</span></div>
+          <div class="row"><span class="label">Devoluciones del periodo (${metrics.returnsCount})</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.returnsTotalCents))}</span></div>
           <div class="row"><span class="label">Total ingresos</span><span class="value positive">${escapeHtml(formatCurrency(metrics.totalRevenueCents))}</span></div>
         </div>
 
         <div class="card">
-          <div class="card-title">Costos y gastos</div>
-          <div class="row"><span class="label">Costo de ventas</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.costOfSalesCents))}</span></div>
-          <div class="row"><span class="label">Reverso costo por devoluciones</span><span class="value positive">${escapeHtml(formatCurrency(metrics.cashReturnsCostCents))}</span></div>
-          <div class="row"><span class="label">Gastos operativos (${metrics.operatingExpensesCount})</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.operatingExpensesCents))}</span></div>
+          <div class="card-title">Costo de Ventas</div>
+          <div class="row"><span class="label">Costo de lo vendido</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.grossCostOfSalesCents))}</span></div>
+          <div class="row"><span class="label">Reverso costo por devoluciones</span><span class="value positive">${escapeHtml(formatCurrency(metrics.returnsCostCents))}</span></div>
         </div>
 
         <div class="card">
           <div class="card-title">Impuestos</div>
-          <div class="row"><span class="label">ITBIS en ventas</span><span class="value">${escapeHtml(formatCurrency(metrics.salesItbisCents))}</span></div>
-          <div class="row"><span class="label">ITBIS devuelto (contado)</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.cashReturnsItbisCents))}</span></div>
+          <div class="row"><span class="label">ITBIS en ventas</span><span class="value">${escapeHtml(formatCurrency(metrics.grossSalesItbisCents))}</span></div>
+          <div class="row"><span class="label">Devoluciones del periodo</span><span class="value negative">-${escapeHtml(formatCurrency(metrics.returnsItbisCents))}</span></div>
           <div class="row"><span class="label">ITBIS en compras</span><span class="value">${escapeHtml(formatCurrency(metrics.purchasesItbisCents))}</span></div>
-          <div class="row"><span class="label">Impuestos netos</span><span class="value">${escapeHtml(formatCurrency(metrics.taxesCents))}</span></div>
+          <div class="row"><span class="label">ITBIS neto</span><span class="value">${escapeHtml(formatCurrency(metrics.taxesCents))}</span></div>
         </div>
 
         <div class="card">
@@ -102,11 +130,6 @@ function buildProfitReportHtml(metrics: ProfitMetrics, from: string, to: string)
           <div class="row"><span class="label">Utilidad bruta</span><span class="value ${metrics.grossProfitCents >= 0 ? 'positive' : 'negative'}">${escapeHtml(formatCurrency(metrics.grossProfitCents))}</span></div>
           <div class="row"><span class="label">Utilidad operativa</span><span class="value ${metrics.operatingProfitCents >= 0 ? 'positive' : 'negative'}">${escapeHtml(formatCurrency(metrics.operatingProfitCents))}</span></div>
           <div class="row"><span class="label">Utilidad neta</span><span class="value ${metrics.netProfitCents >= 0 ? 'positive' : 'negative'}">${escapeHtml(formatCurrency(metrics.netProfitCents))}</span></div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Cuentas por cobrar</div>
-          <div class="row"><span class="label">Cuentas activas (${metrics.accountsReceivableCount})</span><span class="value">${escapeHtml(formatCurrency(metrics.accountsReceivableTotalCents))}</span></div>
         </div>
       </body>
     </html>
@@ -126,33 +149,10 @@ export function ProfitReportScreen() {
   const [to, setTo] = useState(defaults.to);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [metrics, setMetrics] = useState<ProfitMetrics>({
-    salesTotalCents: 0,
-    salesCount: 0,
-    cashReturnsCount: 0,
-    cashReturnsTotalCents: 0,
-    paymentsTotalCents: 0,
-    paymentsCount: 0,
-    totalRevenueCents: 0,
-    costOfSalesCents: 0,
-    cashReturnsCostCents: 0,
-    grossProfitCents: 0,
-    operatingExpensesCents: 0,
-    operatingExpensesCount: 0,
-    operatingProfitCents: 0,
-    otherIncomeExpensesCents: 0,
-    salesItbisCents: 0,
-    cashReturnsItbisCents: 0,
-    purchasesItbisCents: 0,
-    taxesCents: 0,
-    netProfitCents: 0,
-    accountsReceivableTotalCents: 0,
-    accountsReceivableCount: 0,
-  });
+  const [metrics, setMetrics] = useState<ProfitMetrics>(ZERO_METRICS);
 
   const loadReport = useCallback(async (fromYmd: string, toYmd: string) => {
     const { fromTs, toTs } = rangeToTimestamps(fromYmd, toYmd);
-
     setLoading(true);
     try {
       const [salesRows, paymentRows, expenseRows, productRows, purchaseRows, supplierRows, arRows, returnRows, returnItemRows] = await Promise.all([
@@ -201,7 +201,6 @@ export function ProfitReportScreen() {
         const costCents = Number(row.cost_cents || parsed?.costCents || 0);
         const localId = String(row.local_id || '');
         const serverId = row.server_id ? String(row.server_id) : null;
-
         if (localId) costByProductId.set(localId, costCents);
         if (serverId) costByProductId.set(serverId, costCents);
       }
@@ -222,7 +221,6 @@ export function ProfitReportScreen() {
         const parsedPurchase = parseJsonObject(row.data);
         const cancelledAt = toTimestamp(row.cancelled_at ?? parsedPurchase?.cancelledAt);
         if (cancelledAt !== null) continue;
-
         const purchasedAt = Number(row.purchased_at || toTimestamp(parsedPurchase?.purchasedAt) || 0);
         if (!Number.isFinite(purchasedAt) || purchasedAt <= 0) continue;
 
@@ -237,27 +235,18 @@ export function ProfitReportScreen() {
         for (const rawItem of purchaseItems) {
           if (!rawItem || typeof rawItem !== 'object' || Array.isArray(rawItem)) continue;
           const item = rawItem as Record<string, unknown>;
-
           const productId = String(item.productId || '');
           const productServerId = item.productServerId ? String(item.productServerId) : null;
           const qty = Number(item.qty ?? item.quantity ?? 0);
           if (!productId || !Number.isFinite(qty) || qty <= 0) continue;
 
           const unitCostCents = Math.max(0, Math.round(Number(item.unitCostCents || 0)));
-          const netCostCents = Math.max(
-            0,
-            Math.round(Number(item.netCostCents ?? item.unitCostCents ?? 0))
-          );
+          const netCostCents = Math.max(0, Math.round(Number(item.netCostCents ?? item.unitCostCents ?? 0)));
           const itemDiscountRaw = Number(item.discountPercentBp);
           const discountPercentBp = Number.isFinite(itemDiscountRaw) ? itemDiscountRaw : supplierDiscountBp;
-          const discountedUnitCostCents = Math.max(
-            0,
-            Math.round(unitCostCents * (1 - discountPercentBp / 10000))
-          );
+          const discountedUnitCostCents = Math.max(0, Math.round(unitCostCents * (1 - discountPercentBp / 10000)));
           const purchaseIncludesItbis = item.purchaseIncludesItbis === true;
-          const itemItbisPerUnit = purchaseIncludesItbis
-            ? Math.max(0, netCostCents - discountedUnitCostCents)
-            : 0;
+          const itemItbisPerUnit = purchaseIncludesItbis ? Math.max(0, netCostCents - discountedUnitCostCents) : 0;
 
           if (purchasedAt >= fromTs && purchasedAt <= toTs) {
             purchasesItbisCents += Math.round(itemItbisPerUnit * qty);
@@ -267,7 +256,6 @@ export function ProfitReportScreen() {
           const localTimeline = purchaseCostTimelineByProduct.get(productId) || [];
           localTimeline.push(purchasePoint);
           purchaseCostTimelineByProduct.set(productId, localTimeline);
-
           if (productServerId) {
             const serverTimeline = purchaseCostTimelineByProduct.get(productServerId) || [];
             serverTimeline.push(purchasePoint);
@@ -292,7 +280,6 @@ export function ProfitReportScreen() {
           totalCents: Number(row.total_cents || parsed?.totalCents || 0),
           createdAt,
           cancelled,
-          saleType: normalizeSaleType(parsed?.type, parsed?.paymentMethod),
         };
       });
 
@@ -305,10 +292,7 @@ export function ProfitReportScreen() {
       const validSales = saleCatalog.filter(
         (sale) => !sale.cancelled && sale.createdAt >= fromTs && sale.createdAt <= toTs
       );
-
-      const cashSales = validSales.filter((sale) => sale.saleType === 'CONTADO');
-
-      const grossCashSalesTotalCents = cashSales.reduce((sum, sale) => sum + sale.totalCents, 0);
+      const grossSalesTotalCents = validSales.reduce((sum, sale) => sum + sale.totalCents, 0);
 
       const activePayments = paymentRows
         .map((row) => {
@@ -317,16 +301,12 @@ export function ProfitReportScreen() {
           const cancelledAt = toTimestamp(parsed?.cancelledAt);
           const statusNormalized = String(parsed?.status || '').toLowerCase();
           const cancelled = Boolean(cancelledAt || statusNormalized === 'cancelled' || parsed?.cancel === true);
-          return {
-            amountCents: Number(row.amount_cents || parsed?.amountCents || 0),
-            paidAt,
-            cancelled,
-          };
+          return { amountCents: Number(row.amount_cents || parsed?.amountCents || 0), paidAt, cancelled };
         })
         .filter((payment) => !payment.cancelled)
         .filter((payment) => Boolean(payment.paidAt && payment.paidAt >= fromTs && payment.paidAt <= toTs));
-
       const paymentsTotalCents = activePayments.reduce((sum, payment) => sum + payment.amountCents, 0);
+
       const returnItemsByReturnLocalId = new Map<string, any[]>();
       for (const row of returnItemRows) {
         const returnLocalId = String(row.return_local_id || '');
@@ -339,7 +319,6 @@ export function ProfitReportScreen() {
       const resolveHistoricalUnitCost = (productId: string, soldAt: number, fallbackCostCents: number) => {
         const timeline = purchaseCostTimelineByProduct.get(productId);
         if (!timeline || timeline.length === 0) return fallbackCostCents;
-
         let historyCost = 0;
         for (let index = timeline.length - 1; index >= 0; index -= 1) {
           if (timeline[index].purchasedAt <= soldAt) {
@@ -347,21 +326,18 @@ export function ProfitReportScreen() {
             break;
           }
         }
-        if (historyCost <= 0) {
-          historyCost = timeline[timeline.length - 1].netCostCents;
-        }
+        if (historyCost <= 0) historyCost = timeline[timeline.length - 1].netCostCents;
         return historyCost > 0 ? historyCost : fallbackCostCents;
       };
 
-      let cashReturnsTotalCents = 0;
-      let cashReturnsCostCents = 0;
-      let cashReturnsItbisCents = 0;
-      let cashReturnsCount = 0;
+      let returnsTotalCents = 0;
+      let returnsCostCents = 0;
+      let returnsItbisCents = 0;
+      let returnsCount = 0;
       for (const row of returnRows) {
         const parsed = parseJsonObject(row.data);
         const cancelledAt = toTimestamp(row.cancelled_at ?? parsed?.cancelledAt);
         if (cancelledAt !== null) continue;
-
         const returnedAt = toTimestamp(row.returned_at ?? parsed?.returnedAt);
         if (!returnedAt || returnedAt < fromTs || returnedAt > toTs) continue;
 
@@ -374,30 +350,23 @@ export function ProfitReportScreen() {
           String((parsed?.sale as any)?.id || ''),
         ].filter((value) => value.trim() !== '');
         const saleRecord = saleRefs.map((id) => salesByAnyId.get(id)).find(Boolean) || null;
-
-        const parsedSaleType = String((parsed?.sale as any)?.type || '').toUpperCase();
-        const saleType = parsedSaleType === 'CREDITO' || parsedSaleType === 'CONTADO'
-          ? parsedSaleType
-          : saleRecord?.saleType || normalizeSaleType(parsed?.type, null);
-        if (saleType !== 'CONTADO') continue;
         if (saleRecord?.cancelled) continue;
 
         const totalCents = Number(row.total_cents || parsed?.totalCents || 0);
         if (!Number.isFinite(totalCents) || totalCents <= 0) continue;
-
-        cashReturnsTotalCents += totalCents;
-        cashReturnsCount += 1;
+        returnsTotalCents += totalCents;
+        returnsCount += 1;
 
         const parsedItbis = Number(parsed?.itbisCents);
         if (Number.isFinite(parsedItbis) && parsedItbis >= 0) {
-          cashReturnsItbisCents += parsedItbis;
+          returnsItbisCents += parsedItbis;
         } else {
           const parsedSubtotal = Number(parsed?.subtotalCents || 0);
           if (Number.isFinite(parsedSubtotal) && parsedSubtotal > 0) {
-            cashReturnsItbisCents += Math.max(0, totalCents - parsedSubtotal);
+            returnsItbisCents += Math.max(0, totalCents - parsedSubtotal);
           } else {
             const inferredSubtotal = Math.round(totalCents / 1.18);
-            cashReturnsItbisCents += Math.max(0, totalCents - inferredSubtotal);
+            returnsItbisCents += Math.max(0, totalCents - inferredSubtotal);
           }
         }
 
@@ -411,18 +380,12 @@ export function ProfitReportScreen() {
         if (itemRows.length > 0) {
           for (const itemRow of itemRows) {
             const itemParsed = parseJsonObject(itemRow.data);
-            const productId = String(
-              itemRow.product_server_id ||
-              itemRow.product_local_id ||
-              itemParsed?.productId ||
-              ''
-            );
+            const productId = String(itemRow.product_server_id || itemRow.product_local_id || itemParsed?.productId || '');
             const qty = Number(itemRow.qty || itemParsed?.qty || 0);
             if (!productId || !Number.isFinite(qty) || qty <= 0) continue;
-
             const fallbackCostCents = Number(costByProductId.get(productId) || 0);
             const resolvedUnitCost = resolveHistoricalUnitCost(productId, saleOccurredAt, fallbackCostCents);
-            cashReturnsCostCents += Math.round(resolvedUnitCost * qty);
+            returnsCostCents += Math.round(resolvedUnitCost * qty);
           }
         } else {
           const parsedItems = Array.isArray(parsed?.items) ? parsed.items : [];
@@ -431,16 +394,15 @@ export function ProfitReportScreen() {
             const productId = String(item.productId || '');
             const qty = Number(item.qty || 0);
             if (!productId || !Number.isFinite(qty) || qty <= 0) continue;
-
             const fallbackCostCents = Number(costByProductId.get(productId) || 0);
             const resolvedUnitCost = resolveHistoricalUnitCost(productId, saleOccurredAt, fallbackCostCents);
-            cashReturnsCostCents += Math.round(resolvedUnitCost * qty);
+            returnsCostCents += Math.round(resolvedUnitCost * qty);
           }
         }
       }
 
-      const salesTotalCents = grossCashSalesTotalCents - cashReturnsTotalCents;
-      const totalRevenueCents = salesTotalCents + paymentsTotalCents;
+      const salesTotalCents = grossSalesTotalCents - returnsTotalCents;
+      const totalRevenueCents = salesTotalCents;
 
       let grossCostOfSalesCents = 0;
       for (const sale of validSales) {
@@ -450,30 +412,22 @@ export function ProfitReportScreen() {
           const productId = String(item.productId || '');
           const qty = Number(item.quantity ?? item.qty ?? 0);
           if (!productId || !Number.isFinite(qty) || qty <= 0) continue;
-
           const inlineCost = Number(item.costCents ?? item.unitCostCents ?? item.productCostCents ?? 0);
           const historyCost = resolveHistoricalUnitCost(productId, sale.createdAt, 0);
-
           const resolvedCost =
             Number.isFinite(inlineCost) && inlineCost > 0
               ? inlineCost
               : historyCost > 0
                 ? historyCost
                 : Number(costByProductId.get(productId) || 0);
-
           grossCostOfSalesCents += Math.round(resolvedCost * qty);
         }
       }
-      const costOfSalesCents = grossCostOfSalesCents - cashReturnsCostCents;
 
+      const costOfSalesCents = grossCostOfSalesCents - returnsCostCents;
       const grossProfitCents = totalRevenueCents - costOfSalesCents;
-
-      const operatingExpensesCents = expenseRows.reduce(
-        (sum, row) => sum + Number(row.amount_cents || 0),
-        0
-      );
+      const operatingExpensesCents = expenseRows.reduce((sum, row) => sum + Number(row.amount_cents || 0), 0);
       const operatingExpensesCount = expenseRows.length;
-
       const operatingProfitCents = grossProfitCents - operatingExpensesCents;
 
       let grossSalesItbisCents = 0;
@@ -483,45 +437,41 @@ export function ProfitReportScreen() {
           grossSalesItbisCents += parsedItbis;
           continue;
         }
-
         const subtotalCents = Number(sale.parsed?.subtotalCents || 0);
         if (Number.isFinite(subtotalCents) && subtotalCents > 0) {
           grossSalesItbisCents += Math.max(0, sale.totalCents - subtotalCents);
           continue;
         }
-
         const inferredSubtotal = Math.round(sale.totalCents / 1.18);
         grossSalesItbisCents += Math.max(0, sale.totalCents - inferredSubtotal);
       }
-      const salesItbisCents = grossSalesItbisCents - cashReturnsItbisCents;
 
+      const salesItbisCents = grossSalesItbisCents - returnsItbisCents;
       const taxesCents = salesItbisCents - purchasesItbisCents;
-
       const otherIncomeExpensesCents = 0;
       const netProfitCents = operatingProfitCents - otherIncomeExpensesCents - taxesCents;
-
-      const accountsReceivableTotalCents = arRows.reduce(
-        (sum, row) => sum + Number(row.balance_cents || 0),
-        0
-      );
+      const accountsReceivableTotalCents = arRows.reduce((sum, row) => sum + Number(row.balance_cents || 0), 0);
 
       setMetrics({
+        grossSalesTotalCents,
         salesTotalCents,
-        salesCount: cashSales.length,
-        cashReturnsCount,
-        cashReturnsTotalCents,
+        salesCount: validSales.length,
+        returnsCount,
+        returnsTotalCents,
         paymentsTotalCents,
         paymentsCount: activePayments.length,
         totalRevenueCents,
+        grossCostOfSalesCents,
         costOfSalesCents,
-        cashReturnsCostCents,
+        returnsCostCents,
         grossProfitCents,
         operatingExpensesCents,
         operatingExpensesCount,
         operatingProfitCents,
         otherIncomeExpensesCents,
+        grossSalesItbisCents,
         salesItbisCents,
-        cashReturnsItbisCents,
+        returnsItbisCents,
         purchasesItbisCents,
         taxesCents,
         netProfitCents,
@@ -530,29 +480,7 @@ export function ProfitReportScreen() {
       });
     } catch (error) {
       console.error('Error cargando reporte de ganancia:', error);
-      setMetrics({
-        salesTotalCents: 0,
-        salesCount: 0,
-        cashReturnsCount: 0,
-        cashReturnsTotalCents: 0,
-        paymentsTotalCents: 0,
-        paymentsCount: 0,
-        totalRevenueCents: 0,
-        costOfSalesCents: 0,
-        cashReturnsCostCents: 0,
-        grossProfitCents: 0,
-        operatingExpensesCents: 0,
-        operatingExpensesCount: 0,
-        operatingProfitCents: 0,
-        otherIncomeExpensesCents: 0,
-        salesItbisCents: 0,
-        cashReturnsItbisCents: 0,
-        purchasesItbisCents: 0,
-        taxesCents: 0,
-        netProfitCents: 0,
-        accountsReceivableTotalCents: 0,
-        accountsReceivableCount: 0,
-      });
+      setMetrics(ZERO_METRICS);
     } finally {
       setLoading(false);
     }
@@ -591,8 +519,9 @@ export function ProfitReportScreen() {
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
-          <Text style={styles.title}>Estado de resultados</Text>
+          <Text style={styles.title}>Estado de Resultados (Ganancia)</Text>
           <Text style={styles.subtitle}>Ganancia calculada por periodo.</Text>
+          <Text style={styles.period}>Periodo: {from} - {to}</Text>
           <Button
             mode="outlined"
             style={styles.exportButton}
@@ -651,87 +580,120 @@ export function ProfitReportScreen() {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Ingresos / Ventas</Text>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Ventas al contado ({metrics.salesCount})</Text>
-            <Text style={styles.metricPositive}>{formatCurrency(metrics.salesTotalCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Ventas del periodo (contado + credito)</Text>
+              <Text style={styles.metricMeta}>{metrics.salesCount} facturas</Text>
+            </View>
+            <Text style={styles.metricPositive}>{formatCurrency(metrics.grossSalesTotalCents)}</Text>
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Pagos recibidos ({metrics.paymentsCount})</Text>
-            <Text style={styles.metricPositive}>{formatCurrency(metrics.paymentsTotalCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Cobros de credito (informativo)</Text>
+              <Text style={styles.metricMeta}>{metrics.paymentsCount} pagos</Text>
+            </View>
+            <Text style={styles.metricValue}>{formatCurrency(metrics.paymentsTotalCents)}</Text>
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Devoluciones contado ({metrics.cashReturnsCount})</Text>
-            <Text style={styles.metricNegative}>-{formatCurrency(metrics.cashReturnsTotalCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Devoluciones del periodo</Text>
+              <Text style={styles.metricMeta}>{metrics.returnsCount} devoluciones</Text>
+            </View>
+            <Text style={styles.metricNegative}>-{formatCurrency(metrics.returnsTotalCents)}</Text>
           </View>
           <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total ingresos</Text>
+            <Text style={styles.totalLabel}>Total Ingresos</Text>
             <Text style={styles.totalPositive}>{formatCurrency(metrics.totalRevenueCents)}</Text>
           </View>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Costo de ventas</Text>
+          <Text style={styles.sectionTitle}>Costo de Ventas</Text>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Costo de productos vendidos</Text>
-            <Text style={styles.metricNegative}>-{formatCurrency(metrics.costOfSalesCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Costo de lo vendido</Text>
+              <Text style={styles.metricMeta}>Costo de productos vendidos</Text>
+            </View>
+            <Text style={styles.metricNegative}>-{formatCurrency(metrics.grossCostOfSalesCents)}</Text>
           </View>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Reverso costo por devoluciones</Text>
-            <Text style={styles.metricPositive}>{formatCurrency(metrics.cashReturnsCostCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Reverso costo por devoluciones</Text>
+              <Text style={styles.metricMeta}>Ajuste por devoluciones del periodo</Text>
+            </View>
+            <Text style={styles.metricPositive}>{formatCurrency(metrics.returnsCostCents)}</Text>
           </View>
         </View>
 
         <View style={[styles.highlightCard, styles.highlightBlue]}>
-          <Text style={styles.highlightTitle}>Utilidad bruta</Text>
+          <View style={styles.metricLeft}>
+            <Text style={styles.highlightTitle}>Utilidad Bruta</Text>
+            <Text style={styles.metricMeta}>Ventas - Costo de ventas</Text>
+          </View>
           <Text style={[styles.highlightValue, metrics.grossProfitCents >= 0 ? styles.positiveText : styles.negativeText]}>
             {formatCurrency(metrics.grossProfitCents)}
           </Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Gastos operativos</Text>
+          <Text style={styles.sectionTitle}>Gastos Operativos</Text>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Total gastos ({metrics.operatingExpensesCount})</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Total gastos operativos</Text>
+              <Text style={styles.metricMeta}>{metrics.operatingExpensesCount} gastos</Text>
+            </View>
             <Text style={styles.metricNegative}>-{formatCurrency(metrics.operatingExpensesCents)}</Text>
           </View>
         </View>
 
         <View style={[styles.highlightCard, styles.highlightPurple]}>
-          <Text style={styles.highlightTitle}>Utilidad operativa</Text>
+          <View style={styles.metricLeft}>
+            <Text style={styles.highlightTitle}>Utilidad Operativa</Text>
+            <Text style={styles.metricMeta}>Utilidad bruta - Gastos operativos</Text>
+          </View>
           <Text style={[styles.highlightValue, metrics.operatingProfitCents >= 0 ? styles.positiveText : styles.negativeText]}>
             {formatCurrency(metrics.operatingProfitCents)}
           </Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Impuestos</Text>
+          <Text style={styles.sectionTitle}>Otros Ingresos y Gastos</Text>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>ITBIS en ventas (neto)</Text>
-            <Text style={styles.metricLabel}>{formatCurrency(metrics.salesItbisCents)}</Text>
+            <Text style={styles.metricLabel}>Intereses, diferencias en cambio, etc.</Text>
+            <Text style={styles.metricValue}>{formatCurrency(metrics.otherIncomeExpensesCents)}</Text>
           </View>
-          <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>ITBIS devuelto (contado)</Text>
-            <Text style={styles.metricNegative}>-{formatCurrency(metrics.cashReturnsItbisCents)}</Text>
-          </View>
-          <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>ITBIS en compras</Text>
-            <Text style={styles.metricLabel}>{formatCurrency(metrics.purchasesItbisCents)}</Text>
-          </View>
-          <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Impuestos netos</Text>
-            <Text style={styles.metricLabel}>{formatCurrency(metrics.taxesCents)}</Text>
-          </View>
-        </View>
-
-        <View style={[styles.netCard, metrics.netProfitCents >= 0 ? styles.netCardPositive : styles.netCardNegative]}>
-          <Text style={styles.netTitle}>Utilidad neta</Text>
-          <Text style={styles.netValue}>{formatCurrency(metrics.netProfitCents)}</Text>
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Cuentas por cobrar</Text>
+          <Text style={styles.sectionTitle}>Impuestos</Text>
           <View style={styles.metricRow}>
-            <Text style={styles.metricLabel}>Cuentas activas ({metrics.accountsReceivableCount})</Text>
-            <Text style={styles.metricLabel}>{formatCurrency(metrics.accountsReceivableTotalCents)}</Text>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>ITBIS neto (ventas - compras)</Text>
+              <Text style={styles.metricMeta}>
+                Ventas: {formatCurrency(metrics.grossSalesItbisCents)} - Devoluciones: {formatCurrency(metrics.returnsItbisCents)} - Compras: {formatCurrency(metrics.purchasesItbisCents)}
+              </Text>
+            </View>
+            <Text style={styles.metricValue}>{formatCurrency(metrics.taxesCents)}</Text>
+          </View>
+        </View>
+
+        <View style={styles.netCard}>
+          <View style={styles.metricLeft}>
+            <Text style={styles.netTitle}>Utilidad Neta (Resultado del Periodo)</Text>
+            <Text style={styles.metricMeta}>Utilidad operativa - Otros ingresos/gastos - Impuestos</Text>
+          </View>
+          <Text style={[styles.netValue, metrics.netProfitCents >= 0 ? styles.positiveText : styles.negativeText]}>
+            {formatCurrency(metrics.netProfitCents)}
+          </Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Cuentas por Cobrar</Text>
+          <View style={styles.metricRow}>
+            <View style={styles.metricLeft}>
+              <Text style={styles.metricLabel}>Cuentas pendientes</Text>
+              <Text style={styles.metricMeta}>{metrics.accountsReceivableCount} cuentas</Text>
+            </View>
+            <Text style={styles.metricValue}>{formatCurrency(metrics.accountsReceivableTotalCents)}</Text>
           </View>
         </View>
       </ScrollView>
@@ -743,8 +705,9 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: ui.colors.background },
   content: { padding: 14, paddingBottom: 24 },
   header: { marginBottom: 10 },
-  title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
+  title: { color: ui.colors.text, fontSize: 24, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
+  period: { color: ui.colors.textMuted, marginTop: 2, fontSize: 12 },
   exportButton: { marginTop: 10, alignSelf: 'flex-start' },
   filtersCard: {
     backgroundColor: ui.colors.surface,
@@ -771,15 +734,18 @@ const styles = StyleSheet.create({
   metricRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
+    alignItems: 'flex-start',
+    marginBottom: 8,
     gap: 8,
   },
-  metricLabel: { color: ui.colors.textMuted, fontSize: 13, flex: 1 },
+  metricLeft: { flex: 1 },
+  metricLabel: { color: ui.colors.text, fontSize: 13 },
+  metricMeta: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
+  metricValue: { color: ui.colors.text, fontWeight: '600' },
   metricPositive: { color: '#15803D', fontWeight: '700' },
   metricNegative: { color: '#B91C1C', fontWeight: '700' },
   totalRow: {
-    marginTop: 4,
+    marginTop: 2,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: ui.colors.border,
@@ -788,27 +754,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   totalLabel: { color: ui.colors.text, fontWeight: '700' },
-  totalPositive: { color: '#15803D', fontSize: 16, fontWeight: '800' },
+  totalPositive: { color: '#15803D', fontSize: 18, fontWeight: '800' },
   highlightCard: {
     borderRadius: ui.radius.lg,
     borderWidth: 2,
     padding: 14,
     marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
   },
   highlightBlue: { borderColor: '#BFDBFE', backgroundColor: '#EFF6FF' },
   highlightPurple: { borderColor: '#DDD6FE', backgroundColor: '#F5F3FF' },
   highlightTitle: { color: ui.colors.text, fontWeight: '700' },
-  highlightValue: { marginTop: 6, fontSize: 24, fontWeight: '800' },
+  highlightValue: { fontSize: 24, fontWeight: '800' },
   positiveText: { color: '#15803D' },
   negativeText: { color: '#B91C1C' },
   netCard: {
     borderRadius: ui.radius.lg,
-    borderWidth: 2,
+    borderWidth: 4,
+    borderColor: ui.colors.primary,
+    backgroundColor: '#E8F0FF',
     padding: 14,
     marginBottom: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
   },
-  netCardPositive: { borderColor: '#86EFAC', backgroundColor: '#DCFCE7' },
-  netCardNegative: { borderColor: '#FCA5A5', backgroundColor: '#FEE2E2' },
   netTitle: { color: ui.colors.text, fontSize: 17, fontWeight: '800' },
-  netValue: { marginTop: 6, color: ui.colors.text, fontSize: 26, fontWeight: '900' },
+  netValue: { fontSize: 28, fontWeight: '900' },
 });

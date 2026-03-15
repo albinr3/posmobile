@@ -3,7 +3,10 @@ export function generateLocalId(): string {
 }
 
 export function formatCurrency(cents: number): string {
-  return `RD$ ${(cents / 100).toFixed(2)}`;
+  return `RD$ ${(cents / 100).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 export function formatDate(timestamp: number): string {

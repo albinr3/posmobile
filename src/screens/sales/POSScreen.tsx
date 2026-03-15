@@ -13,6 +13,7 @@ import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
+import { getSalesSettings } from '../../services/settings/salesSettings';
 
 interface POSScreenProps {
   navigation: any;
@@ -86,7 +87,12 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         if (!mounted) return;
         if (savedViewMode === 'LISTA' || savedViewMode === 'IMAGENES') {
           setViewMode(savedViewMode);
+          return;
         }
+
+        const salesSettings = await getSalesSettings();
+        if (!mounted) return;
+        setViewMode(salesSettings.defaultViewMode === 'list' ? 'LISTA' : 'IMAGENES');
       } catch (error) {
         console.error('Error cargando vista de POS:', error);
       }

@@ -15,6 +15,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { Asset } from 'expo-asset';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
+import { getSalesSettings } from '../../services/settings/salesSettings';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -51,6 +52,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const [recipeDialogMode, setRecipeDialogMode] = useState<'SIN' | 'EXTRA' | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<Record<string, 'SIN' | 'EXTRA'>>({});
   const [recipeApplyScope, setRecipeApplyScope] = useState<'ONE' | 'ALL'>('ALL');
+  const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
   const {
     items,
     updateQuantity,
@@ -75,6 +77,22 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         setCustomer(routeCustomerId ?? null, routeCustomerName ?? null);
       }
     }, [route?.params?.customerId, route?.params?.customerName, setCustomer])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      getSalesSettings()
+        .then((settings) => {
+          if (active) setShowItbisBreakdown(settings.showItbisOnReceipts);
+        })
+        .catch(() => {
+          if (active) setShowItbisBreakdown(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, [])
   );
 
   const openRecipeDialog = (item: typeof items[0]) => {
@@ -268,6 +286,10 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
 
       const subtotalCents = Math.round(quoteData.totalCents / 1.18);
       const itbisCents = quoteData.totalCents - subtotalCents;
+      const taxRows = showItbisBreakdown
+        ? `<div class="line"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
+                <div class="line"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>`
+        : '';
 
       const html = `
         <html>
@@ -317,8 +339,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
             </table>
             <div class="grid">
               <div class="totals">
-                <div class="line"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-                <div class="line"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
+                ${taxRows}
                 <div class="total"><span>Total</span><span>${formatCurrency(quoteData.totalCents)}</span></div>
               </div>
             </div>

@@ -5,6 +5,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { useAuthStore } from '../../store/authStore';
 import { generateLocalId, formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
@@ -30,6 +31,7 @@ function toCents(value: string): number {
 }
 
 export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExpenseScreenProps) {
+  const subUser = useAuthStore((state) => state.subUser);
   const expenseLocalId = route?.params?.expenseLocalId || null;
   const isEditing = !!expenseLocalId;
   const [description, setDescription] = useState('');
@@ -110,6 +112,13 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
         expenseDate: new Date(expenseDateMs).toISOString(),
         category: category.trim() || null,
         notes: notes.trim() || null,
+        user: subUser
+          ? {
+              id: subUser.id,
+              name: subUser.name || null,
+              username: subUser.username || null,
+            }
+          : null,
       };
       const rowData = {
         description: payload.description,
@@ -290,4 +299,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

@@ -47,6 +47,12 @@ const REPORT_ENTRIES: ReportEntry[] = [
     subtitle: 'Stock y costo total de inventario.',
     icon: 'package-variant-closed',
   },
+  {
+    route: 'OperatingExpensesReport',
+    title: 'Gastos operativos',
+    subtitle: 'Listado y total por rango.',
+    icon: 'cash-minus',
+  },
 ];
 
 export function ReportsMenuScreen({ navigation }: ReportsMenuScreenProps) {

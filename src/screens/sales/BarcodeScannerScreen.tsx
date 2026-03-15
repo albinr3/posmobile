@@ -15,7 +15,8 @@ interface BarcodeScannerScreenProps {
   route?: {
     params?: {
       onScan?: (barcode: string) => void;
-      scannerMode?: 'SEARCH' | 'CART_SPLIT';
+      onSubmitScanned?: (items: Array<{ productId: string; qty: number }>) => void;
+      scannerMode?: 'SEARCH' | 'CART_SPLIT' | 'PURCHASE_SPLIT';
     };
   };
 }
@@ -43,7 +44,12 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
   const lastScanAtRef = useRef<number>(0);
   const lastBarcodeRef = useRef<string>('');
   const lastBarcodeAtRef = useRef<number>(0);
-  const scannerMode: 'SEARCH' | 'CART_SPLIT' = route?.params?.scannerMode === 'CART_SPLIT' ? 'CART_SPLIT' : 'SEARCH';
+  const scannerMode: 'SEARCH' | 'CART_SPLIT' | 'PURCHASE_SPLIT' =
+    route?.params?.scannerMode === 'CART_SPLIT'
+      ? 'CART_SPLIT'
+      : route?.params?.scannerMode === 'PURCHASE_SPLIT'
+        ? 'PURCHASE_SPLIT'
+        : 'SEARCH';
   const { addItem } = useCartStore();
 
   useEffect(() => {
@@ -55,7 +61,7 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
   }, []);
 
   useEffect(() => {
-    if (scannerMode !== 'CART_SPLIT') return;
+    if (scannerMode !== 'CART_SPLIT' && scannerMode !== 'PURCHASE_SPLIT') return;
 
     const loadProducts = async () => {
       try {
@@ -85,7 +91,11 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
             data: row.data,
           };
         });
-        setAvailableProducts(mapped.filter((product) => product.synced && !!product.serverId && product.isActive));
+        if (scannerMode === 'CART_SPLIT') {
+          setAvailableProducts(mapped.filter((product) => product.synced && !!product.serverId && product.isActive));
+        } else {
+          setAvailableProducts(mapped);
+        }
       } catch (error) {
         console.error('Error cargando productos para escaner:', error);
         setAvailableProducts([]);
@@ -220,9 +230,18 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
       return;
     }
 
-    scannedItems.forEach((entry) => {
-      addItem(entry.product, entry.qty);
-    });
+    if (scannerMode === 'CART_SPLIT') {
+      scannedItems.forEach((entry) => {
+        addItem(entry.product, entry.qty);
+      });
+    } else if (scannerMode === 'PURCHASE_SPLIT') {
+      route?.params?.onSubmitScanned?.(
+        scannedItems.map((entry) => ({
+          productId: entry.product.localId,
+          qty: entry.qty,
+        }))
+      );
+    }
     navigation.goBack();
   };
 
@@ -251,7 +270,7 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
     );
   }
 
-  if (scannerMode === 'CART_SPLIT') {
+  if (scannerMode === 'CART_SPLIT' || scannerMode === 'PURCHASE_SPLIT') {
     return (
       <SafeAreaView style={styles.splitContainer}>
         <View style={styles.cameraSplitWrap}>
@@ -272,7 +291,9 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
                   size={28}
                   onPress={() => navigation.goBack()}
                 />
-                <Text style={styles.headerText}>Escanear y agregar</Text>
+                <Text style={styles.headerText}>
+                  {scannerMode === 'PURCHASE_SPLIT' ? 'Escanear para compra' : 'Escanear y agregar'}
+                </Text>
                 <IconButton
                   icon={torch ? 'flashlight-off' : 'flashlight'}
                   iconColor="#fff"
@@ -340,7 +361,7 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
             style={styles.addButton}
             contentStyle={styles.addButtonContent}
           >
-            Agregar al carrito
+            {scannerMode === 'PURCHASE_SPLIT' ? 'Agregar a compra' : 'Agregar al carrito'}
           </Button>
         </Surface>
       </SafeAreaView>
