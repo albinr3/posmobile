@@ -213,14 +213,17 @@ function RootApp() {
 
         try {
           const sqliteDir = `${LegacyFileSystem.documentDirectory || ''}SQLite`;
-          const files = await LegacyFileSystem.readDirectoryAsync(sqliteDir);
-          for (const file of files) {
-            if (!file.toLowerCase().startsWith('movopos')) continue;
-            const path = `${sqliteDir}/${file}`;
-            try {
-              await LegacyFileSystem.deleteAsync(path, { idempotent: true });
-            } catch (error) {
-              console.warn(`No se pudo borrar archivo SQLite ${file}:`, error);
+          const dirInfo = await LegacyFileSystem.getInfoAsync(sqliteDir);
+          if (dirInfo.exists && dirInfo.isDirectory) {
+            const files = await LegacyFileSystem.readDirectoryAsync(sqliteDir);
+            for (const file of files) {
+              if (!file.toLowerCase().startsWith('movopos')) continue;
+              const path = `${sqliteDir}/${file}`;
+              try {
+                await LegacyFileSystem.deleteAsync(path, { idempotent: true });
+              } catch (error) {
+                console.warn(`No se pudo borrar archivo SQLite ${file}:`, error);
+              }
             }
           }
         } catch (error) {

@@ -30,6 +30,127 @@ App móvil de punto de venta (POS) construida con React Native + Expo, con arqui
 - Android Studio (emulador) o dispositivo físico con Expo Go / dev build
 - EAS CLI (solo para builds remotos)
 
+## Android local estable (guia anti-errores)
+
+### 1) Versiones que deben quedar fijas
+
+- Java: JDK 17 (`java -version` debe mostrar 17.x).
+- Gradle Wrapper: `8.13`.
+- NDK Android: `27.1.12297006`.
+- CMake: `3.22.1`.
+
+### 2) Variables y archivos clave
+
+- `JAVA_HOME` debe apuntar al JDK 17 (ejemplo: `C:\Program Files\Java\jdk-17`).
+- `node` y `npx` deben existir en `PATH`.
+- En `android/local.properties` dejar `sdk.dir=...`.
+- No usar `ndk.dir` ni `cmake.dir` en `local.properties` (evita conflictos de versionado).
+
+### 3) Comandos recomendados para build limpio
+
+Ejecutar en **PowerShell** (no en cmd) porque usa `Remove-Item`:
+
+```powershell
+cd "C:\Users\Albin Rodriguez\Documents\movopos-mobile"
+Remove-Item -Recurse -Force .\android\app\.cxx, .\android\.cxx -ErrorAction SilentlyContinue
+cd .\android
+.\gradlew --stop
+.\gradlew app:assembleDebug -x lint -x test --stacktrace --info --no-build-cache > "..\build-error.txt" 2>&1
+```
+
+### 4) Si vuelve a fallar
+
+- Regenerar siempre `build-error.txt` con el comando anterior.
+- Revisar primero el bloque `What went wrong` y `Execution failed for task`.
+- Si el error es de linker C++ (`undefined symbol: __cxa_*`, `std::*`), validar que `patch-package` aplico parches en `node_modules`.
+
+### 5) Parches nativos que no deben perderse
+
+El proyecto usa `patch-package` (`postinstall`) para fixes de CMake en librerias nativas. Los parches viven en `patches/`.
+Si se borra `node_modules`, volver a ejecutar `npm install` para reaplicar.
+
+### 6) Errores comunes y causa real
+
+- `npx: ... no se reconoce`: Node/NPM no esta en `PATH`.
+- `JAVA_HOME is not set`: variable de entorno faltante o terminal no reiniciada.
+- `A problem occurred starting process 'command 'node''`: Gradle no encuentra Node en `PATH`.
+- `SDK location not found`: falta `sdk.dir` en `android/local.properties`.
+- `NDK ... disagrees with android.ndkVersion`: version de NDK distinta entre config y SDK instalado.
+- `undefined symbol ...` en tareas `buildCMakeDebug`: problema de link STL C++ en modulos nativos.
+
+### 7) OTA vs build nativo
+
+- Cambios en `src/` (JS/TS) suelen ser compatibles con OTA.
+- Cambios en `android/`, permisos, plugins de Expo o librerias nativas requieren nuevo build nativo.
+
+## Bitacora de errores resueltos (Windows/Expo SDK 55)
+
+Esta seccion resume los incidentes reales ya resueltos en este proyecto, con causa y solucion aplicada.
+
+1) `npx: The term 'npx' is not recognized`
+- Causa: Node/npm no estaba en `PATH` de la sesion.
+- Solucion: reinstalar/reparar Node y abrir una terminal nueva; validar con `node -v`, `npm -v`, `npx --version`.
+
+2) `JAVA_HOME is not set and no 'java' command could be found`
+- Causa: JDK instalado pero variables no configuradas.
+- Solucion: apuntar `JAVA_HOME` a JDK 17 y agregar `%JAVA_HOME%\bin` al `PATH`.
+
+3) Gradle con JDK 21 y errores raros de compatibilidad (`JvmVendorSpec ... IBM_SEMERU`)
+- Causa: combinacion de versiones no estable para este stack.
+- Solucion: estandarizar en JDK 17 para builds Android locales.
+
+4) `Minimum supported Gradle version is 8.13. Current version is 8.10.2`
+- Causa: wrapper viejo frente a AGP/Expo SDK 55.
+- Solucion: actualizar `android/gradle/wrapper/gradle-wrapper.properties` a Gradle 8.13.
+
+5) `A problem occurred starting process 'command 'node''`
+- Causa: Gradle no encontraba `node` en su entorno.
+- Solucion: asegurar Node en `PATH` global y abrir terminal nueva antes de correr `gradlew`.
+
+6) `SDK location not found`
+- Causa: Android SDK no definido para Gradle.
+- Solucion: definir `sdk.dir=...` en `android/local.properties` (ruta valida al SDK).
+
+7) Error de PowerShell al hacer `cd` con espacios (`A positional parameter cannot be found`)
+- Causa: ruta sin comillas.
+- Solucion: usar comillas: `cd "C:\Users\Albin Rodriguez\Documents\movopos-mobile\android"`.
+
+8) Error al borrar carpetas con comando estilo cmd (`rmdir /s /q`) ejecutado en PowerShell
+- Causa: mezcla de sintaxis shell.
+- Solucion: en PowerShell usar `Remove-Item -Recurse -Force ...`.
+
+9) Conflicto de NDK (`[CXX1104] ndk.dir ... disagrees with android.ndkVersion`)
+- Causa: coexistian versiones distintas (27.0 vs 27.1) entre configuracion y SDK.
+- Solucion: unificar en `27.1.12297006` y eliminar `ndk.dir` de `local.properties`.
+
+10) Warning repetido `[CXX5106] NDK was located by using ndk.dir property`
+- Causa: uso de `ndk.dir` (metodo deprecado).
+- Solucion: quitar `ndk.dir` y manejar version via `android.ndkVersion`/`ext.ndkVersion`.
+
+11) Linker C++ en modulos nativos (`undefined symbol: std::..., __cxa_*`)
+- Causa: targets CMake de varios modulos sin link explicito a STL compartida.
+- Solucion: agregar `c++_shared` en `target_link_libraries(...)` y persistir con `patch-package`.
+
+12) Fallos sucesivos por modulo (worklets, screens, expo-updates, expo-modules-core, reanimated, gesture-handler, safe-area-context, svg)
+- Causa: mismo patron de link C++ en distintos CMake.
+- Solucion: parches dedicados en `patches/` para cada paquete afectado.
+
+13) `patch-package` fallando por falta de `git` (`spawnSync git ENOENT`)
+- Causa: Git no instalado/no disponible en PATH.
+- Solucion: instalar Git o crear patch manual; en este repo quedaron parches persistidos en `patches/`.
+
+14) No aparecia permiso Bluetooth en Expo Go (Android 13+)
+- Causa: flujo dependiente de permisos runtime + limitaciones del contenedor Expo Go para librerias nativas BT.
+- Solucion: usar dev build nativo para probar Bluetooth real y asegurar solicitud de permisos Android 13+ en la app.
+
+15) Build fallaba sin detalle util al correr `expo run:android`
+- Causa: salida resumida de Expo ocultaba causa raiz.
+- Solucion: compilar con `gradlew ... --stacktrace --info` y redirigir a `build-error.txt`.
+
+16) `expoDebugOverrideMaxSdkConflicts` confundia como posible error
+- Causa: mensaje informativo del plugin, no falla.
+- Solucion: ignorar ese bloque y buscar la primera tarea `FAILED` real.
+
 ## Instalación
 
 ```bash

@@ -1,0 +1,12 @@
+diff --git a/node_modules/react-native-reanimated/android/CMakeLists.txt b/node_modules/react-native-reanimated/android/CMakeLists.txt
+index 0fc4d1a..4a0e4a5 100644
+--- a/node_modules/react-native-reanimated/android/CMakeLists.txt
++++ b/node_modules/react-native-reanimated/android/CMakeLists.txt
+@@ -100,6 +100,7 @@ if(NOT ${CMAKE_BUILD_TYPE} MATCHES "Debug")
+ 
+ target_link_libraries(
+   reanimated
++  c++_shared
+   log
+   ReactAndroid::reactnative
+   ReactAndroid::jsi

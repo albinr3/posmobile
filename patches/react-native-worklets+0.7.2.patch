@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-worklets/android/CMakeLists.txt b/node_modules/react-native-worklets/android/CMakeLists.txt
+index e32deec..3ae8222 100644
+--- a/node_modules/react-native-worklets/android/CMakeLists.txt
++++ b/node_modules/react-native-worklets/android/CMakeLists.txt
+@@ -88,7 +88,7 @@ target_include_directories(
+ # build shared lib
+ set_target_properties(worklets PROPERTIES LINKER_LANGUAGE CXX)
+ 
+-target_link_libraries(worklets log ReactAndroid::reactnative ReactAndroid::jsi
++target_link_libraries(worklets c++_shared log ReactAndroid::reactnative ReactAndroid::jsi
+                       fbjni::fbjni)
+ 
+ if(${JS_RUNTIME} STREQUAL "hermes")

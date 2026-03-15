@@ -1,0 +1,44 @@
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if "Windows_NT" == "Windows_NT" setlocal
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set DIRNAME=c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\ 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if "c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\" == "" set DIRNAME=. 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set APP_BASE_NAME=gradlew 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set APP_HOME=c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\ 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>for %i in ("c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\") do set APP_HOME=%~fi 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set APP_HOME=c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\ 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m" 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if defined JAVA_HOME goto findJavaFromJavaHome 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set JAVA_HOME=C:\Program Files\Java\jdk-17 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set JAVA_EXE=C:\Program Files\Java\jdk-17/bin/java.exe 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if exist "C:\Program Files\Java\jdk-17/bin/java.exe" goto execute 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set CLASSPATH= 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>"C:\Program Files\Java\jdk-17/bin/java.exe" "-Xmx64m" "-Xms64m"   "-Dorg.gradle.appname=gradlew" -classpath "" -jar "c:\Users\Albin Rodriguez\Documents\movopos-mobile\android\\gradle\wrapper\gradle-wrapper.jar" -q :app:properties 
+Exception in thread "main" java.lang.RuntimeException: Could not create parent directory for lock file C:\Users\CodexSandboxOffline\.gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13-bin.zip.lck
+	at org.gradle.wrapper.GradleWrapperMain.main(SourceFile:65)
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if 1 EQU 0 goto mainEnd 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>rem Set variable GRADLE_EXIT_CONSOLE if you need the _script_ return code instead of 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>rem the _cmd.exe /c_ return code! 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>set EXIT_CODE=1 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if 1 EQU 0 set EXIT_CODE=1 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>if not "" == "" exit 1 
+
+c:\Users\Albin Rodriguez\Documents\movopos-mobile\android>exit /b 1 

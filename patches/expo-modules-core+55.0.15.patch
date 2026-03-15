@@ -1,0 +1,12 @@
+diff --git a/node_modules/expo-modules-core/android/cmake/common.cmake b/node_modules/expo-modules-core/android/cmake/common.cmake
+index 1761e8c..8bd66fb 100644
+--- a/node_modules/expo-modules-core/android/cmake/common.cmake
++++ b/node_modules/expo-modules-core/android/cmake/common.cmake
+@@ -27,6 +27,7 @@ target_link_libraries(
+ target_link_libraries(
+   EXPO_COMMON
+   INTERFACE
++  c++_shared
+   ReactAndroid::jsi
+   fbjni::fbjni
+   ReactAndroid::reactnative

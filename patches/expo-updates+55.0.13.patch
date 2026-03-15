@@ -1,0 +1,12 @@
+diff --git a/node_modules/expo-updates/android/CMakeLists.txt b/node_modules/expo-updates/android/CMakeLists.txt
+index 4f7f2a5..d9dadf2 100644
+--- a/node_modules/expo-updates/android/CMakeLists.txt
++++ b/node_modules/expo-updates/android/CMakeLists.txt
+@@ -47,6 +47,7 @@ find_package(fbjni REQUIRED CONFIG)
+ 
+ target_link_libraries(
+   ${PACKAGE_NAME}
++  c++_shared
+   ${LOG_LIB}
+   bzip2
+   fbjni::fbjni
