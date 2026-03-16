@@ -10,3 +10,39 @@ index 1761e8c..8bd66fb 100644
    ReactAndroid::jsi
    fbjni::fbjni
    ReactAndroid::reactnative
+diff --git a/node_modules/expo-modules-core/android/build.gradle b/node_modules/expo-modules-core/android/build.gradle
+index 85e80f9..ce83be3 100644
+--- a/node_modules/expo-modules-core/android/build.gradle
++++ b/node_modules/expo-modules-core/android/build.gradle
+@@ -69,10 +69,26 @@ if (workletsProject != null) {
+   evaluationDependsOn(workletsProject.path)
+ 
+   afterEvaluate {
+-    println("Linking react-native-worklets native libs into expo-modules-core build tasks")
+-    println(workletsProject.tasks.getByName("mergeDebugNativeLibs"))
+-    println(workletsProject.tasks.getByName("mergeReleaseNativeLibs"))
+-    tasks.getByName("buildCMakeDebug").dependsOn(workletsProject.tasks.getByName("mergeDebugNativeLibs"))
+-    tasks.getByName("buildCMakeRelWithDebInfo").dependsOn(workletsProject.tasks.getByName("mergeReleaseNativeLibs"))
++    def debugMergeTask = workletsProject.tasks.findByName("mergeDebugNativeLibs")
++    def releaseMergeTask = workletsProject.tasks.findByName("mergeReleaseNativeLibs")
++
++    if (debugMergeTask == null) {
++      debugMergeTask = workletsProject.tasks.findByName("mergeDebugJniLibFolders")
++    }
++    if (releaseMergeTask == null) {
++      releaseMergeTask = workletsProject.tasks.findByName("mergeReleaseJniLibFolders")
++    }
++
++    if (debugMergeTask != null) {
++      tasks.getByName("buildCMakeDebug").dependsOn(debugMergeTask)
++    } else {
++      logger.lifecycle("expo-modules-core: skipping debug worklets native merge dependency (task not found)")
++    }
++
++    if (releaseMergeTask != null) {
++      tasks.getByName("buildCMakeRelWithDebInfo").dependsOn(releaseMergeTask)
++    } else {
++      logger.lifecycle("expo-modules-core: skipping release worklets native merge dependency (task not found)")
++    }
+   }
+ }

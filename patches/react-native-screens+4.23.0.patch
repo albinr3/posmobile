@@ -2,7 +2,7 @@ diff --git a/node_modules/react-native-screens/android/CMakeLists.txt b/node_mod
 index 1aee39e..d6d57ee 100644
 --- a/node_modules/react-native-screens/android/CMakeLists.txt
 +++ b/node_modules/react-native-screens/android/CMakeLists.txt
-@@ -37,12 +37,14 @@ find_package(ReactAndroid REQUIRED CONFIG)
+@@ -37,13 +37,15 @@ find_package(ReactAndroid REQUIRED CONFIG)
  if(${RNS_NEW_ARCH_ENABLED})
      find_package(fbjni REQUIRED CONFIG)
      target_link_libraries(rnscreens

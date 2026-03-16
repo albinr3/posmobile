@@ -2,7 +2,7 @@ diff --git a/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt b
 index 64f4ef6..15df7b0 100644
 --- a/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
 +++ b/node_modules/react-native-svg/android/src/main/jni/CMakeLists.txt
-@@ -34,11 +34,13 @@ find_package(ReactAndroid REQUIRED CONFIG)
+@@ -34,12 +34,14 @@ find_package(ReactAndroid REQUIRED CONFIG)
  if(ReactAndroid_VERSION_MINOR GREATER_EQUAL 76)
    target_link_libraries(
      react_codegen_rnsvg

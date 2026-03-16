@@ -1,0 +1,4 @@
+# Prevent uploading machine-specific Android files to EAS workers.
+android/build/
+android/local.properties
+.gradle-home/
