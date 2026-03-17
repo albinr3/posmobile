@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
-import { formatCurrency } from '../../utils/helpers';
+import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
 import { SalePaymentSplit } from '../../types';
@@ -29,6 +29,14 @@ interface TicketItem {
   sku?: string | null;
 }
 
+interface ReturnTicketItem {
+  productName: string;
+  qty: number;
+  unitPriceCents: number;
+  lineTotalCents: number;
+  unit?: string | null;
+}
+
 export interface PaymentReceiptTicketPayload {
   receiptCode: string;
   createdAt: number;
@@ -39,6 +47,7 @@ export interface PaymentReceiptTicketPayload {
   reference?: string | null;
   notes?: string | null;
   amountCents: number;
+  balanceAfterCents?: number | null;
   cancelledAt?: number | null;
 }
 
@@ -53,6 +62,24 @@ export interface SaleTicketPayload {
   dueDate?: number | null;
   totalCents: number;
   items: TicketItem[];
+}
+
+export interface QuoteTicketPayload {
+  quoteCode: string;
+  createdAt: number;
+  customerName?: string | null;
+  totalCents: number;
+  items: TicketItem[];
+}
+
+export interface ReturnTicketPayload {
+  returnCode: string;
+  returnedAt: number;
+  invoiceCode?: string | null;
+  customerName?: string | null;
+  totalCents: number;
+  notes?: string | null;
+  items: ReturnTicketItem[];
 }
 
 type PrintResultReason =
@@ -146,7 +173,7 @@ export const buildSaleTicketText = (
     resolvedCompanyHeader.phone || '-',
     separator,
     `Factura: ${payload.invoiceCode}`,
-    `Fecha: ${new Date(payload.createdAt).toLocaleString('es-DO')}`,
+    `Fecha: ${formatDateTime(payload.createdAt)}`,
     `Cliente: ${payload.customerName || 'Cliente general'}`,
     `Tipo: ${isCreditSale ? 'CREDITO' : 'CONTADO'}`,
     `Pago: ${paymentSummary || '-'}`,
@@ -154,7 +181,7 @@ export const buildSaleTicketText = (
   ];
 
   for (const item of payload.items || []) {
-    const productReference = String(item.reference || item.sku || item.productId || '').trim() || '-';
+    const productReference = String(item.reference || '').trim() || '-';
     lines.push(`${item.productName} | ${productReference}`);
     lines.push(`  ${formatColumns(`${formatProductQty(item.quantity, item.unit || 'UNIDAD')} x ${formatCurrency(item.priceCents)}`, formatCurrency(item.totalCents), width - 2)}`);
   }
@@ -197,11 +224,10 @@ export const buildPaymentReceiptTicketText = (
     separator,
     'RECIBO DE PAGO',
     `Recibo: ${payload.receiptCode}`,
-    `Fecha: ${new Date(payload.createdAt).toLocaleString('es-DO')}`,
+    `Fecha: ${formatDateTime(payload.createdAt)}`,
     `Cliente: ${payload.customerName || 'Cliente general'}`,
     `Factura: ${payload.invoiceCode || '-'}`,
     `Metodo: ${paymentLabel || '-'}`,
-    `Referencia: ${payload.reference || '-'}`,
   ];
 
   if (payload.notes) {
@@ -210,10 +236,107 @@ export const buildPaymentReceiptTicketText = (
 
   lines.push(separator);
   lines.push(formatColumns('TOTAL PAGADO', formatCurrency(payload.amountCents), width));
+  if (Number.isFinite(Number(payload.balanceAfterCents))) {
+    lines.push(formatColumns('BALANCE PENDIENTE', formatCurrency(Number(payload.balanceAfterCents)), width));
+  }
   if (payload.cancelledAt) {
     lines.push('RECIBO CANCELADO');
   }
   lines.push('Gracias por su pago');
+  lines.push('\n\n\n');
+
+  return lines.join('\n');
+};
+
+export const buildQuoteTicketText = (
+  payload: QuoteTicketPayload,
+  companyHeader?: CompanyTicketHeader,
+  paperSize: PaperSizeMm = '58'
+): string => {
+  const width = getPaperColumns(paperSize);
+  const separator = '-'.repeat(width);
+  const resolvedCompanyHeader: CompanyTicketHeader = {
+    name: String(companyHeader?.name || 'MOVOpos').trim() || 'MOVOpos',
+    phone: String(companyHeader?.phone || '').trim(),
+    address: String(companyHeader?.address || '').trim(),
+  };
+
+  const lines: string[] = [
+    resolvedCompanyHeader.name,
+    resolvedCompanyHeader.address || '-',
+    resolvedCompanyHeader.phone || '-',
+    separator,
+    'COTIZACION',
+    `No: ${payload.quoteCode}`,
+    `Fecha: ${formatDateTime(payload.createdAt)}`,
+    `Cliente: ${payload.customerName || 'Cliente general'}`,
+    separator,
+  ];
+
+  for (const item of payload.items || []) {
+    const productReference = String(item.reference || item.sku || item.productId || '').trim() || '-';
+    lines.push(`${item.productName} | ${productReference}`);
+    lines.push(
+      `  ${formatColumns(
+        `${formatProductQty(item.quantity, item.unit || 'UNIDAD')} x ${formatCurrency(item.priceCents)}`,
+        formatCurrency(item.totalCents),
+        width - 2
+      )}`
+    );
+  }
+
+  lines.push(separator);
+  lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
+  lines.push('Gracias por su preferencia');
+  lines.push('\n\n\n');
+
+  return lines.join('\n');
+};
+
+export const buildReturnTicketText = (
+  payload: ReturnTicketPayload,
+  companyHeader?: CompanyTicketHeader,
+  paperSize: PaperSizeMm = '58'
+): string => {
+  const width = getPaperColumns(paperSize);
+  const separator = '-'.repeat(width);
+  const resolvedCompanyHeader: CompanyTicketHeader = {
+    name: String(companyHeader?.name || 'MOVOpos').trim() || 'MOVOpos',
+    phone: String(companyHeader?.phone || '').trim(),
+    address: String(companyHeader?.address || '').trim(),
+  };
+
+  const lines: string[] = [
+    resolvedCompanyHeader.name,
+    resolvedCompanyHeader.address || '-',
+    resolvedCompanyHeader.phone || '-',
+    separator,
+    'COMPROBANTE DE DEVOLUCION',
+    `Devolucion: ${payload.returnCode}`,
+    `Fecha: ${formatDateTime(payload.returnedAt)}`,
+    `Factura: ${payload.invoiceCode || '-'}`,
+    `Cliente: ${payload.customerName || 'Cliente general'}`,
+    separator,
+  ];
+
+  for (const item of payload.items || []) {
+    lines.push(String(item.productName || 'Producto'));
+    lines.push(
+      `  ${formatColumns(
+        `${formatProductQty(item.qty, item.unit || 'UNIDAD')} x ${formatCurrency(item.unitPriceCents)}`,
+        formatCurrency(item.lineTotalCents),
+        width - 2
+      )}`
+    );
+  }
+
+  if (payload.notes) {
+    lines.push(separator);
+    lines.push(`Notas: ${payload.notes}`);
+  }
+
+  lines.push(separator);
+  lines.push(formatColumns('TOTAL DEVUELTO', formatCurrency(payload.totalCents), width));
   lines.push('\n\n\n');
 
   return lines.join('\n');
@@ -268,6 +391,11 @@ const resolveLogoBase64 = async (logoUrl: string | null | undefined): Promise<st
   }
 
   return null;
+};
+
+export const hasConnectedPrinter = async (): Promise<boolean> => {
+  const settings = await readPrinterSettings();
+  return !!settings.printer?.address;
 };
 
 export const autoPrintSaleTicket = async (payload: SaleTicketPayload): Promise<ThermalPrintResult> => {
@@ -362,6 +490,92 @@ export const printPaymentReceiptDirect = async (
       printed: false,
       reason: 'native_error',
       message: String(error?.message || 'No se pudo imprimir recibo en la termica.'),
+    };
+  }
+};
+
+export const printQuoteTicketDirect = async (
+  payload: QuoteTicketPayload,
+  providedPrinter?: StoredPrinter | null,
+  providedPaperSize?: PaperSizeMm
+): Promise<ThermalPrintResult> => {
+  const companyHeader = await readCompanyTicketHeader();
+  const settings = await readPrinterSettings();
+  const printer = providedPrinter ?? settings.printer;
+  const paperSize = providedPaperSize ?? settings.paperSize;
+  if (!printer?.address) {
+    return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
+  }
+
+  if (!isBlePrinterModuleAvailable()) {
+    return {
+      printed: false,
+      reason: 'missing_native_module',
+      message: getBlePrinterMissingModuleMessage(),
+    };
+  }
+
+  try {
+    const logoBase64 = await resolveLogoBase64(companyHeader.logoUrl);
+    if (logoBase64) {
+      await printBleImageBase64(logoBase64, printer.address, {
+        imageWidth: paperSize === '80' ? 420 : 280,
+        imageHeight: paperSize === '80' ? 130 : 110,
+        printerWidthMm: paperSize === '80' ? 80 : 58,
+      });
+    }
+
+    const text = buildQuoteTicketText(payload, companyHeader, paperSize);
+    await printBleText(text, printer.address);
+    return { printed: true };
+  } catch (error: any) {
+    return {
+      printed: false,
+      reason: 'native_error',
+      message: String(error?.message || 'No se pudo imprimir cotizacion en la termica.'),
+    };
+  }
+};
+
+export const printReturnTicketDirect = async (
+  payload: ReturnTicketPayload,
+  providedPrinter?: StoredPrinter | null,
+  providedPaperSize?: PaperSizeMm
+): Promise<ThermalPrintResult> => {
+  const companyHeader = await readCompanyTicketHeader();
+  const settings = await readPrinterSettings();
+  const printer = providedPrinter ?? settings.printer;
+  const paperSize = providedPaperSize ?? settings.paperSize;
+  if (!printer?.address) {
+    return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
+  }
+
+  if (!isBlePrinterModuleAvailable()) {
+    return {
+      printed: false,
+      reason: 'missing_native_module',
+      message: getBlePrinterMissingModuleMessage(),
+    };
+  }
+
+  try {
+    const logoBase64 = await resolveLogoBase64(companyHeader.logoUrl);
+    if (logoBase64) {
+      await printBleImageBase64(logoBase64, printer.address, {
+        imageWidth: paperSize === '80' ? 420 : 280,
+        imageHeight: paperSize === '80' ? 130 : 110,
+        printerWidthMm: paperSize === '80' ? 80 : 58,
+      });
+    }
+
+    const text = buildReturnTicketText(payload, companyHeader, paperSize);
+    await printBleText(text, printer.address);
+    return { printed: true };
+  } catch (error: any) {
+    return {
+      printed: false,
+      reason: 'native_error',
+      message: String(error?.message || 'No se pudo imprimir devolución en la termica.'),
     };
   }
 };

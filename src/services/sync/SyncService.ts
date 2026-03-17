@@ -36,11 +36,8 @@ class SyncService {
 
     // Escuchar cambios de conectividad
     this.unsubscribeNetInfo = NetInfo.addEventListener(state => {
-      useSyncStore.getState().setIsOnline(state.isConnected ?? false);
-      
-      if (state.isConnected) {
-        this.processQueue();
-      }
+      const hasInternet = !!state.isConnected && state.isInternetReachable !== false;
+      this.handleConnectivityChange(hasInternet);
     });
 
     // Sincronización periódica cada 5 minutos
@@ -50,6 +47,15 @@ class SyncService {
 
     // Actualizar contador de pendientes
     await this.updatePendingCount();
+  }
+
+  handleConnectivityChange(hasInternet: boolean) {
+    useSyncStore.getState().setIsOnline(hasInternet);
+    useSyncStore.getState().setSyncBlockedReason(null);
+
+    if (hasInternet) {
+      void this.processQueue();
+    }
   }
 
   async fullSync(authToken: string, options?: { ignoreCooldown?: boolean }) {
@@ -139,6 +145,11 @@ class SyncService {
 
   private async processQueue() {
     if (this.isSyncing) return;
+    const { isOnline } = useSyncStore.getState();
+    if (!isOnline) {
+      useSyncStore.getState().setSyncBlockedReason(null);
+      return;
+    }
 
     const now = Date.now();
     if (now < this.backendAuthCooldownUntil) {

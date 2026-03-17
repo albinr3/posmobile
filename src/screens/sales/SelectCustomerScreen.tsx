@@ -18,6 +18,7 @@ interface SelectCustomerScreenProps {
 
 interface CustomerRow {
   local_id: string;
+  server_id?: string | null;
   name: string;
   phone?: string;
 }
@@ -39,7 +40,7 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
   const loadCustomers = async () => {
     try {
       const result = await db.query<CustomerRow>(
-        'SELECT local_id, name, phone FROM customers WHERE server_id IS NOT NULL ORDER BY name'
+        'SELECT local_id, server_id, name, phone FROM customers ORDER BY name'
       );
       setCustomers(result);
     } catch (error) {
@@ -91,15 +92,19 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
           </Surface>
         )}
         ListHeaderComponent={
-          <Surface style={styles.card}>
-            <View style={styles.info}>
-              <Text style={styles.name}>Venta sin cliente</Text>
-              <Text style={styles.phone}>Se registrara como consumidor final</Text>
-            </View>
-            <Button mode="text" onPress={() => handleSelectCustomer(null, null)}>
-              Limpiar
-            </Button>
-          </Surface>
+          mode === 'QUOTE'
+            ? (
+                <Surface style={styles.card}>
+                  <View style={styles.info}>
+                    <Text style={styles.name}>Cotizacion sin cliente</Text>
+                    <Text style={styles.phone}>Opcional para cotizaciones</Text>
+                  </View>
+                  <Button mode="text" onPress={() => handleSelectCustomer(null, null)}>
+                    Limpiar
+                  </Button>
+                </Surface>
+              )
+            : null
         }
         ListEmptyComponent={
           <View style={styles.empty}>

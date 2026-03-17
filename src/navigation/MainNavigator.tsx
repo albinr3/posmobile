@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
 import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import { Text, Icon, ActivityIndicator } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,6 +59,7 @@ import { BillingPlansScreen } from '../screens/billing/BillingPlansScreen';
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
+const BILLING_TOKEN_TIMEOUT_MS = 4000;
 
 const commonStackOptions = {
   header: () => <AppTopHeader />,
@@ -263,9 +265,23 @@ function PlaceholderScreen({ route }: any) {
 
 function BottomTabs() {
   const insets = useSafeAreaInsets();
+  const defaultTabBarStyle = {
+    backgroundColor: '#fff',
+    borderTopWidth: 0,
+    borderTopColor: 'transparent',
+    elevation: 0,
+    shadowColor: 'transparent',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    height: 62 + insets.bottom,
+    paddingBottom: 4 + insets.bottom,
+    paddingTop: 4,
+  };
 
   return (
     <Tab.Navigator
+      backBehavior="history"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: ui.colors.primary,
@@ -275,19 +291,7 @@ function BottomTabs() {
           fontSize: 11,
           fontWeight: '700',
         },
-        tabBarStyle: {
-          backgroundColor: '#fff',
-          borderTopWidth: 0,
-          borderTopColor: 'transparent',
-          elevation: 0,
-          shadowColor: 'transparent',
-          shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: 0,
-          shadowRadius: 0,
-          height: 62 + insets.bottom,
-          paddingBottom: 4 + insets.bottom,
-          paddingTop: 4,
-        },
+        tabBarStyle: defaultTabBarStyle,
       }}
     >
       <Tab.Screen
@@ -310,7 +314,7 @@ function BottomTabs() {
             tabBarLabel: '',
             tabBarItemStyle: { marginTop: -14 },
             tabBarLabelStyle: { height: 0 },
-            tabBarStyle: hideTabBar ? { display: 'none' } : undefined,
+            tabBarStyle: hideTabBar ? { display: 'none' } : defaultTabBarStyle,
             tabBarIcon: ({ focused }) => (
               <View
                 style={{
@@ -558,9 +562,6 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         <Text style={styles.logoutText}>Cerrar sesión</Text>
       </TouchableOpacity>
 
-      <View style={styles.drawerFooter}>
-        <Text style={styles.drawerFooterText}>Local (1 PC) · RD$ · ITBIS incluido</Text>
-      </View>
     </DrawerContentScrollView>
   );
 }
@@ -586,7 +587,19 @@ export function MainNavigator() {
 
       try {
         if (mounted) setCheckingBillingAccess(true);
-        const clerkToken = await getTokenRef.current();
+        const netInfo = await NetInfo.fetch();
+        const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+        if (!hasInternet) {
+          setBillingStateRef.current(null);
+          return;
+        }
+
+        const clerkToken = await Promise.race<string | null>([
+          getTokenRef.current(),
+          new Promise<string | null>((resolve) => {
+            setTimeout(() => resolve(null), BILLING_TOKEN_TIMEOUT_MS);
+          }),
+        ]);
         if (!clerkToken) {
           setBillingStateRef.current(null);
           return;
@@ -636,6 +649,7 @@ export function MainNavigator() {
     <Drawer.Navigator
       key={isBillingBlocked ? 'billing-blocked' : 'full-access'}
       initialRouteName={isBillingBlocked ? 'BillingPlansMenu' : 'Home'}
+      backBehavior="history"
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
         headerShown: false,
@@ -739,19 +753,6 @@ const styles = StyleSheet.create({
   drawerItemText: { color: ui.colors.text, fontSize: 14, fontWeight: '700' },
   drawerItemTextActive: { color: '#fff' },
   drawerItemTextDisabled: { color: '#8C8C8C' },
-  drawerFooter: {
-    marginTop: 'auto',
-    borderTopWidth: 1,
-    borderTopColor: ui.colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    backgroundColor: '#F7F5FB',
-  },
-  drawerFooterText: {
-    color: ui.colors.textMuted,
-    fontSize: 11,
-    fontWeight: '600',
-  },
   whatsAppButton: {
     marginHorizontal: 12,
     marginTop: 10,

@@ -4,8 +4,7 @@ import { Searchbar, Text, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
@@ -32,13 +31,11 @@ export function OperatingExpensesScreen({ navigation }: OperatingExpensesScreenP
   const [items, setItems] = useState<OperatingExpenseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { getToken } = useAuth();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
   const isOnlineRef = useRef(isOnline);
-  const getTokenRef = useRef(getToken);
   const isSyncingOnFocusRef = useRef(false);
   isOnlineRef.current = isOnline;
-  getTokenRef.current = getToken;
 
   const loadLocalItems = useCallback(async () => {
     const rows = await db.query<any>(
@@ -70,14 +67,8 @@ export function OperatingExpensesScreen({ navigation }: OperatingExpensesScreenP
   }, []);
 
   const syncBestEffort = useCallback(async () => {
-    if (!isOnlineRef.current) return false;
-    const clerkToken = await getTokenRef.current();
-    if (!clerkToken || !useAuthStore.getState().subUserToken) return false;
-    syncService.setTokenGetter(() => getTokenRef.current());
-    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken);
-    return true;
-  }, []);
+    return runFullSyncIfAuthenticated({ isOnline: isOnlineRef.current });
+  }, [runFullSyncIfAuthenticated]);
 
   const loadItems = useCallback(async () => {
     try {

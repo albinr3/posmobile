@@ -8,6 +8,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatProductQty } from '../../utils/productUnits';
+import { hasConnectedPrinter, printReturnTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface ReturnReceiptItem {
   productName: string;
@@ -80,7 +81,6 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
           .item-total { font-weight: 700; }
           .total { border-top: 1px dashed #444; padding-top: 7px; margin-top: 6px; font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; }
           .notes { margin-top: 8px; font-size: 12px; }
-          .thanks { text-align: center; margin-top: 10px; font-weight: 600; }
         </style>
       </head>
       <body>
@@ -98,7 +98,6 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
           <div>${itemsRows}</div>
           <div class="total"><span>TOTAL DEVUELTO</span><span>${formatCurrency(receipt.totalCents)}</span></div>
           ${receipt.notes ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(receipt.notes)}</div>` : ''}
-          <div class="thanks">Movimiento registrado</div>
         </div>
       </body>
     </html>
@@ -116,12 +115,38 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
   const handlePrint = useCallback(async () => {
     if (!html) return;
     try {
+      const shouldAttemptPrint = await hasConnectedPrinter();
+      if (!shouldAttemptPrint) {
+        Alert.alert('Impresión', 'No hay una impresora conectada en Ajustes.');
+        return;
+      }
+
+      if (receipt) {
+        const printResult = await printReturnTicketDirect({
+          returnCode: receipt.returnCode,
+          returnedAt: receipt.returnedAt,
+          invoiceCode: receipt.invoiceCode || '-',
+          customerName: receipt.customerName || 'Cliente general',
+          totalCents: receipt.totalCents,
+          notes: receipt.notes || null,
+          items: (receipt.items || []).map((item) => ({
+            productName: item.productName,
+            qty: Number(item.qty || 0),
+            unitPriceCents: Number(item.unitPriceCents || 0),
+            lineTotalCents: Number(item.lineTotalCents || 0),
+            unit: item.unit || 'UNIDAD',
+          })),
+        });
+
+        if (printResult.printed) return;
+      }
+
       await Print.printAsync({ html });
     } catch (error) {
       console.error('Error imprimiendo devolución:', error);
       Alert.alert('Error', 'No se pudo abrir la vista de impresión.');
     }
-  }, [html]);
+  }, [html, receipt]);
 
   const handleShare = useCallback(async () => {
     if (!html || !receipt) return;
@@ -211,7 +236,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.productName}</Text>
                 <Text style={styles.itemQty}>
-                  {formatProductQty(item.qty, item.unit)} @ {formatCurrency(item.unitPriceCents)}
+                  {formatProductQty(item.qty, item.unit)} x {formatCurrency(item.unitPriceCents)}
                 </Text>
               </View>
               <Text style={styles.itemTotal}>{formatCurrency(item.lineTotalCents)}</Text>

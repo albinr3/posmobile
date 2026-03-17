@@ -128,12 +128,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       accountId,
       billingState: subUser && token ? get().billingState : null,
       isBillingBlocked: subUser && token ? get().isBillingBlocked : false,
-      isAuthenticated: !!subUser && !!token && !!get().user,
+      isAuthenticated: !!subUser && !!token,
       isLoading: false,
     });
     if (AUTH_DEBUG) {
       console.log('[AuthStore] setSubUser() state updated', {
-        isAuthenticated: !!subUser && !!token && !!get().user,
+        isAuthenticated: !!subUser && !!token,
         hasUser: !!get().user,
         hasSubUser: !!subUser,
       });
@@ -202,12 +202,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           subUser,
           subUserToken: token,
           accountId,
-          isAuthenticated: !!get().user && !!subUser && !!token,
+          isAuthenticated: !!subUser && !!token,
         });
         if (AUTH_DEBUG) {
           console.log('[AuthStore] loadSubUserToken() restored session', {
             username: subUser?.username,
-            isAuthenticated: !!get().user && !!subUser && !!token,
+            isAuthenticated: !!subUser && !!token,
           });
         }
       } else {

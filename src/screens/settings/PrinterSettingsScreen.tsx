@@ -144,7 +144,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       const savedAutoPrint = await AsyncStorage.getItem('auto_print');
       const savedSaleSoundEnabled = await isSaleSoundEnabled();
       const savedBiometricEnabled = await getBiometricEnabled();
-      
+
       if (savedPrinter) {
         setConnectedPrinter(JSON.parse(savedPrinter));
       }
@@ -778,262 +778,252 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-      <Surface style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <View>
-            <Text style={styles.sectionTitle}>Empresa</Text>
-            <Text style={styles.sectionSubtitle}>Configuración comercial visible en recibos y cotizaciones</Text>
-          </View>
-          <Button
-            mode="outlined"
-            compact
-            icon="refresh"
-            textColor={ui.colors.primary}
-            onPress={loadCompanySettings}
-            loading={loadingCompanySettings}
-            disabled={loadingCompanySettings}
-          >
-            Recargar
-          </Button>
-        </View>
+        <Surface style={styles.section}>
+          <View style={styles.sectionHeaderRow}>
+            <View>
+              <Text style={styles.sectionTitle}>Empresa</Text>
+              <Text style={styles.sectionSubtitle}>Configuración comercial visible en recibos y cotizaciones</Text>
+            </View>
 
-        <View style={styles.companyLogoSection}>
-          <View style={styles.logoPreviewColumn}>
-            <Text style={styles.companyDetailLabel}>Logo</Text>
+          </View>
+
+          <View style={styles.companyLogoSection}>
+            <View style={styles.logoPreviewColumn}>
+              <Text style={styles.companyDetailLabel}>Logo</Text>
+              <TouchableOpacity
+                style={styles.companyLogoWrap}
+                activeOpacity={0.85}
+                onPress={onPressChangeLogo}
+                disabled={uploadingLogo}
+              >
+                {companySettings.logoUrl && !companyLogoError ? (
+                  <Image
+                    source={{ uri: companySettings.logoUrl }}
+                    style={styles.companyLogo}
+                    resizeMode="contain"
+                    onError={() => setCompanyLogoError(true)}
+                  />
+                ) : (
+                  <Icon source="image-outline" size={34} color="#9CA3AF" />
+                )}
+
+                {companySettings.logoUrl ? (
+                  <TouchableOpacity
+                    style={styles.logoRemoveBtn}
+                    onPress={() => {
+                      setCompanySettings((prev) => ({ ...prev, logoUrl: null }));
+                      setCompanyLogoError(false);
+                      setCompanySettingsSuccess('Logo removido. Presiona Guardar para aplicar cambios.');
+                    }}
+                  >
+                    <Icon source="close" size={14} color="#fff" />
+                  </TouchableOpacity>
+                ) : null}
+              </TouchableOpacity>
+            </View>
+
             <TouchableOpacity
-              style={styles.companyLogoWrap}
-              activeOpacity={0.85}
+              style={styles.logoUploadCard}
+              activeOpacity={0.9}
               onPress={onPressChangeLogo}
               disabled={uploadingLogo}
             >
-              {companySettings.logoUrl && !companyLogoError ? (
-                <Image
-                  source={{ uri: companySettings.logoUrl }}
-                  style={styles.companyLogo}
-                  resizeMode="contain"
-                  onError={() => setCompanyLogoError(true)}
-                />
-              ) : (
-                <Icon source="image-outline" size={34} color="#9CA3AF" />
-              )}
-
-              {companySettings.logoUrl ? (
-                <TouchableOpacity
-                  style={styles.logoRemoveBtn}
-                  onPress={() => {
-                    setCompanySettings((prev) => ({ ...prev, logoUrl: null }));
-                    setCompanyLogoError(false);
-                    setCompanySettingsSuccess('Logo removido. Presiona Guardar para aplicar cambios.');
-                  }}
-                >
-                  <Icon source="close" size={14} color="#fff" />
-                </TouchableOpacity>
-              ) : null}
+              <Icon source="cloud-upload-outline" size={20} color="#7C3AED" />
+              <Text style={styles.logoUploadTitle}>{companySettings.logoUrl ? 'Cambiar logo' : 'Subir logo'}</Text>
+              <Text style={styles.logoUploadHint}>{uploadingLogo ? 'Subiendo...' : 'JPG, PNG o WEBP'}</Text>
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={styles.logoUploadCard}
-            activeOpacity={0.9}
-            onPress={onPressChangeLogo}
-            disabled={uploadingLogo}
+          <Divider style={styles.companyDivider} />
+
+          {loadingCompanySettings ? <ActivityIndicator size="small" style={{ marginTop: 10 }} /> : null}
+          {companySettingsError ? <Text style={styles.errorBanner}>{companySettingsError}</Text> : null}
+          {companySettingsSuccess ? <Text style={styles.successBanner}>{companySettingsSuccess}</Text> : null}
+
+          <View style={styles.companyDetails}>
+            <Text style={styles.companyDetailLabel}>Nombre comercial</Text>
+            <TextInput
+              mode="outlined"
+              dense
+              value={companySettings.name}
+              onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, name: value }))}
+              disabled={!isEditingCompany}
+              editable={isEditingCompany}
+              style={styles.companyInput}
+              contentStyle={styles.companyInputContent}
+              outlineStyle={styles.companyInputOutline}
+            />
+            <Text style={styles.companyDetailLabel}>Telefono</Text>
+            <TextInput
+              mode="outlined"
+              dense
+              value={companySettings.phone}
+              onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, phone: value }))}
+              disabled={!isEditingCompany}
+              editable={isEditingCompany}
+              keyboardType="phone-pad"
+              style={styles.companyInput}
+              contentStyle={styles.companyInputContent}
+              outlineStyle={styles.companyInputOutline}
+            />
+            <Text style={styles.companyDetailLabel}>Direccion</Text>
+            <TextInput
+              mode="outlined"
+              dense
+              value={companySettings.address}
+              onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, address: value }))}
+              disabled={!isEditingCompany}
+              editable={isEditingCompany}
+              style={styles.companyInput}
+              contentStyle={styles.companyInputContent}
+              outlineStyle={styles.companyInputOutline}
+            />
+            <Button
+              mode="contained"
+              icon={isEditingCompany ? 'content-save-outline' : 'pencil-outline'}
+              buttonColor={ui.colors.primary}
+              textColor="#fff"
+              onPress={() => {
+                if (!isEditingCompany) {
+                  setIsEditingCompany(true);
+                  return;
+                }
+                void saveCompanySettings();
+              }}
+              loading={savingCompanySettings}
+              disabled={savingCompanySettings || uploadingLogo}
+              style={styles.companySaveButton}
+              contentStyle={styles.companySaveButtonContent}
+            >
+              {savingCompanySettings ? 'Guardando...' : isEditingCompany ? 'Guardar cambios' : 'Editar'}
+            </Button>
+          </View>
+        </Surface>
+
+        <Surface style={styles.section}>
+          <Text style={styles.sectionTitle}>Configuración de Ventas</Text>
+          <Text style={styles.sectionSubtitle}>Personaliza el comportamiento de ventas y recibos</Text>
+          <Divider style={styles.companyDivider} />
+
+          <Text style={styles.companyDetailLabel}>Vista por defecto de productos</Text>
+          <View style={styles.viewModeRow}>
+            <TouchableOpacity
+              style={[styles.viewModeChip, defaultViewMode === 'list' && styles.viewModeChipActive]}
+              onPress={() => setDefaultViewMode('list')}
+            >
+              <Text style={[styles.viewModeChipText, defaultViewMode === 'list' && styles.viewModeChipTextActive]}>
+                Lista
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.viewModeChip, defaultViewMode === 'grid' && styles.viewModeChipActive]}
+              onPress={() => setDefaultViewMode('grid')}
+            >
+              <Text style={[styles.viewModeChipText, defaultViewMode === 'grid' && styles.viewModeChipTextActive]}>
+                Imágenes
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.saleSwitchCard}>
+            <View style={styles.saleSwitchMeta}>
+              <Text style={styles.saleSwitchTitle}>Desglosar ITBIS en recibos</Text>
+              <Text style={styles.saleSwitchHint}>Mostrar detalle ITBIS en recibos y facturas.</Text>
+            </View>
+            <Switch value={showItbisOnReceipts} onValueChange={setShowItbisOnReceipts} color={ui.colors.primary} />
+          </View>
+
+          <Text style={styles.companyDetailLabel}>% ganancia por defecto en compras</Text>
+          <View style={styles.marginRow}>
+            <TextInput
+              mode="outlined"
+              dense
+              value={defaultProfitMargin}
+              onChangeText={(value) => {
+                const cleaned = value.replace(/[^0-9.]/g, '');
+                const parts = cleaned.split('.');
+                if (parts.length > 2) return;
+                const normalized = parts.length === 2 ? `${parts[0]}.${parts[1].slice(0, 2)}` : parts[0];
+                setDefaultProfitMargin(normalized);
+              }}
+              keyboardType="decimal-pad"
+              style={[styles.companyInput, styles.marginInput]}
+              contentStyle={styles.companyInputContent}
+            />
+            <Button
+              mode="outlined"
+              textColor={ui.colors.primary}
+              onPress={saveSalesSettings}
+              loading={savingSalesSettings}
+              disabled={savingSalesSettings}
+            >
+              Guardar
+            </Button>
+          </View>
+          <Text style={styles.marginHint}>Se usa para calcular precio de venta automático en compras.</Text>
+        </Surface>
+
+        <Surface style={styles.section}>
+          <Text style={styles.sectionTitle}>Impresoras</Text>
+          <Text style={styles.sectionSubtitle}>Configura impresora Bluetooth y tamaño de papel</Text>
+          <Button
+            mode="outlined"
+            icon="printer-outline"
+            textColor={ui.colors.primary}
+            style={styles.printersEntryBtn}
+            contentStyle={styles.printersEntryBtnContent}
+            onPress={() => navigation.navigate('Printers')}
           >
-            <Icon source="cloud-upload-outline" size={20} color="#7C3AED" />
-            <Text style={styles.logoUploadTitle}>{companySettings.logoUrl ? 'Cambiar logo' : 'Subir logo'}</Text>
-            <Text style={styles.logoUploadHint}>{uploadingLogo ? 'Subiendo...' : 'JPG, PNG o WEBP'}</Text>
-          </TouchableOpacity>
-        </View>
+            Abrir configuración de impresoras
+          </Button>
+        </Surface>
 
-        <Divider style={styles.companyDivider} />
+        <Surface style={styles.section}>
+          <View style={styles.settingRow}>
+            <View>
+              <Text style={styles.settingTitle}>Imprimir automáticamente</Text>
+              <Text style={styles.settingDescription}>Imprimir recibo al completar venta</Text>
+            </View>
+            <Switch value={autoPrint} onValueChange={toggleAutoPrint} color={ui.colors.primary} />
+          </View>
+          <Divider style={{ marginVertical: 12 }} />
+          <View style={styles.settingRow}>
+            <View>
+              <Text style={styles.settingTitle}>Sonido al vender</Text>
+              <Text style={styles.settingDescription}>Reproduce un sonido al completar una venta</Text>
+            </View>
+            <Switch value={saleSoundEnabled} onValueChange={toggleSaleSound} color={ui.colors.primary} />
+          </View>
+          <Divider style={{ marginVertical: 12 }} />
+          <View style={styles.settingRow}>
+            <View>
+              <Text style={styles.settingTitle}>Login con biometria</Text>
+              <Text style={styles.settingDescription}>Protege el reingreso con huella o Face ID</Text>
+            </View>
+            <Switch value={biometricLoginEnabled} onValueChange={toggleBiometricLogin} color={ui.colors.primary} />
+          </View>
+        </Surface>
 
-        {loadingCompanySettings ? <ActivityIndicator size="small" style={{ marginTop: 10 }} /> : null}
-        {companySettingsError ? <Text style={styles.errorBanner}>{companySettingsError}</Text> : null}
-        {companySettingsSuccess ? <Text style={styles.successBanner}>{companySettingsSuccess}</Text> : null}
+        <Divider style={styles.divider} />
 
-        <View style={styles.companyDetails}>
-          <Text style={styles.companyDetailLabel}>Nombre comercial</Text>
-          <TextInput
-            mode="outlined"
-            dense
-            value={companySettings.name}
-            onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, name: value }))}
-            disabled={!isEditingCompany}
-            editable={isEditingCompany}
-            style={styles.companyInput}
-            contentStyle={styles.companyInputContent}
-            outlineStyle={styles.companyInputOutline}
-          />
-          <Text style={styles.companyDetailLabel}>Telefono</Text>
-          <TextInput
-            mode="outlined"
-            dense
-            value={companySettings.phone}
-            onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, phone: value }))}
-            disabled={!isEditingCompany}
-            editable={isEditingCompany}
-            keyboardType="phone-pad"
-            style={styles.companyInput}
-            contentStyle={styles.companyInputContent}
-            outlineStyle={styles.companyInputOutline}
-          />
-          <Text style={styles.companyDetailLabel}>Direccion</Text>
-          <TextInput
-            mode="outlined"
-            dense
-            value={companySettings.address}
-            onChangeText={(value) => setCompanySettings((prev) => ({ ...prev, address: value }))}
-            disabled={!isEditingCompany}
-            editable={isEditingCompany}
-            style={styles.companyInput}
-            contentStyle={styles.companyInputContent}
-            outlineStyle={styles.companyInputOutline}
-          />
+        <Surface style={styles.dangerSection}>
+          <Text style={styles.dangerTitle}>Datos Locales</Text>
+          <Text style={styles.dangerDescription}>
+            Borra toda la base de datos local de este celular y vuelve a empezar desde cero con lo que llegue de la API.
+          </Text>
           <Button
             mode="contained"
-            icon={isEditingCompany ? 'content-save-outline' : 'pencil-outline'}
-            buttonColor={ui.colors.primary}
+            buttonColor="#B91C1C"
             textColor="#fff"
-            onPress={() => {
-              if (!isEditingCompany) {
-                setIsEditingCompany(true);
-                return;
-              }
-              void saveCompanySettings();
-            }}
-            loading={savingCompanySettings}
-            disabled={savingCompanySettings || uploadingLogo}
-            style={styles.companySaveButton}
-            contentStyle={styles.companySaveButtonContent}
+            icon="database-remove"
+            loading={resettingData}
+            disabled={resettingData}
+            onPress={handleResetLocalData}
+            style={styles.dangerButton}
           >
-            {savingCompanySettings ? 'Guardando...' : isEditingCompany ? 'Guardar cambios' : 'Editar'}
+            {resettingData ? 'Reiniciando...' : 'Borrar base local'}
           </Button>
-        </View>
-      </Surface>
-
-      <Surface style={styles.section}>
-        <Text style={styles.sectionTitle}>Configuración de Ventas</Text>
-        <Text style={styles.sectionSubtitle}>Personaliza el comportamiento de ventas y recibos</Text>
-        <Divider style={styles.companyDivider} />
-
-        <Text style={styles.companyDetailLabel}>Vista por defecto de productos</Text>
-        <View style={styles.viewModeRow}>
-          <TouchableOpacity
-            style={[styles.viewModeChip, defaultViewMode === 'list' && styles.viewModeChipActive]}
-            onPress={() => setDefaultViewMode('list')}
-          >
-            <Text style={[styles.viewModeChipText, defaultViewMode === 'list' && styles.viewModeChipTextActive]}>
-              Lista
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.viewModeChip, defaultViewMode === 'grid' && styles.viewModeChipActive]}
-            onPress={() => setDefaultViewMode('grid')}
-          >
-            <Text style={[styles.viewModeChipText, defaultViewMode === 'grid' && styles.viewModeChipTextActive]}>
-              Imágenes
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.saleSwitchCard}>
-          <View style={styles.saleSwitchMeta}>
-            <Text style={styles.saleSwitchTitle}>Desglosar ITBIS en recibos</Text>
-            <Text style={styles.saleSwitchHint}>Mostrar detalle ITBIS en recibos y facturas.</Text>
-          </View>
-          <Switch value={showItbisOnReceipts} onValueChange={setShowItbisOnReceipts} color={ui.colors.primary} />
-        </View>
-
-        <Text style={styles.companyDetailLabel}>% ganancia por defecto en compras</Text>
-        <View style={styles.marginRow}>
-          <TextInput
-            mode="outlined"
-            dense
-            value={defaultProfitMargin}
-            onChangeText={(value) => {
-              const cleaned = value.replace(/[^0-9.]/g, '');
-              const parts = cleaned.split('.');
-              if (parts.length > 2) return;
-              const normalized = parts.length === 2 ? `${parts[0]}.${parts[1].slice(0, 2)}` : parts[0];
-              setDefaultProfitMargin(normalized);
-            }}
-            keyboardType="decimal-pad"
-            style={[styles.companyInput, styles.marginInput]}
-            contentStyle={styles.companyInputContent}
-          />
-          <Button
-            mode="outlined"
-            textColor={ui.colors.primary}
-            onPress={saveSalesSettings}
-            loading={savingSalesSettings}
-            disabled={savingSalesSettings}
-          >
-            Guardar
-          </Button>
-        </View>
-        <Text style={styles.marginHint}>Se usa para calcular precio de venta automático en compras.</Text>
-      </Surface>
-
-      <Surface style={styles.section}>
-        <Text style={styles.sectionTitle}>Impresoras</Text>
-        <Text style={styles.sectionSubtitle}>Configura impresora Bluetooth y tamaño de papel</Text>
-        <Button
-          mode="outlined"
-          icon="printer-outline"
-          textColor={ui.colors.primary}
-          style={styles.printersEntryBtn}
-          contentStyle={styles.printersEntryBtnContent}
-          onPress={() => navigation.navigate('Printers')}
-        >
-          Abrir configuración de impresoras
-        </Button>
-      </Surface>
-
-      <Surface style={styles.section}>
-        <View style={styles.settingRow}>
-          <View>
-            <Text style={styles.settingTitle}>Imprimir automáticamente</Text>
-            <Text style={styles.settingDescription}>Imprimir recibo al completar venta</Text>
-          </View>
-          <Switch value={autoPrint} onValueChange={toggleAutoPrint} color={ui.colors.primary} />
-        </View>
-        <Divider style={{ marginVertical: 12 }} />
-        <View style={styles.settingRow}>
-          <View>
-            <Text style={styles.settingTitle}>Sonido al vender</Text>
-            <Text style={styles.settingDescription}>Reproduce un sonido al completar una venta</Text>
-          </View>
-          <Switch value={saleSoundEnabled} onValueChange={toggleSaleSound} color={ui.colors.primary} />
-        </View>
-        <Divider style={{ marginVertical: 12 }} />
-        <View style={styles.settingRow}>
-          <View>
-            <Text style={styles.settingTitle}>Login con biometria</Text>
-            <Text style={styles.settingDescription}>Protege el reingreso con huella o Face ID</Text>
-          </View>
-          <Switch value={biometricLoginEnabled} onValueChange={toggleBiometricLogin} color={ui.colors.primary} />
-        </View>
-      </Surface>
-
-      <Divider style={styles.divider} />
-
-      <Surface style={styles.dangerSection}>
-        <Text style={styles.dangerTitle}>Datos Locales</Text>
-        <Text style={styles.dangerDescription}>
-          Borra toda la base de datos local de este celular y vuelve a empezar desde cero con lo que llegue de la API.
-        </Text>
-        <Button
-          mode="contained"
-          buttonColor="#B91C1C"
-          textColor="#fff"
-          icon="database-remove"
-          loading={resettingData}
-          disabled={resettingData}
-          onPress={handleResetLocalData}
-          style={styles.dangerButton}
-        >
-          {resettingData ? 'Reiniciando...' : 'Borrar base local'}
-        </Button>
-      </Surface>
+        </Surface>
       </ScrollView>
     </SafeAreaView>
   );

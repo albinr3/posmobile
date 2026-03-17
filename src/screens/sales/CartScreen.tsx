@@ -253,16 +253,33 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const handleCompleteSale = async () => {
     if (items.length === 0) return;
     let creditDueDate: number | null = null;
+    let selectedCustomerId = customerId;
+    let selectedCustomerName = customerName;
 
-    if (paymentMethod === 'CREDITO') {
-      if (!customerId) {
-        Alert.alert('Cliente requerido', 'Para vender a crédito debes seleccionar un cliente.');
+    if (!selectedCustomerId) {
+      const defaultCustomer = await db.queryFirst<{ local_id: string; name: string }>(
+        `SELECT local_id, name
+         FROM customers
+         WHERE LOWER(TRIM(name)) = 'cliente general'
+         ORDER BY CASE WHEN server_id IS NOT NULL THEN 0 ELSE 1 END, rowid ASC
+         LIMIT 1`
+      );
+      if (!defaultCustomer?.local_id) {
+        Alert.alert(
+          'Cliente requerido',
+          'No se encontró el cliente "Cliente general". Sin ese cliente no se puede registrar la venta.'
+        );
         return;
       }
+      selectedCustomerId = String(defaultCustomer.local_id);
+      selectedCustomerName = String(defaultCustomer.name || 'Cliente general');
+      setCustomer(selectedCustomerId, selectedCustomerName);
+    }
 
+    if (paymentMethod === 'CREDITO') {
       const customerRow = await db.queryFirst<{ data?: string; name?: string }>(
         'SELECT data, name FROM customers WHERE local_id = ?',
-        [customerId]
+        [selectedCustomerId]
       );
 
       let creditEnabled = false;
@@ -281,7 +298,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       if (!creditEnabled) {
         Alert.alert(
           'Crédito no habilitado',
-          `El cliente ${customerRow?.name || customerName || ''} no tiene crédito habilitado.`
+          `El cliente ${customerRow?.name || selectedCustomerName || ''} no tiene crédito habilitado.`
         );
         return;
       }
@@ -328,8 +345,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       let resolvedInvoiceCode = invoiceCode;
 
       const basePayload = {
-        customerId,
-        customerName,
+        customerId: selectedCustomerId,
+        customerName: selectedCustomerName,
         items: items.map((item) => ({
           productId: item.productId,
           productName: item.productName,
@@ -398,7 +415,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         };
 
         await db.update('sales', editingSaleLocalId, {
-          customer_id: customerId,
+          customer_id: selectedCustomerId,
           total_cents: getTotal(),
           status: 'completed',
           synced: 0,
@@ -406,7 +423,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         });
 
         await queueSaleUpdateForEdit(editingSaleLocalId, {
-          customerId,
+          customerId: selectedCustomerId,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
@@ -429,8 +446,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         const saleData = {
           localId,
           invoiceCode,
-          customerId,
-          customerName,
+          customerId: selectedCustomerId,
+          customerName: selectedCustomerName,
           items,
           totalCents: getTotal(),
           paymentMethod,
@@ -444,7 +461,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         await db.insert('sales', {
           local_id: localId,
           invoice_code: invoiceCode,
-          customer_id: customerId,
+          customer_id: selectedCustomerId,
           total_cents: getTotal(),
           status: 'completed',
           created_at: now,
@@ -465,10 +482,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         }
       }
 
-      const printResult = await autoPrintSaleTicket({
+      const saleTicketPayload = {
         invoiceCode: resolvedInvoiceCode,
         createdAt,
-        customerName,
+        customerName: selectedCustomerName,
         paymentMethod,
         transferBankName,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
@@ -485,15 +502,19 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           productId: item.productId,
           sku: item.sku || null,
         })),
-      });
+      };
 
-      if (!printResult.printed && printResult.reason === 'missing_native_module') {
-        Alert.alert(
-          'Impresion',
-          'No se encontro soporte de impresora termica Bluetooth en esta app. Instala el modulo nativo y genera un nuevo build.'
-        );
-      }
-      await playSaleSuccessSound();
+      // No bloquear el cierre de venta por impresión/sonido.
+      void playSaleSuccessSound();
+      void (async () => {
+        const printResult = await autoPrintSaleTicket(saleTicketPayload);
+        if (!printResult.printed && printResult.reason === 'missing_native_module') {
+          Alert.alert(
+            'Impresion',
+            'No se encontro soporte de impresora termica Bluetooth en esta app. Instala el modulo nativo y genera un nuevo build.'
+          );
+        }
+      })();
 
       // Limpiar carrito
       clear();

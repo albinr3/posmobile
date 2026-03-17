@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Button, Text, TextInput } from 'react-native-paper';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
@@ -38,11 +40,80 @@ function formatExpenseDate(timestamp: number): string {
   return date.toLocaleDateString('es-DO');
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function buildOperatingExpensesReportHtml(rows: OperatingExpenseReportRow[], from: string, to: string, totalCents: number): string {
+  const rowsHtml = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.description)}</td>
+          <td>${escapeHtml(row.category || '—')}</td>
+          <td>${escapeHtml(formatExpenseDate(row.expenseDate))}</td>
+          <td>${escapeHtml(row.registeredBy)}</td>
+          <td>${escapeHtml(formatCurrency(row.amountCents))}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  return `
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { size: Letter; margin: 14mm; }
+          body { font-family: Arial, sans-serif; color: #111; font-size: 11px; padding: 16px; }
+          .title { font-size: 18px; font-weight: 800; margin-bottom: 3px; }
+          .muted { color: #666; margin-bottom: 10px; }
+          .summary { border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+          .summary-row { display: flex; justify-content: space-between; margin: 4px 0; }
+          .summary-label { color: #555; }
+          .summary-value { font-weight: 700; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+          th { background: #f3f4f6; font-size: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="title">Reporte de gastos operativos</div>
+        <div class="muted">Generado: ${escapeHtml(new Date().toLocaleString('es-DO'))}</div>
+        <div class="summary">
+          <div class="summary-row"><span class="summary-label">Rango</span><span class="summary-value">${escapeHtml(`${from} a ${to}`)}</span></div>
+          <div class="summary-row"><span class="summary-label">Gastos</span><span class="summary-value">${escapeHtml(rows.length)}</span></div>
+          <div class="summary-row"><span class="summary-label">Total</span><span class="summary-value">${escapeHtml(formatCurrency(totalCents))}</span></div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Descripción</th>
+              <th>Categoría</th>
+              <th>Fecha</th>
+              <th>Registrado por</th>
+              <th>Monto</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export function OperatingExpensesReportScreen() {
   const today = useMemo(() => toYmd(new Date()), []);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [rows, setRows] = useState<OperatingExpenseReportRow[]>([]);
 
   const loadReport = useCallback(async (fromYmd: string, toYmd: string) => {
@@ -98,12 +169,82 @@ export function OperatingExpensesReportScreen() {
 
   const totalCents = rows.reduce((sum, row) => sum + row.amountCents, 0);
 
+  const handleExportPdf = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Exportacion', 'No hay gastos para exportar.');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const html = buildOperatingExpensesReportHtml(rows, from, to, totalCents);
+      const pdf = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Exportar reporte de gastos operativos',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Print.printAsync({ html });
+      }
+    } catch (error) {
+      console.error('Error exportando reporte de gastos operativos:', error);
+      Alert.alert('Exportacion', 'No se pudo exportar el reporte.');
+    } finally {
+      setExporting(false);
+    }
+  }, [rows, from, to, totalCents]);
+
+  const handlePrintLetter = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Impresion', 'No hay gastos para imprimir.');
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const html = buildOperatingExpensesReportHtml(rows, from, to, totalCents);
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo reporte de gastos operativos:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [rows, from, to, totalCents]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>Reporte de gastos operativos</Text>
           <Text style={styles.subtitle}>Listado y total por rango.</Text>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing || rows.length === 0}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting || rows.length === 0}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <View style={styles.filtersCard}>
@@ -186,6 +327,8 @@ const styles = StyleSheet.create({
   header: { marginBottom: 10 },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   filtersCard: {
     backgroundColor: ui.colors.surface,
     borderRadius: ui.radius.lg,

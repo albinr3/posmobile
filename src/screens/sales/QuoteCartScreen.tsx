@@ -5,17 +5,16 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Print from 'expo-print';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { getBottomSafeInset } from '../../utils/safeArea';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
-import { Asset } from 'expo-asset';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -26,23 +25,6 @@ interface QuoteCartScreenProps {
     };
   };
 }
-
-const escapeHtml = (value: string) =>
-  String(value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-const formatDateTime = (timestamp: number) =>
-  new Date(timestamp).toLocaleString('es-DO', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 
 export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const insets = useSafeAreaInsets();
@@ -66,8 +48,6 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     editingQuoteServerId,
     editingQuoteCode,
   } = useQuoteCartStore();
-  const logoUri = Asset.fromModule(require('../../../assets/movoLogoDark.png')).uri;
-
   useFocusEffect(
     useCallback(() => {
       const routeCustomerId = route?.params?.customerId;
@@ -269,85 +249,29 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         await syncService.queueOperation('quote', 'create', quoteData, localId);
       }
 
-      const itemsRows = quoteData.items
-        .map(
-          (item: any) => `
-            <tr>
-              <td>${escapeHtml(item.productName)}</td>
-              <td style="text-align:center;">—</td>
-              <td style="text-align:center;">—</td>
-              <td style="text-align:center;">${formatProductQty(item.quantity, item.unit)}</td>
-              <td style="text-align:right;">${formatCurrency(item.priceCents)}</td>
-              <td style="text-align:right;">${formatCurrency(item.totalCents)}</td>
-            </tr>
-          `
-        )
-        .join('');
+      const printResult = await printQuoteTicketDirect({
+        quoteCode: localQuoteCode,
+        createdAt: quoteData.createdAt,
+        customerName: quoteData.customerName || '(General) Cliente general',
+        totalCents: quoteData.totalCents,
+        items: quoteData.items.map((item: any) => ({
+          productName: String(item.productName || 'Producto'),
+          quantity: Number(item.quantity || 0),
+          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+          totalCents: Number(item.totalCents || 0),
+          unit: item.unit || 'UNIDAD',
+          reference: String(item.reference || item.sku || '').trim() || null,
+          productId: String(item.productId || '').trim() || null,
+          sku: String(item.sku || '').trim() || null,
+        })),
+      });
 
-      const subtotalCents = Math.round(quoteData.totalCents / 1.18);
-      const itbisCents = quoteData.totalCents - subtotalCents;
-      const taxRows = showItbisBreakdown
-        ? `<div class="line"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-                <div class="line"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>`
-        : '';
-
-      const html = `
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <style>
-              body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #111827; padding: 18px; }
-              .top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px; }
-              .biz { font-size:20px; font-weight:800; }
-              .doc { text-align:right; }
-              .doc-title { font-size:22px; font-weight:800; }
-              .meta { font-size:12px; color:#374151; margin-top:2px; }
-              .card { border:1px solid #E5E7EB; border-radius:8px; padding:10px; margin-bottom:12px; font-size:12px; }
-              table { width:100%; border-collapse:collapse; margin-top:8px; }
-              th, td { border-bottom: 1px solid #E5E7EB; padding: 7px 6px; font-size: 12px; }
-              th { background: #F9FAFB; text-align: left; }
-              .grid { margin-top:14px; display:flex; justify-content:flex-end; }
-              .totals { width:320px; border:1px solid #E5E7EB; border-radius:8px; padding:10px; }
-              .line { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
-              .total { display:flex; justify-content:space-between; border-top:1px solid #E5E7EB; padding-top:8px; margin-top:8px; font-size:16px; font-weight:800; }
-            </style>
-          </head>
-          <body>
-            <div class="top">
-              <div><img src="${escapeHtml(logoUri)}" style="height:42px; width:auto;" /></div>
-              <div class="doc">
-                <div class="doc-title">COTIZACION</div>
-                <div class="meta"><strong>No:</strong> ${escapeHtml(localQuoteCode)}</div>
-                <div class="meta"><strong>Fecha:</strong> ${escapeHtml(formatDateTime(now))}</div>
-              </div>
-            </div>
-            <div class="card"><strong>Cliente:</strong> ${escapeHtml(quoteData.customerName || '(General) Cliente general')}</div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Descripcion</th>
-                  <th style="text-align:center;">Codigo</th>
-                  <th style="text-align:center;">Referencia</th>
-                  <th style="text-align:center;">Cant.</th>
-                  <th style="text-align:right;">Precio</th>
-                  <th style="text-align:right;">Importe</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${itemsRows}
-              </tbody>
-            </table>
-            <div class="grid">
-              <div class="totals">
-                ${taxRows}
-                <div class="total"><span>Total</span><span>${formatCurrency(quoteData.totalCents)}</span></div>
-              </div>
-            </div>
-          </body>
-        </html>
-      `;
-
-      await Print.printAsync({ html });
+      if (!printResult.printed && printResult.reason === 'missing_native_module') {
+        Alert.alert(
+          'Impresion',
+          'No se encontro soporte de impresora termica Bluetooth en esta app. Instala el modulo nativo y genera un nuevo build.'
+        );
+      }
 
       clear();
       navigation.goBack();

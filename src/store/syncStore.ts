@@ -17,7 +17,7 @@ export const useSyncStore = create<SyncState>((set) => ({
   isSyncing: false,
   lastSyncTime: null,
   pendingCount: 0,
-  isOnline: true,
+  isOnline: false,
   syncBlockedReason: null,
 
   setIsSyncing: (syncing: boolean) => {

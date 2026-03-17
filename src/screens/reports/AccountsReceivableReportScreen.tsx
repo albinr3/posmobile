@@ -116,6 +116,7 @@ function buildArReportHtml(
       <head>
         <meta charset="UTF-8" />
         <style>
+          @page { size: Letter; margin: 14mm; }
           body { font-family: Arial, sans-serif; color: #111; font-size: 11px; padding: 16px; }
           .title { font-size: 18px; font-weight: 800; margin-bottom: 2px; }
           .subtitle { color: #555; margin-bottom: 8px; }
@@ -217,6 +218,7 @@ export function AccountsReceivableReportScreen() {
   const [maxAmount, setMaxAmount] = useState('');
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
 
   const [customerMenuVisible, setCustomerMenuVisible] = useState(false);
   const [customers, setCustomers] = useState<CustomerOption[]>([]);
@@ -403,22 +405,75 @@ export function AccountsReceivableReportScreen() {
     stats,
   ]);
 
+  const handlePrintLetter = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Impresion', 'No hay datos para imprimir.');
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const html = buildArReportHtml(rows, stats, {
+        generatedAt: Date.now(),
+        statusLabel: selectedStatusLabel,
+        customerName: selectedCustomerName,
+        invoiceCode,
+        startDate,
+        endDate,
+        minAmount,
+        maxAmount,
+        overdueOnly,
+      });
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo reporte AR:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [
+    endDate,
+    invoiceCode,
+    maxAmount,
+    minAmount,
+    overdueOnly,
+    rows,
+    selectedCustomerName,
+    selectedStatusLabel,
+    startDate,
+    stats,
+  ]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>Cuentas por cobrar</Text>
           <Text style={styles.subtitle}>Pendientes, vencidas y ranking de deudores.</Text>
-          <Button
-            mode="outlined"
-            style={styles.exportButton}
-            textColor={ui.colors.primary}
-            onPress={handleExportPdf}
-            disabled={loading || exporting || rows.length === 0}
-            loading={exporting}
-          >
-            Exportar PDF
-          </Button>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing || rows.length === 0}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting || rows.length === 0}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <View style={styles.statsGrid}>
@@ -639,7 +694,8 @@ const styles = StyleSheet.create({
   header: { marginBottom: 10 },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
-  exportButton: { marginTop: 10, alignSelf: 'flex-start' },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
   metricCard: {
     width: '48.5%',

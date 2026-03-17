@@ -255,6 +255,19 @@ eas build --platform android --profile production
 eas submit --platform android
 ```
 
+### Guardrails EAS (evitar reincidencias)
+
+1. No subir artefactos locales Android al worker:
+   - Mantener excluidos `android/build/` y `android/local.properties` (ver `.easignore`).
+2. Si aparece `No matching variant ... No variants exist` en muchas librerias a la vez:
+   - Relanzar con cache limpio: `eas build --platform android --profile preview --clear-cache`.
+3. Antes de subir cambios de parches nativos, validar localmente:
+   - `npx patch-package --reverse --error-on-fail`
+   - `npx patch-package --error-on-fail`
+4. Si falla `mergeDebugNativeLibs` en `react-native-worklets`:
+   - Verificar que el patch de `expo-modules-core` siga aplicando (usa fallback a `merge*JniLibFolders`).
+5. Cualquier cambio en `patches/`, `android/`, `app.json` o plugins Expo requiere build nativo nuevo (no OTA).
+
 ## Pendientes técnicos relevantes
 
 - Impresión Bluetooth en `PrinterSettingsScreen` está en modo simulado (scan/conexión/print real aún pendiente).

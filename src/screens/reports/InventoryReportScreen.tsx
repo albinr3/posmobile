@@ -51,6 +51,7 @@ function buildInventoryReportHtml(items: InventoryItem[], query: string, totalIn
       <head>
         <meta charset="UTF-8" />
         <style>
+          @page { size: Letter; margin: 14mm; }
           body { font-family: Arial, sans-serif; color: #111; font-size: 11px; padding: 16px; }
           .title { font-size: 18px; font-weight: 800; margin-bottom: 3px; }
           .muted { color: #666; margin-bottom: 10px; }
@@ -93,6 +94,7 @@ function buildInventoryReportHtml(items: InventoryItem[], query: string, totalIn
 export function InventoryReportScreen() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [query, setQuery] = useState('');
   const [rows, setRows] = useState<InventoryItem[]>([]);
 
@@ -191,22 +193,54 @@ export function InventoryReportScreen() {
     }
   }, [filteredRows, query, totalInventoryCostCents]);
 
+  const handlePrintLetter = useCallback(async () => {
+    if (filteredRows.length === 0) {
+      Alert.alert('Impresion', 'No hay productos para imprimir.');
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const html = buildInventoryReportHtml(filteredRows, query, totalInventoryCostCents);
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo reporte de inventario:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [filteredRows, query, totalInventoryCostCents]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>Reporte de inventario</Text>
           <Text style={styles.subtitle}>Productos activos con costo y stock actual.</Text>
-          <Button
-            mode="outlined"
-            style={styles.exportButton}
-            textColor={ui.colors.primary}
-            onPress={handleExportPdf}
-            disabled={loading || exporting || filteredRows.length === 0}
-            loading={exporting}
-          >
-            Exportar PDF
-          </Button>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing || filteredRows.length === 0}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting || filteredRows.length === 0}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <Searchbar
@@ -261,7 +295,8 @@ const styles = StyleSheet.create({
   header: { marginBottom: 10 },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
-  exportButton: { marginTop: 10, alignSelf: 'flex-start' },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   searchbar: {
     marginBottom: 10,
     borderRadius: ui.radius.md,

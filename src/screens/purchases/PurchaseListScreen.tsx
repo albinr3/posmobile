@@ -4,12 +4,10 @@ import { Searchbar, Text, Chip } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
 
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { db } from '../../database/Database';
-import { syncService } from '../../services/sync/SyncService';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 
@@ -48,16 +46,11 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
 
   const isOnlineRef = useRef(isOnline);
-  const getTokenRef = useRef(getToken);
-  const subUserTokenRef = useRef(subUserToken);
   isOnlineRef.current = isOnline;
-  getTokenRef.current = getToken;
-  subUserTokenRef.current = subUserToken;
 
   const loadLocalPurchases = useCallback(async () => {
     const rows = await db.query<any>(
@@ -93,16 +86,11 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
   }, []);
 
   const syncBestEffort = useCallback(async () => {
-    if (!isOnlineRef.current) return false;
-
-    const clerkToken = await getTokenRef.current();
-    if (!clerkToken || !subUserTokenRef.current) return false;
-
-    syncService.setTokenGetter(() => getTokenRef.current());
-    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-    return true;
-  }, []);
+    return runFullSyncIfAuthenticated({
+      isOnline: isOnlineRef.current,
+      ignoreCooldown: true,
+    });
+  }, [runFullSyncIfAuthenticated]);
 
   const loadPurchases = useCallback(async () => {
     try {

@@ -10,7 +10,7 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
-import { printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -29,6 +29,7 @@ interface PaymentReceiptItem {
   reference?: string | null;
   notes?: string | null;
   createdAt: number;
+  balanceAfterCents?: number | null;
   cancelledAt?: number | null;
   arId?: string | null;
 }
@@ -43,6 +44,24 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
 
   const loadLocalReceipts = useCallback(async () => {
+    const arRows = await db.query<any>('SELECT local_id, balance_cents, data FROM accounts_receivable');
+    const invoiceCodeByArLocalId = new Map<string, string>();
+    const balanceByArLocalId = new Map<string, number>();
+    for (const arRow of arRows) {
+      const arLocalId = arRow?.local_id ? String(arRow.local_id) : '';
+      if (!arLocalId) continue;
+      balanceByArLocalId.set(arLocalId, Number(arRow.balance_cents || 0));
+      try {
+        const arParsed = arRow?.data ? JSON.parse(arRow.data) : null;
+        const invoiceCode = String(arParsed?.sale?.invoiceCode || arParsed?.invoiceCode || '').trim();
+        if (invoiceCode) {
+          invoiceCodeByArLocalId.set(arLocalId, invoiceCode);
+        }
+      } catch {
+        // ignore malformed AR payloads
+      }
+    }
+
     const rows = await db.query<any>(
       `SELECT local_id, server_id, receipt_code, amount_cents, ar_id, data
        FROM payments
@@ -55,6 +74,9 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       } catch {
         parsed = null;
       }
+      const arLocalId = row.ar_id ? String(row.ar_id) : '';
+      const fallbackInvoiceCode = arLocalId ? invoiceCodeByArLocalId.get(arLocalId) || null : null;
+      const fallbackBalanceAfterCents = arLocalId ? balanceByArLocalId.get(arLocalId) ?? null : null;
       return {
         id: String(row.server_id || row.local_id),
         localId: String(row.local_id),
@@ -64,10 +86,13 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         paymentMethod: String(parsed?.method || parsed?.paymentMethod || 'EFECTIVO'),
         transferBankName: parsed?.transferBankName ? String(parsed.transferBankName) : null,
         customerName: String(parsed?.customerName || 'Cliente'),
-        invoiceCode: parsed?.invoiceCode ? String(parsed.invoiceCode) : null,
+        invoiceCode: parsed?.invoiceCode ? String(parsed.invoiceCode) : fallbackInvoiceCode,
         reference: parsed?.reference ? String(parsed.reference) : null,
         notes: parsed?.note ? String(parsed.note) : parsed?.notes ? String(parsed.notes) : null,
         createdAt: Number(parsed?.paidAt || parsed?.createdAt || Date.now()),
+        balanceAfterCents: Number.isFinite(Number(parsed?.balanceAfterCents))
+          ? Number(parsed.balanceAfterCents)
+          : fallbackBalanceAfterCents,
         cancelledAt: parsed?.cancelledAt ? Number(parsed.cancelledAt) : null,
         arId: row.ar_id ? String(row.ar_id) : null,
       } as PaymentReceiptItem;
@@ -183,6 +208,12 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
 
   const handleReprint = async (item: PaymentReceiptItem) => {
     try {
+      const shouldAttemptPrint = await hasConnectedPrinter();
+      if (!shouldAttemptPrint) {
+        Alert.alert('Impresión', 'No hay una impresora conectada en Ajustes.');
+        return;
+      }
+
       const printResult = await printPaymentReceiptDirect({
         receiptCode: item.receiptCode,
         createdAt: item.createdAt,
@@ -193,6 +224,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         reference: item.reference || null,
         notes: item.notes || null,
         amountCents: item.amountCents,
+        balanceAfterCents: item.balanceAfterCents ?? null,
         cancelledAt: item.cancelledAt || null,
       });
 

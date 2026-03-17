@@ -71,15 +71,18 @@ const buildReceiptHtml = (params: {
 
   const itemsRows = (items || [])
     .map(
-      (item) => `
+      (item) => {
+        const productReference = String((item as any)?.reference || '').trim() || '-';
+        return `
         <div class="item">
-          <div class="item-name">${escapeHtml(item.productName)}</div>
+          <div class="item-name">${escapeHtml(item.productName)} | ${escapeHtml(productReference)}</div>
           <div class="item-line">
             <span>${formatProductQty(item.quantity, item.unit)} x ${formatCurrency(item.priceCents)}</span>
             <span class="item-total">${formatCurrency(item.totalCents)}</span>
           </div>
         </div>
-      `
+      `;
+      }
     )
     .join('');
 
@@ -152,21 +155,6 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       .then((settings) => setShowItbisBreakdown(settings.showItbisOnReceipts))
       .catch(() => setShowItbisBreakdown(true));
   }, []);
-
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (event: any) => {
-      const actionType = event?.data?.action?.type;
-      if (actionType === 'GO_BACK' || actionType === 'POP') {
-        event.preventDefault();
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'POSMain' }],
-        });
-      }
-    });
-
-    return unsubscribe;
-  }, [navigation]);
 
   const loadSale = async () => {
     try {

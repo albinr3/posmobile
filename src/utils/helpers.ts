@@ -18,13 +18,38 @@ export function formatDate(timestamp: number): string {
 }
 
 export function formatDateTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleString('es-DO', {
+  const date = new Date(timestamp);
+  const options: Intl.DateTimeFormatOptions = {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
+    hour12: true,
+  };
+
+  try {
+    const formatter = new Intl.DateTimeFormat('es-DO', options);
+    return formatter
+      .formatToParts(date)
+      .map((part) => {
+        if (part.type !== 'dayPeriod') return part.value;
+        const normalized = String(part.value)
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-zA-Z]/g, '')
+          .toUpperCase();
+        return normalized.startsWith('P') ? 'PM' : 'AM';
+      })
+      .join('')
+      .replace(/[\u00A0\u202F]/g, ' ');
+  } catch {
+    return date
+      .toLocaleString('es-DO', options)
+      .replace(/[\u00A0\u202F]/g, ' ')
+      .replace(/p\.?\s*m\.?/gi, 'PM')
+      .replace(/a\.?\s*m\.?/gi, 'AM');
+  }
 }
 
 export function generateInvoiceCode(): string {

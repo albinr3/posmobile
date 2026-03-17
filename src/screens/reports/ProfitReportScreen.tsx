@@ -87,6 +87,7 @@ function buildProfitReportHtml(metrics: ProfitMetrics, from: string, to: string)
       <head>
         <meta charset="UTF-8" />
         <style>
+          @page { size: Letter; margin: 14mm; }
           body { font-family: Arial, sans-serif; color: #111; font-size: 12px; padding: 16px; }
           .title { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
           .muted { color: #666; margin-bottom: 12px; }
@@ -149,6 +150,7 @@ export function ProfitReportScreen() {
   const [to, setTo] = useState(defaults.to);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [metrics, setMetrics] = useState<ProfitMetrics>(ZERO_METRICS);
 
   const loadReport = useCallback(async (fromYmd: string, toYmd: string) => {
@@ -515,6 +517,19 @@ export function ProfitReportScreen() {
     }
   }, [from, metrics, to]);
 
+  const handlePrintLetter = useCallback(async () => {
+    setPrinting(true);
+    try {
+      const html = buildProfitReportHtml(metrics, from, to);
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo estado de resultados:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [from, metrics, to]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -522,16 +537,30 @@ export function ProfitReportScreen() {
           <Text style={styles.title}>Estado de Resultados (Ganancia)</Text>
           <Text style={styles.subtitle}>Ganancia calculada por periodo.</Text>
           <Text style={styles.period}>Periodo: {from} - {to}</Text>
-          <Button
-            mode="outlined"
-            style={styles.exportButton}
-            textColor={ui.colors.primary}
-            onPress={handleExportPdf}
-            disabled={loading || exporting}
-            loading={exporting}
-          >
-            Exportar PDF
-          </Button>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <View style={styles.filtersCard}>
@@ -708,7 +737,8 @@ const styles = StyleSheet.create({
   title: { color: ui.colors.text, fontSize: 24, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
   period: { color: ui.colors.textMuted, marginTop: 2, fontSize: 12 },
-  exportButton: { marginTop: 10, alignSelf: 'flex-start' },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   filtersCard: {
     backgroundColor: ui.colors.surface,
     borderRadius: ui.radius.lg,

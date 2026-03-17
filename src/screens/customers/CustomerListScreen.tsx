@@ -1,12 +1,11 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
 import { Searchbar, Text, Avatar, Chip } from 'react-native-paper';
+import NetInfo from '@react-native-community/netinfo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
-import { syncService } from '../../services/sync/SyncService';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { db } from '../../database/Database';
 import { Customer } from '../../types';
 import { ui } from '../../theme/ui';
@@ -15,44 +14,22 @@ interface CustomerListScreenProps {
   navigation: any;
 }
 
+async function hasInternetConnection(): Promise<boolean> {
+  const netInfo = await NetInfo.fetch();
+  return !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+}
+
 export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const isSyncingOnFocusRef = useRef(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (isSyncingOnFocusRef.current) return;
-      isSyncingOnFocusRef.current = true;
-      setLoading(true);
-      const syncAndLoad = async () => {
-        try {
-          const clerkToken = await getToken();
-          if (clerkToken && subUserToken) {
-            syncService.setTokenGetter(getToken);
-            syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-            await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-          }
-        } catch (error) {
-          console.error('Error sincronizando clientes al abrir pantalla:', error);
-        }
-        await loadCustomers();
-        isSyncingOnFocusRef.current = false;
-      };
-      syncAndLoad();
-      return () => {
-        isSyncingOnFocusRef.current = false;
-      };
-    }, [])
-  );
-
-  const loadCustomers = async () => {
+  const loadCustomers = useCallback(async () => {
     try {
-      const result = await db.query<any>('SELECT * FROM customers WHERE server_id IS NOT NULL ORDER BY name');
+      const result = await db.query<any>('SELECT * FROM customers ORDER BY name');
       const mapped = result.map((row) => ({
         localId: row.local_id,
         serverId: row.server_id,
@@ -76,17 +53,44 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (isSyncingOnFocusRef.current) return;
+      isSyncingOnFocusRef.current = true;
+      setLoading(true);
+      const syncAndLoad = async () => {
+        await loadCustomers();
+
+        const isOnline = await hasInternetConnection();
+        if (!isOnline) {
+          isSyncingOnFocusRef.current = false;
+          return;
+        }
+
+        try {
+          await runFullSyncIfAuthenticated({ ignoreCooldown: true, isOnline });
+        } catch (error) {
+          console.error('Error sincronizando clientes al abrir pantalla:', error);
+        }
+
+        await loadCustomers();
+        isSyncingOnFocusRef.current = false;
+      };
+      syncAndLoad();
+      return () => {
+        isSyncingOnFocusRef.current = false;
+      };
+    }, [loadCustomers, runFullSyncIfAuthenticated])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
+
+    const isOnline = await hasInternetConnection();
     try {
-      const clerkToken = await getToken();
-      if (clerkToken && subUserToken) {
-        syncService.setTokenGetter(getToken);
-        syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-        await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-      }
+      await runFullSyncIfAuthenticated({ ignoreCooldown: true, isOnline });
     } catch (error) {
       console.error('Error sincronizando clientes:', error);
     }

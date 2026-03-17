@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
+import NetInfo from '@react-native-community/netinfo';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Chip, Icon, Text, TextInput, ActivityIndicator } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -75,6 +76,11 @@ function getStatusChipStyle(status: string) {
   return styles.statusChipDefault;
 }
 
+async function hasInternetConnection(): Promise<boolean> {
+  const netInfo = await NetInfo.fetch();
+  return !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+}
+
 export function BillingPlansScreen() {
   const { getToken } = useAuth();
   const { subUserToken, accountId, setBillingState } = useAuthStore();
@@ -123,6 +129,13 @@ export function BillingPlansScreen() {
       try {
         if (isRefresh) setRefreshing(true);
         else setLoading(true);
+
+        const online = await hasInternetConnection();
+        if (!online) {
+          setOverview(null);
+          setBillingState(null);
+          return;
+        }
 
         const auth = await buildAuthContext();
         const data = await getBillingOverviewWithOptions(auth, { forceRefresh: isRefresh });

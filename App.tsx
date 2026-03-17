@@ -1,22 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View, Text, ActivityIndicator, Alert } from 'react-native';
+import { StyleSheet, View, Text, ActivityIndicator, Alert, AppState } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider, MD3LightTheme } from 'react-native-paper';
 import { ClerkProvider, useAuth, useUser } from '@clerk/clerk-expo';
+import NetInfo from '@react-native-community/netinfo';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import { OtaUpdateBanner } from './src/components/OtaUpdateBanner';
+import { NetworkToast } from './src/components/NetworkToast';
 import { db } from './src/database/Database';
 import {
   getBiometricEnabled,
   hasStoredSubUserSession,
   promptBiometric,
 } from './src/services/auth/biometricAuthService';
+import {
+  evaluateOfflineSessionWindow,
+  markInternetConnectionSeen,
+  OFFLINE_SESSION_MAX_DAYS,
+} from './src/services/auth/offlineSessionService';
 import { syncService } from './src/services/sync/SyncService';
 import { useOtaUpdates } from './src/services/updates/useOtaUpdates';
 import { useAuthStore } from './src/store/authStore';
@@ -35,6 +42,8 @@ const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const LOCAL_DB_WIPED_ONCE_KEY = 'movopos_local_db_wiped_once_v2';
 const LOCAL_HARD_RESET_ONCE_KEY = 'movopos_local_hard_reset_once_v1';
 const APP_AUTH_DEBUG = false;
+const OFFLINE_SESSION_EXPIRED_TITLE = 'Sesion expirada';
+const OFFLINE_SESSION_EXPIRED_MESSAGE = `Debes conectarte a internet al menos una vez cada ${OFFLINE_SESSION_MAX_DAYS} dias para continuar usando MOVOPos.`;
 
 const tokenCache = {
   getToken: async (key: string) => {
@@ -56,11 +65,13 @@ const tokenCache = {
 function RootApp() {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authRefreshTick, setAuthRefreshTick] = useState(0);
   const { setLoading, setUser, isAuthenticated, loadSubUserToken, logout, setBiometricEnabled } = useAuthStore();
   const { syncBlockedReason } = useSyncStore();
   const otaUpdates = useOtaUpdates();
   const lastSyncBlockedReasonRef = useRef<string | null>(null);
   const authHydratedRef = useRef(false);
+  const offlineExpiryAlertShownRef = useRef(false);
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
 
@@ -71,6 +82,41 @@ function RootApp() {
       db.destroy().catch((error) => {
         console.warn('No se pudo cerrar SQLite al desmontar App:', error);
       });
+    };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      const hasInternet = !!state.isConnected && state.isInternetReachable !== false;
+      if (!hasInternet) return;
+      void markInternetConnectionSeen();
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    const refreshNetworkState = async () => {
+      const netInfo = await NetInfo.fetch();
+      const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+      syncService.handleConnectivityChange(hasInternet);
+      if (hasInternet) {
+        void markInternetConnectionSeen();
+        void syncService.incrementalSync();
+      }
+    };
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        setAuthRefreshTick((prev) => prev + 1);
+        void refreshNetworkState();
+      }
+    });
+
+    return () => {
+      appStateSubscription.remove();
     };
   }, []);
 
@@ -112,34 +158,42 @@ function RootApp() {
   }, []);
 
   useEffect(() => {
-    if (!isReady || !isLoaded) return;
+    if (!isReady) return;
 
     const hydrateAuthState = async () => {
+      const netInfo = await NetInfo.fetch();
+      const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+      const offlineWindow = await evaluateOfflineSessionWindow(hasInternet);
+
       if (APP_AUTH_DEBUG) {
         console.log('[App] hydrateAuthState()', {
           isSignedIn,
           hasClerkUser: !!user,
           isAuthenticated,
           clerkUserId: user?.id || null,
+          hasInternet,
+          offlineExpired: offlineWindow.expired,
+          offlineLastOnlineAtMs: offlineWindow.lastOnlineAtMs,
         });
       }
-      if (isSignedIn && user) {
-        setUser({
-          id: user.id,
-          name: user.fullName || user.firstName || 'Usuario',
-          phone: user.primaryPhoneNumber?.phoneNumber,
-          email: user.primaryEmailAddress?.emailAddress,
-          companyId: '',
-          role: '',
-        });
-
-        if (authHydratedRef.current) return;
+      if (!authHydratedRef.current) {
         authHydratedRef.current = true;
 
         const biometricEnabled = await getBiometricEnabled();
         setBiometricEnabled(biometricEnabled);
 
         const hasStoredSession = await hasStoredSubUserSession();
+        if (!hasInternet && offlineWindow.expired && hasStoredSession) {
+          if (APP_AUTH_DEBUG) console.log('[App] sesion offline vencida (pre-biometria) -> logout()');
+          await logout();
+
+          if (!offlineExpiryAlertShownRef.current) {
+            offlineExpiryAlertShownRef.current = true;
+            Alert.alert(OFFLINE_SESSION_EXPIRED_TITLE, OFFLINE_SESSION_EXPIRED_MESSAGE);
+          }
+          return;
+        }
+
         if (biometricEnabled && hasStoredSession) {
           const biometricResult = await promptBiometric('Desbloquea MOVOPos para continuar');
           if (!biometricResult.success) {
@@ -150,32 +204,68 @@ function RootApp() {
 
         // Restaurar subusuario persistido para evitar relogin tras cerrar app.
         await loadSubUserToken();
+      }
+
+      const storeIsAuthenticated = useAuthStore.getState().isAuthenticated;
+      if (!hasInternet && offlineWindow.expired && storeIsAuthenticated) {
+        if (APP_AUTH_DEBUG) console.log('[App] sesion offline vencida -> logout()');
+        await logout();
+
+        if (!offlineExpiryAlertShownRef.current) {
+          offlineExpiryAlertShownRef.current = true;
+          Alert.alert(OFFLINE_SESSION_EXPIRED_TITLE, OFFLINE_SESSION_EXPIRED_MESSAGE);
+        }
         return;
       }
 
-      authHydratedRef.current = false;
-      setBiometricEnabled(false);
+      if (isLoaded && isSignedIn && user) {
+        setUser({
+          id: user.id,
+          name: user.fullName || user.firstName || 'Usuario',
+          phone: user.primaryPhoneNumber?.phoneNumber,
+          email: user.primaryEmailAddress?.emailAddress,
+          companyId: '',
+          role: '',
+        });
+        return;
+      }
 
-      if (!isSignedIn && isAuthenticated) {
-        if (APP_AUTH_DEBUG) console.log('[App] Clerk no firmado pero authStore autenticado -> logout()');
-        await logout();
+      if (isLoaded && !isSignedIn && storeIsAuthenticated) {
+        if (hasInternet) {
+          if (APP_AUTH_DEBUG) console.log('[App] Clerk no firmado con internet -> logout()');
+          await logout();
+        } else if (APP_AUTH_DEBUG) {
+          console.log('[App] Clerk no firmado sin internet -> se mantiene sesión local');
+        }
       }
     };
 
     hydrateAuthState();
-  }, [isReady, isLoaded, isSignedIn, user?.id, isAuthenticated, setUser, loadSubUserToken, logout]);
+  }, [isReady, isLoaded, isSignedIn, user?.id, isAuthenticated, setUser, loadSubUserToken, logout, authRefreshTick]);
 
   useEffect(() => {
     if (!isReady || !syncBlockedReason) return;
-    if (lastSyncBlockedReasonRef.current === syncBlockedReason) return;
-    lastSyncBlockedReasonRef.current = syncBlockedReason;
-    if (APP_AUTH_DEBUG) console.log('[App] syncBlockedReason:', syncBlockedReason);
-    Alert.alert('Sincronizacion en espera', syncBlockedReason);
+    let cancelled = false;
+
+    const notifyBlockedReason = async () => {
+      const netInfo = await NetInfo.fetch();
+      const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+      if (!hasInternet || cancelled) return;
+      if (lastSyncBlockedReasonRef.current === syncBlockedReason) return;
+      lastSyncBlockedReasonRef.current = syncBlockedReason;
+      if (APP_AUTH_DEBUG) console.log('[App] syncBlockedReason:', syncBlockedReason);
+      Alert.alert('Sincronizacion en espera', syncBlockedReason);
+    };
+
+    void notifyBlockedReason();
+    return () => {
+      cancelled = true;
+    };
   }, [isReady, syncBlockedReason]);
 
   useEffect(() => {
     if (!isReady) return;
-    void otaUpdates.checkForUpdates();
+    void otaUpdates.checkForUpdates({ silentIfOffline: true });
   }, [isReady, otaUpdates.checkForUpdates]);
 
   const initializeApp = async () => {
@@ -280,6 +370,7 @@ function RootApp() {
           <ErrorBoundary>
             <AppNavigator />
           </ErrorBoundary>
+          <NetworkToast />
           <OtaUpdateBanner
             visible={otaUpdates.visible}
             status={otaUpdates.status}

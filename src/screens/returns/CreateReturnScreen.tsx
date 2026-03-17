@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, Alert, ScrollView, Image, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, Alert, ScrollView, Image, TouchableOpacity, BackHandler } from 'react-native';
 import { Text, Surface, Searchbar, Button, IconButton, TextInput, Divider, ActivityIndicator, Icon } from 'react-native-paper';
-import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { SafeFab } from '../../components/SafeFab';
@@ -9,8 +8,8 @@ import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { db } from '../../database/Database';
 import { useSyncStore } from '../../store/syncStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { syncService } from '../../services/sync/SyncService';
-import { useAuthStore } from '../../store/authStore';
 import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 
 interface CreateReturnScreenProps {
@@ -163,7 +162,7 @@ function toIsoString(value: any): string | null {
 }
 
 export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
-  const { getToken } = useAuth();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
   const [screenMode, setScreenMode] = useState<ReturnScreenMode>('LIST');
 
@@ -222,12 +221,10 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
 
       if (refresh && isOnline) {
         try {
-          const clerkToken = await getToken();
-          if (clerkToken) {
-            syncService.setTokenGetter(() => getToken());
-            syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-            await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-          }
+          await runFullSyncIfAuthenticated({
+            isOnline,
+            ignoreCooldown: true,
+          });
         } catch (syncError) {
           console.error('Error sincronizando devoluciones en refresh:', syncError);
         }
@@ -490,7 +487,33 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       void loadReturns(true);
     });
     return unsubscribe;
-  }, [navigation, isOnline, getToken]);
+  }, [navigation, isOnline, runFullSyncIfAuthenticated]);
+
+  useEffect(() => {
+    const onHardwareBack = () => {
+      if (screenMode !== 'CREATE') return false;
+
+      if (selectedSale) {
+        setSelectedSale(null);
+        setReturnItems([]);
+        setNotes('');
+        return true;
+      }
+
+      if (selectedCustomer) {
+        setSelectedCustomer(null);
+        setQuery('');
+        setSearchResults([]);
+        return true;
+      }
+
+      openListMode();
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onHardwareBack);
+    return () => sub.remove();
+  }, [screenMode, selectedSale, selectedCustomer]);
 
   useEffect(() => {
     let mounted = true;
@@ -541,45 +564,123 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           return;
         }
 
-        const placeholders = ids.map(() => '?').join(', ');
+        const customerIds = new Set(ids.map((value) => String(value).trim()).filter(Boolean));
+        const selectedCustomerNameNormalized = String(selectedCustomer.name || '').trim().toLowerCase();
+        const selectedCustomerIsGeneral =
+          selectedCustomerNameNormalized === 'cliente general' ||
+          selectedCustomerNameNormalized === 'general';
         const rows = await db.query<any>(
           `SELECT local_id, server_id, invoice_code, customer_id, total_cents, status, created_at, data
            FROM sales
-           WHERE customer_id IN (${placeholders})
-           ORDER BY created_at DESC, rowid DESC`,
-          ids
+           ORDER BY created_at DESC, rowid DESC`
         );
 
         const q = query.trim().toLowerCase();
-        const localResults: SaleSearchResult[] = rows
-          .map((row) => {
-            const parsed = parseJsonSafe(row.data);
-            const soldAt = toIsoString(parsed?.soldAt || parsed?.createdAt || row.created_at);
-            const status = String(parsed?.status || row.status || '').toLowerCase();
-            const invoiceCode = String(row.invoice_code || parsed?.invoiceCode || '-');
-            return {
-              id: String(row.local_id || row.server_id),
+        const debugCounters = {
+          totalRows: rows.length,
+          excludedByCustomer: 0,
+          excludedByStatusCancelled: 0,
+          excludedByQuery: 0,
+          included: 0,
+        };
+        const debugDiscardedSamples: Array<{
+          saleId: string;
+          invoiceCode: string;
+          reason: string;
+          status: string;
+          candidateCustomerIds: string[];
+          saleCustomerName: string;
+        }> = [];
+
+        const localResults: SaleSearchResult[] = [];
+        for (const row of rows) {
+          const parsed = parseJsonSafe(row.data);
+          const candidateCustomerIds = [
+            row.customer_id,
+            parsed?.customerId,
+            parsed?.customer?.id,
+            parsed?.customer?.localId,
+            parsed?.customer?.serverId,
+          ]
+            .map((value) => String(value || '').trim())
+            .filter(Boolean);
+
+          const saleCustomerName = String(parsed?.customerName || parsed?.customer?.name || '')
+            .trim()
+            .toLowerCase();
+          const status = String(parsed?.status || row.status || '').toLowerCase();
+          const invoiceCode = String(row.invoice_code || parsed?.invoiceCode || '-');
+          const saleId = String(row.local_id || row.server_id || '');
+
+          const captureDiscard = (reason: string) => {
+            if (debugDiscardedSamples.length >= 8) return;
+            debugDiscardedSamples.push({
+              saleId,
               invoiceCode,
-              soldAt,
-              type: String(parsed?.type || 'CONTADO'),
-              totalCents: Number(parsed?.totalCents || row.total_cents || 0),
+              reason,
               status,
-            };
-          })
-          .filter((row) => row.status !== 'cancelled')
-          .filter((row) => !q || row.invoiceCode.toLowerCase().includes(q))
-          .map((row) => ({
-            id: row.id,
-            invoiceCode: row.invoiceCode,
-            soldAt: row.soldAt,
-            type: row.type,
-            totalCents: row.totalCents,
+              candidateCustomerIds,
+              saleCustomerName,
+            });
+          };
+
+          const matchesCustomerById = candidateCustomerIds.some((id) => customerIds.has(id));
+          const matchesCustomerByName =
+            !!selectedCustomerNameNormalized &&
+            !!saleCustomerName &&
+            saleCustomerName === selectedCustomerNameNormalized;
+          const matchesImplicitGeneralWithoutCustomerData =
+            selectedCustomerIsGeneral &&
+            candidateCustomerIds.length === 0 &&
+            !saleCustomerName;
+          if (!matchesCustomerById && !matchesCustomerByName && !matchesImplicitGeneralWithoutCustomerData) {
+            debugCounters.excludedByCustomer += 1;
+            captureDiscard('customer_mismatch');
+            continue;
+          }
+
+          if (status === 'cancelled') {
+            debugCounters.excludedByStatusCancelled += 1;
+            captureDiscard('status_cancelled');
+            continue;
+          }
+
+          if (q && !invoiceCode.toLowerCase().includes(q)) {
+            debugCounters.excludedByQuery += 1;
+            captureDiscard('query_mismatch');
+            continue;
+          }
+
+          debugCounters.included += 1;
+          localResults.push({
+            id: saleId,
+            invoiceCode,
+            soldAt: toIsoString(parsed?.soldAt || parsed?.createdAt || row.created_at),
+            type: String(parsed?.type || 'CONTADO'),
+            totalCents: Number(parsed?.totalCents || row.total_cents || 0),
             customer: {
               id: selectedCustomer.serverId || selectedCustomer.localId,
               name: selectedCustomer.name,
               phone: selectedCustomer.phone || null,
             },
-          }));
+          });
+        }
+
+        console.log('[ReturnsSearch][Debug] resumen facturas para devolucion', {
+          selectedCustomer: {
+            localId: selectedCustomer.localId,
+            serverId: selectedCustomer.serverId,
+            name: selectedCustomer.name,
+          },
+          customerIds: Array.from(customerIds),
+          selectedCustomerNameNormalized,
+          selectedCustomerIsGeneral,
+          query: q,
+          ...debugCounters,
+        });
+        if (debugDiscardedSamples.length) {
+          console.log('[ReturnsSearch][Debug] muestras descartadas', debugDiscardedSamples);
+        }
 
         setSearchResults(localResults);
       } catch (error: any) {

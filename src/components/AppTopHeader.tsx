@@ -4,6 +4,7 @@ import { Text, Icon, Menu } from 'react-native-paper';
 import { useNavigation, DrawerActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth, useUser } from '@clerk/clerk-expo';
+import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
@@ -63,6 +64,11 @@ function normalizeCompanySettings(apiUrl: string, payload: CompanySettingsRespon
 
 function getBillingStateStorageKey(cacheKey: string): string {
   return `${BILLING_STATE_STORAGE_PREFIX}${cacheKey}`;
+}
+
+async function hasInternetConnection(): Promise<boolean> {
+  const netInfo = await NetInfo.fetch();
+  return !!netInfo.isConnected && netInfo.isInternetReachable !== false;
 }
 
 function isBillingStateCacheEntry(value: any): value is BillingStateCacheEntry {
@@ -145,6 +151,9 @@ export function AppTopHeader() {
         }
 
         const requestPromise = (async (): Promise<BillingStateResponse | null> => {
+          const online = await hasInternetConnection();
+          if (!online) return null;
+
           const clerkToken = await getTokenRef.current();
           if (!clerkToken) return null;
 
@@ -221,6 +230,9 @@ export function AppTopHeader() {
           }
           return;
         }
+
+        const online = await hasInternetConnection();
+        if (!online) return;
 
         const clerkToken = await getTokenRef.current();
         if (!clerkToken) return;

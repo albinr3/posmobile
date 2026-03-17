@@ -4,9 +4,7 @@ import { Searchbar, Text, Chip, IconButton } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
-import { syncService } from '../../services/sync/SyncService';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { db } from '../../database/Database';
 import { Product } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
@@ -24,8 +22,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const syncingOnFocusRef = useRef(false);
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
 
   useFocusEffect(
     useCallback(() => {
@@ -49,14 +46,6 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
   );
 
   const syncProducts = async (showSessionAlert: boolean) => {
-    const clerkToken = await getToken();
-    if (!clerkToken || !subUserToken) {
-      if (showSessionAlert) {
-        Alert.alert('Sincronización', 'No hay sesión activa para sincronizar.');
-      }
-      return false;
-    }
-
     // Reintentar productos que quedaron en error en cola (ej: imagen no subida).
     await db.runAsync(
       `UPDATE sync_queue
@@ -64,9 +53,12 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
        WHERE entity_type = 'product' AND action IN ('create', 'update') AND status = 'error'`
     );
 
-    syncService.setTokenGetter(getToken);
-    syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-    await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+    const synced = await runFullSyncIfAuthenticated({ ignoreCooldown: true });
+    if (!synced && showSessionAlert) {
+      Alert.alert('Sincronización', 'No hay sesión activa para sincronizar.');
+    }
+    if (!synced) return false;
+
     return true;
   };
 

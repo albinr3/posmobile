@@ -4,10 +4,8 @@ import { Searchbar, Text, Avatar, Chip } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
-import { syncService } from '../../services/sync/SyncService';
 import { db } from '../../database/Database';
 import { ui } from '../../theme/ui';
 
@@ -29,7 +27,7 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
   const [suppliers, setSuppliers] = useState<SupplierItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { getToken } = useAuth();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
 
   const mapSupplierRows = useCallback((rows: any[]): SupplierItem[] => {
@@ -76,21 +74,19 @@ export function SupplierListScreen({ navigation }: SupplierListScreenProps) {
     }
 
     try {
-      if (!isOnline) return;
-      const clerkToken = await getToken();
-      const subUserToken = useAuthStore.getState().subUserToken;
-      if (!clerkToken || !subUserToken) return;
+      const synced = await runFullSyncIfAuthenticated({
+        isOnline,
+        ignoreCooldown: true,
+      });
+      if (!synced) return;
 
-      syncService.setTokenGetter(() => getToken());
-      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       await loadSuppliersFromDb();
     } catch (error) {
       console.error('Error sincronizando proveedores:', error);
     } finally {
       setRefreshing(false);
     }
-  }, [getToken, isOnline, loadSuppliersFromDb]);
+  }, [isOnline, loadSuppliersFromDb, runFullSyncIfAuthenticated]);
 
   useFocusEffect(
     useCallback(() => {

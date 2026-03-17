@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -11,11 +10,11 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
-import { syncService } from '../../services/sync/SyncService';
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface QuoteListItem {
   localId: string;
@@ -54,15 +53,10 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
-  const getTokenRef = useRef(getToken);
-  const subUserTokenRef = useRef(subUserToken);
   const isOnlineRef = useRef(isOnline);
   const isSyncingOnFocusRef = useRef(false);
-  getTokenRef.current = getToken;
-  subUserTokenRef.current = subUserToken;
   isOnlineRef.current = isOnline;
 
   useFocusEffect(
@@ -75,11 +69,12 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
           await loadQuotes();
           if (!active || !isOnlineRef.current) return;
 
-          const clerkToken = await getTokenRef.current();
-          if (!clerkToken || !subUserTokenRef.current) return;
-          syncService.setTokenGetter(() => getTokenRef.current());
-          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+          const synced = await runFullSyncIfAuthenticated({
+            isOnline: isOnlineRef.current,
+            ignoreCooldown: true,
+          });
+          if (!synced) return;
+
           if (active) {
             await loadQuotes();
           }
@@ -96,7 +91,7 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
         active = false;
         isSyncingOnFocusRef.current = false;
       };
-    }, [])
+    }, [runFullSyncIfAuthenticated])
   );
 
   useFocusEffect(
@@ -267,11 +262,61 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
 
   const handlePrintQuote = async (quote: QuoteListItem) => {
     try {
-      const { html } = await buildQuoteHtml(quote);
-      await Print.printAsync({ html });
+      const row = await db.queryFirst<any>('SELECT * FROM quotes WHERE local_id = ?', [quote.localId]);
+      if (!row) {
+        Alert.alert('Cotización', 'No se encontró la cotización.');
+        return;
+      }
+
+      let parsedData: any = null;
+      try {
+        parsedData = row.data ? JSON.parse(row.data) : null;
+      } catch {
+        parsedData = null;
+      }
+
+      const items = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
+      const createdAt = Number(row.created_at || parsedData?.createdAt || Date.now());
+      const quoteCode = String(row.quote_code || parsedData?.quoteCode || quote.quoteCode || '-');
+      const customerName = parsedData?.customerName || quote.customerName || '(General) Cliente general';
+
+      const printResult = await printQuoteTicketDirect({
+        quoteCode,
+        createdAt,
+        customerName,
+        totalCents,
+        items: items.map((item: any) => ({
+          productName: String(item.productName || 'Producto'),
+          quantity: Number(item.quantity || item.qty || 0),
+          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+          totalCents: Number(item.totalCents || 0),
+          unit: item.unit || 'UNIDAD',
+          reference: String(item.reference || item.sku || '').trim() || null,
+          productId: String(item.productId || '').trim() || null,
+          sku: String(item.sku || '').trim() || null,
+        })),
+      });
+
+      if (printResult.printed) return;
+
+      if (printResult.reason === 'missing_config') {
+        Alert.alert('Impresión', 'No hay impresora térmica conectada. Ve a Ajustes > Impresora.');
+        return;
+      }
+
+      if (printResult.reason === 'missing_native_module') {
+        Alert.alert(
+          'Impresión',
+          'No se encontró soporte de impresora térmica Bluetooth en esta app. Instala el módulo nativo y genera un nuevo build.'
+        );
+        return;
+      }
+
+      Alert.alert('Impresión', printResult.message || `No se pudo imprimir ${quoteCode}.`);
     } catch (error) {
       console.error('Error imprimiendo cotización:', error);
-      Alert.alert('Error', 'No se pudo abrir la impresión de la cotización.');
+      Alert.alert('Error', 'No se pudo imprimir la cotización.');
     }
   };
 

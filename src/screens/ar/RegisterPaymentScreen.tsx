@@ -9,7 +9,7 @@ import { generateLocalId, generateReceiptCode, formatCurrency } from '../../util
 import { AccountReceivable } from '../../types';
 import { ui } from '../../theme/ui';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
-import { printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
 
 interface RegisterPaymentScreenProps {
   navigation: any;
@@ -99,6 +99,13 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       const localId = generateLocalId();
       const receiptCode = generateReceiptCode();
       const now = Date.now();
+      let invoiceCode: string | null = null;
+      try {
+        const parsedArData = arItem?.data ? JSON.parse(arItem.data) : null;
+        invoiceCode = String(parsedArData?.sale?.invoiceCode || parsedArData?.invoiceCode || '').trim() || null;
+      } catch {
+        invoiceCode = null;
+      }
 
       const paymentData = {
         localId,
@@ -107,12 +114,23 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
         arServerId: arItem.serverId,
         customerId: arItem.customerId,
         customerName: arItem.customerName,
+        invoiceCode,
         amountCents,
         paymentMethod,
         transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
         reference: reference.trim() || null,
         notes: notes.trim() || null,
         createdAt: now,
+      };
+
+      // Actualizar cuenta por cobrar
+      const newPaidCents = arItem.paidCents + amountCents;
+      const newBalanceCents = arItem.totalCents - newPaidCents;
+      const newStatus = newBalanceCents <= 0 ? 'PAGADO' : newPaidCents > 0 ? 'PARCIAL' : 'PENDIENTE';
+
+      const paymentDataWithBalance = {
+        ...paymentData,
+        balanceAfterCents: newBalanceCents,
       };
 
       // Guardar pago en SQLite
@@ -122,13 +140,8 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
         amount_cents: amountCents,
         ar_id: arItem.localId,
         synced: 0,
-        data: JSON.stringify(paymentData),
+        data: JSON.stringify(paymentDataWithBalance),
       });
-
-      // Actualizar cuenta por cobrar
-      const newPaidCents = arItem.paidCents + amountCents;
-      const newBalanceCents = arItem.totalCents - newPaidCents;
-      const newStatus = newBalanceCents <= 0 ? 'PAGADO' : newPaidCents > 0 ? 'PARCIAL' : 'PENDIENTE';
 
       await db.update('accounts_receivable', arItem.localId, {
         paid_cents: newPaidCents,
@@ -137,38 +150,34 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       });
 
       // Agregar a cola de sincronización
-      await syncService.queueOperation('payment', 'create', paymentData, localId);
-
-      let invoiceCode: string | null = null;
-      try {
-        const parsedArData = arItem?.data ? JSON.parse(arItem.data) : null;
-        invoiceCode = String(parsedArData?.sale?.invoiceCode || parsedArData?.invoiceCode || '').trim() || null;
-      } catch {
-        invoiceCode = null;
-      }
+      await syncService.queueOperation('payment', 'create', paymentDataWithBalance, localId);
 
       let printNotice = '';
       try {
-        const printResult = await printPaymentReceiptDirect({
-          receiptCode,
-          createdAt: now,
-          customerName: arItem.customerName,
-          invoiceCode,
-          paymentMethod,
-          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
-          reference: reference.trim() || null,
-          notes: notes.trim() || null,
-          amountCents,
-          cancelledAt: null,
-        });
+        const shouldAttemptPrint = await hasConnectedPrinter();
+        if (shouldAttemptPrint) {
+          const printResult = await printPaymentReceiptDirect({
+            receiptCode,
+            createdAt: now,
+            customerName: arItem.customerName,
+            invoiceCode,
+            paymentMethod,
+            transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+            reference: reference.trim() || null,
+            notes: notes.trim() || null,
+            amountCents,
+            balanceAfterCents: newBalanceCents,
+            cancelledAt: null,
+          });
 
-        if (!printResult.printed) {
-          if (printResult.reason === 'missing_config') {
-            printNotice = '\n\nPago guardado, pero no hay impresora térmica conectada.';
-          } else if (printResult.reason === 'missing_native_module') {
-            printNotice = '\n\nPago guardado, pero esta app no tiene soporte nativo para impresora térmica.';
-          } else {
-            printNotice = `\n\nPago guardado, pero no se pudo imprimir: ${printResult.message || 'error de impresión'}.`;
+          if (!printResult.printed) {
+            if (printResult.reason === 'missing_config') {
+              printNotice = '\n\nPago guardado, pero no hay impresora térmica conectada.';
+            } else if (printResult.reason === 'missing_native_module') {
+              printNotice = '\n\nPago guardado, pero esta app no tiene soporte nativo para impresora térmica.';
+            } else {
+              printNotice = `\n\nPago guardado, pero no se pudo imprimir: ${printResult.message || 'error de impresión'}.`;
+            }
           }
         }
       } catch {

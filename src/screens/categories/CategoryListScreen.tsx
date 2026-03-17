@@ -4,10 +4,8 @@ import { Searchbar, Text, Avatar, Chip } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
-import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
-import { syncService } from '../../services/sync/SyncService';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { db } from '../../database/Database';
 import { ui } from '../../theme/ui';
 
@@ -29,13 +27,11 @@ export function CategoryListScreen({ navigation }: CategoryListScreenProps) {
   const [categories, setCategories] = useState<CategoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const { getToken } = useAuth();
   const { isOnline } = useSyncStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const isSyncingOnFocusRef = useRef(false);
-  const getTokenRef = useRef(getToken);
   const isOnlineRef = useRef(isOnline);
 
-  getTokenRef.current = getToken;
   isOnlineRef.current = isOnline;
 
   const mapCategoryRows = useCallback((rows: any[]): CategoryItem[] => {
@@ -82,21 +78,19 @@ export function CategoryListScreen({ navigation }: CategoryListScreenProps) {
     }
 
     try {
-      if (!isOnlineRef.current) return;
-      const clerkToken = await getTokenRef.current();
-      const subUserToken = useAuthStore.getState().subUserToken;
-      if (!clerkToken || !subUserToken) return;
+      const synced = await runFullSyncIfAuthenticated({
+        isOnline: isOnlineRef.current,
+        ignoreCooldown: true,
+      });
+      if (!synced) return;
 
-      syncService.setTokenGetter(() => getTokenRef.current());
-      syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-      await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       await loadCategoriesFromDb();
     } catch (error) {
       console.error('Error sincronizando categorías:', error);
     } finally {
       setRefreshing(false);
     }
-  }, [loadCategoriesFromDb]);
+  }, [loadCategoriesFromDb, runFullSyncIfAuthenticated]);
 
   useFocusEffect(
     useCallback(() => {

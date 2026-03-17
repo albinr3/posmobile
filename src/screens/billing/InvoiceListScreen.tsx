@@ -2,7 +2,6 @@ import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, Alert, TouchableOpacity, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@clerk/clerk-expo';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -13,11 +12,11 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { syncService } from '../../services/sync/SyncService';
-import { useAuthStore } from '../../store/authStore';
+import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
-import { printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
+import { hasConnectedPrinter, printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface InvoiceListItem {
   localId: string;
@@ -77,16 +76,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
-  const { getToken } = useAuth();
-  const { subUserToken } = useAuthStore();
+  const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
-  const getTokenRef = useRef(getToken);
-  const subUserTokenRef = useRef(subUserToken);
   const isOnlineRef = useRef(isOnline);
   const isSyncingOnFocusRef = useRef(false);
   const lastAutoSyncAtRef = useRef(0);
-  getTokenRef.current = getToken;
-  subUserTokenRef.current = subUserToken;
   isOnlineRef.current = isOnline;
 
   useFocusEffect(
@@ -101,16 +95,16 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           await loadInvoices();
           if (!active || !isOnlineRef.current) return;
 
-          const clerkToken = await getTokenRef.current();
-          if (!clerkToken || !subUserTokenRef.current) return;
-
           const now = Date.now();
           const canAutoSync = now - lastAutoSyncAtRef.current >= INVOICE_AUTO_SYNC_MIN_INTERVAL_MS;
           if (!canAutoSync) return;
 
-          syncService.setTokenGetter(() => getTokenRef.current());
-          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+          const synced = await runFullSyncIfAuthenticated({
+            isOnline: isOnlineRef.current,
+            ignoreCooldown: true,
+          });
+          if (!synced) return;
+
           lastAutoSyncAtRef.current = Date.now();
 
           if (active) {
@@ -130,7 +124,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         active = false;
         isSyncingOnFocusRef.current = false;
       };
-    }, [])
+    }, [runFullSyncIfAuthenticated])
   );
 
   useFocusEffect(
@@ -189,14 +183,12 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
   const onRefresh = async () => {
     setRefreshing(true);
     try {
-      if (isOnlineRef.current) {
-        const clerkToken = await getTokenRef.current();
-        if (clerkToken && subUserTokenRef.current) {
-          syncService.setTokenGetter(() => getTokenRef.current());
-          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-          lastAutoSyncAtRef.current = Date.now();
-        }
+      const synced = await runFullSyncIfAuthenticated({
+        isOnline: isOnlineRef.current,
+        ignoreCooldown: true,
+      });
+      if (synced) {
+        lastAutoSyncAtRef.current = Date.now();
       }
     } catch (error) {
       console.error('Error sincronizando facturas en refresco:', error);
@@ -265,6 +257,12 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
     try {
+      const shouldAttemptPrint = await hasConnectedPrinter();
+      if (!shouldAttemptPrint) {
+        Alert.alert('Impresión', 'No hay una impresora conectada en Ajustes.');
+        return;
+      }
+
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
         Alert.alert('Factura', 'No se encontró la factura.');
@@ -332,7 +330,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           priceCents: Number(item.priceCents || item.unitPriceCents || 0),
           totalCents: Number(item.totalCents || 0),
           unit: item.unit || 'UNIDAD',
-          reference: String(item.reference || item.sku || '').trim() || null,
+          reference: String(item.reference || '').trim() || null,
           productId: String(item.productId || '').trim() || null,
         })),
       });
@@ -396,7 +394,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         .map(
           (item: any) => `
             <div class="item">
-              <div><strong>${String(item.productName || 'Producto')}</strong></div>
+              <div><strong>${String(item.productName || 'Producto')} | ${String(item.reference || '').trim() || '-'}</strong></div>
               <div class="row">
                 <span>${formatProductQty(Number(item.quantity || item.qty || 0), item.unit)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
                 <span><strong>${formatCurrency(Number(item.totalCents || 0))}</strong></span>

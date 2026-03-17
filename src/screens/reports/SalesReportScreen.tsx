@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, ScrollView } from 'react-native';
+import { View, StyleSheet, ScrollView, Alert } from 'react-native';
 import { Button, Text, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
@@ -26,11 +28,82 @@ interface SalesReportRow {
   createdAt: number;
 }
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function buildSalesReportHtml(rows: SalesReportRow[], from: string, to: string, totalCents: number): string {
+  const rowsHtml = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.invoiceCode)}</td>
+          <td>${escapeHtml(row.customerName)}</td>
+          <td>${escapeHtml(row.type)}</td>
+          <td>${escapeHtml(formatDateTime(row.createdAt))}</td>
+          <td>${escapeHtml(formatCurrency(row.totalCents))}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  return `
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { size: Letter; margin: 14mm; }
+          body { font-family: Arial, sans-serif; color: #111; font-size: 11px; }
+          .title { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+          .muted { color: #666; margin-bottom: 10px; }
+          .summary { border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px; }
+          .summary-row { display: flex; justify-content: space-between; margin: 4px 0; }
+          .summary-label { color: #555; }
+          .summary-value { font-weight: 700; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+          th { background: #f3f4f6; font-size: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="title">Reporte de ventas</div>
+        <div class="muted">Generado: ${escapeHtml(formatDateTime(Date.now()))}</div>
+
+        <div class="summary">
+          <div class="summary-row"><span class="summary-label">Rango</span><span class="summary-value">${escapeHtml(`${from} a ${to}`)}</span></div>
+          <div class="summary-row"><span class="summary-label">Facturas</span><span class="summary-value">${escapeHtml(rows.length)}</span></div>
+          <div class="summary-row"><span class="summary-label">Total vendido</span><span class="summary-value">${escapeHtml(formatCurrency(totalCents))}</span></div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Factura</th>
+              <th>Cliente</th>
+              <th>Tipo</th>
+              <th>Fecha</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export function SalesReportScreen() {
   const today = useMemo(() => toYmd(new Date()), []);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [rows, setRows] = useState<SalesReportRow[]>([]);
 
   const loadReport = useCallback(async (fromYmd: string, toYmd: string) => {
@@ -104,6 +177,52 @@ export function SalesReportScreen() {
 
   const totalCents = rows.reduce((sum, row) => sum + row.totalCents, 0);
 
+  const handleExportPdf = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Exportacion', 'No hay ventas para exportar.');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const html = buildSalesReportHtml(rows, from, to, totalCents);
+      const pdf = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Exportar reporte de ventas',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Print.printAsync({ html });
+      }
+    } catch (error) {
+      console.error('Error exportando reporte de ventas:', error);
+      Alert.alert('Exportacion', 'No se pudo exportar el reporte.');
+    } finally {
+      setExporting(false);
+    }
+  }, [rows, from, to, totalCents]);
+
+  const handlePrintLetter = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Impresion', 'No hay ventas para imprimir.');
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const html = buildSalesReportHtml(rows, from, to, totalCents);
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo reporte de ventas:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [rows, from, to, totalCents]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
@@ -157,6 +276,30 @@ export function SalesReportScreen() {
           <Text style={styles.summaryLabel}>Total</Text>
           <Text style={styles.summaryValue}>{formatCurrency(totalCents)}</Text>
           <Text style={styles.summaryHint}>{rows.length} facturas</Text>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing || rows.length === 0}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting || rows.length === 0}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <View style={styles.listCard}>
@@ -214,6 +357,8 @@ const styles = StyleSheet.create({
   summaryLabel: { color: ui.colors.textMuted, fontSize: 13 },
   summaryValue: { color: ui.colors.text, fontSize: 30, fontWeight: '800', marginTop: 4 },
   summaryHint: { color: ui.colors.textMuted, marginTop: 2 },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   listCard: {
     marginTop: 10,
     backgroundColor: ui.colors.surface,

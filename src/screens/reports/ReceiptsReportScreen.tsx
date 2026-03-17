@@ -1,7 +1,9 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Button, Chip, Menu, Text, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
@@ -37,8 +39,131 @@ interface ReceiptStats {
 
 const METHOD_OPTIONS = ['ALL', 'EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'CHEQUE', 'OTRO'];
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function buildReceiptsReportHtml(
+  rows: ReceiptItem[],
+  stats: ReceiptStats,
+  context: {
+    customerName: string;
+    startDate: string;
+    endDate: string;
+    receiptCode: string;
+    method: string;
+    minAmount: string;
+    maxAmount: string;
+    includeCancelled: boolean;
+  }
+): string {
+  const filters: string[] = [];
+  filters.push(`Cliente: ${context.customerName}`);
+  if (context.startDate.trim() || context.endDate.trim()) {
+    const from = context.startDate.trim() || context.endDate.trim();
+    const to = context.endDate.trim() || context.startDate.trim();
+    filters.push(`Rango: ${from} a ${to}`);
+  }
+  if (context.receiptCode.trim()) filters.push(`Recibo contiene: ${context.receiptCode.trim()}`);
+  if (context.method !== 'ALL') filters.push(`Método: ${context.method}`);
+  if (context.minAmount.trim()) filters.push(`Monto mínimo: ${context.minAmount.trim()}`);
+  if (context.maxAmount.trim()) filters.push(`Monto máximo: ${context.maxAmount.trim()}`);
+  if (context.includeCancelled) filters.push('Incluye cancelados');
+
+  const rowsHtml = rows
+    .map(
+      (item) => `
+        <tr>
+          <td>${escapeHtml(item.receiptCode)}</td>
+          <td>${escapeHtml(item.customerName)}</td>
+          <td>${escapeHtml(item.invoiceCode)}</td>
+          <td>${escapeHtml(item.method)}</td>
+          <td>${escapeHtml(formatDateTime(item.paidAt))}</td>
+          <td>${escapeHtml(item.cancelledAt ? 'CANCELADO' : 'ACTIVO')}</td>
+          <td>${escapeHtml(formatCurrency(item.amountCents))}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  return `
+    <html>
+      <head>
+        <meta charset="UTF-8" />
+        <style>
+          @page { size: Letter; margin: 14mm; }
+          body { font-family: Arial, sans-serif; color: #111; font-size: 11px; padding: 16px; }
+          .title { font-size: 18px; font-weight: 800; margin-bottom: 2px; }
+          .subtitle { color: #555; margin-bottom: 8px; }
+          .muted { color: #666; margin-bottom: 10px; }
+          .stats { display: flex; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+          .stat { border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; min-width: 140px; }
+          .stat-label { color: #666; font-size: 10px; }
+          .stat-value { font-size: 14px; font-weight: 700; margin-top: 3px; }
+          .section-title { font-size: 13px; font-weight: 700; margin: 10px 0 6px; }
+          ul { margin: 0 0 10px 18px; padding: 0; }
+          li { margin: 2px 0; }
+          table { width: 100%; border-collapse: collapse; }
+          th, td { border: 1px solid #ddd; padding: 6px; text-align: left; vertical-align: top; }
+          th { background: #f3f4f6; font-size: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="title">Reporte de recibos CxC</div>
+        <div class="subtitle">Recibos de pago por filtros.</div>
+        <div class="muted">Generado: ${escapeHtml(formatDateTime(Date.now()))}</div>
+
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-label">Total recibos</div>
+            <div class="stat-value">${escapeHtml(stats.totalPayments)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Monto total</div>
+            <div class="stat-value">${escapeHtml(formatCurrency(stats.totalAmount))}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Cancelados</div>
+            <div class="stat-value">${escapeHtml(stats.cancelledPayments)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Monto cancelado</div>
+            <div class="stat-value">${escapeHtml(formatCurrency(stats.cancelledAmount))}</div>
+          </div>
+        </div>
+
+        <div class="section-title">Filtros aplicados</div>
+        <ul>${filters.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>
+
+        <div class="section-title">Recibos (${rows.length})</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Recibo</th>
+              <th>Cliente</th>
+              <th>Factura</th>
+              <th>Método</th>
+              <th>Fecha</th>
+              <th>Estado</th>
+              <th>Monto</th>
+            </tr>
+          </thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 export function ReceiptsReportScreen() {
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const [rows, setRows] = useState<ReceiptItem[]>([]);
   const [stats, setStats] = useState<ReceiptStats>({
     totalPayments: 0,
@@ -202,12 +327,100 @@ export function ReceiptsReportScreen() {
     return customers.find((customer) => customer.id === customerId)?.name || 'Cliente';
   }, [customerId, customers]);
 
+  const handleExportPdf = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Exportacion', 'No hay datos para exportar.');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const html = buildReceiptsReportHtml(rows, stats, {
+        customerName: selectedCustomerName,
+        startDate,
+        endDate,
+        receiptCode,
+        method,
+        minAmount,
+        maxAmount,
+        includeCancelled,
+      });
+      const pdf = await Print.printToFileAsync({ html });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Exportar reporte de recibos',
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Print.printAsync({ html });
+      }
+    } catch (error) {
+      console.error('Error exportando reporte de recibos:', error);
+      Alert.alert('Exportacion', 'No se pudo exportar el reporte.');
+    } finally {
+      setExporting(false);
+    }
+  }, [rows, stats, selectedCustomerName, startDate, endDate, receiptCode, method, minAmount, maxAmount, includeCancelled]);
+
+  const handlePrintLetter = useCallback(async () => {
+    if (rows.length === 0) {
+      Alert.alert('Impresion', 'No hay datos para imprimir.');
+      return;
+    }
+
+    setPrinting(true);
+    try {
+      const html = buildReceiptsReportHtml(rows, stats, {
+        customerName: selectedCustomerName,
+        startDate,
+        endDate,
+        receiptCode,
+        method,
+        minAmount,
+        maxAmount,
+        includeCancelled,
+      });
+      await Print.printAsync({ html });
+    } catch (error) {
+      console.error('Error imprimiendo reporte de recibos:', error);
+      Alert.alert('Impresion', 'No se pudo imprimir el reporte.');
+    } finally {
+      setPrinting(false);
+    }
+  }, [rows, stats, selectedCustomerName, startDate, endDate, receiptCode, method, minAmount, maxAmount, includeCancelled]);
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>Reporte de recibos</Text>
           <Text style={styles.subtitle}>Recibos de pagos CxC por filtro.</Text>
+          <View style={styles.actionsRow}>
+            <Button
+              mode="outlined"
+              icon="file-pdf-box"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handleExportPdf}
+              disabled={loading || exporting || printing || rows.length === 0}
+              loading={exporting}
+            >
+              Exportar PDF
+            </Button>
+            <Button
+              mode="outlined"
+              icon="printer"
+              style={styles.actionBtn}
+              textColor={ui.colors.primary}
+              onPress={handlePrintLetter}
+              disabled={loading || printing || exporting || rows.length === 0}
+              loading={printing}
+            >
+              Imprimir carta
+            </Button>
+          </View>
         </View>
 
         <View style={styles.statsGrid}>
@@ -408,6 +621,8 @@ const styles = StyleSheet.create({
   header: { marginBottom: 10 },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
+  actionsRow: { marginTop: 10, flexDirection: 'row', gap: 8 },
+  actionBtn: { flex: 1 },
   statsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 10 },
   metricCard: {
     width: '48.5%',
