@@ -82,6 +82,7 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
           serverId: row.server_id,
           name: row.name,
           sku: row.sku,
+          reference: parsedData?.reference ? String(parsedData.reference) : null,
           priceCents: row.price_cents,
           costCents: row.cost_cents,
           stock: row.stock,
@@ -115,7 +116,8 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
     .filter(
       (product) =>
         product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase()))
+        (product.sku && product.sku.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        (product.reference && product.reference.toLowerCase().includes(searchQuery.toLowerCase()))
     );
 
   const getProductImage = (item: any) => {
@@ -130,12 +132,14 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
 
   const renderListProduct = ({ item }: { item: any }) => (
     <TouchableOpacity style={[styles.productCard, !item.isActive && { opacity: 0.7 }]} onPress={() => goToEditProduct(item.localId)}>
-      <View style={styles.middle}>
+        <View style={styles.middle}>
         <Text numberOfLines={1} style={styles.name}>
           {item.name}
         </Text>
         <View style={styles.metaRow}>
           <Text style={styles.meta}>{item.sku ? item.sku : 'Sin SKU'}</Text>
+          <Text style={styles.separatorDot}>•</Text>
+          <Text style={styles.meta}>Ref: {item.reference ? item.reference : '-'}</Text>
           <Text style={styles.separatorDot}>•</Text>
           {item.productKind === 'RECIPE' ? (
             <Text style={[styles.stock, styles.ok]}>Receta</Text>
@@ -190,6 +194,8 @@ export function ProductListScreen({ navigation }: ProductListScreenProps) {
         </View>
         <View style={styles.gridMetaRow}>
           <Text style={styles.gridMetaSku}>{item.sku ? item.sku : 'Sin SKU'}</Text>
+          <Text style={styles.gridMetaDot}>•</Text>
+          <Text style={styles.gridMetaSku}>Ref: {item.reference ? item.reference : '-'}</Text>
           <Text style={styles.gridMetaDot}>•</Text>
           <Text style={[styles.gridStock, item.stock <= 0 ? styles.out : item.stock <= 10 ? styles.low : styles.ok]}>
             {item.stock <= 10 && item.stock > 0

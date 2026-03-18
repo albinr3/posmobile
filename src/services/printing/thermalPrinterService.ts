@@ -35,6 +35,7 @@ interface ReturnTicketItem {
   unitPriceCents: number;
   lineTotalCents: number;
   unit?: string | null;
+  reference?: string | null;
 }
 
 export interface PaymentReceiptTicketPayload {
@@ -320,7 +321,8 @@ export const buildReturnTicketText = (
   ];
 
   for (const item of payload.items || []) {
-    lines.push(String(item.productName || 'Producto'));
+    const productReference = String(item.reference || '').trim() || '-';
+    lines.push(`${String(item.productName || 'Producto')} | ${productReference}`);
     lines.push(
       `  ${formatColumns(
         `${formatProductQty(item.qty, item.unit || 'UNIDAD')} x ${formatCurrency(item.unitPriceCents)}`,

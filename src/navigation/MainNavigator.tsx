@@ -353,6 +353,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
   const { logout, setSubUser, isBillingBlocked } = useAuthStore();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, StatusBar.currentHeight || 0) + 6;
+  const bottomInset = Math.max(insets.bottom, 12);
   const currentRoute = props.state.routeNames[props.state.index] || 'Home';
   const entries = useMemo(
     () => (isBillingBlocked ? DRAWER_ENTRIES.filter((item) => item.key === 'billing_plans') : DRAWER_ENTRIES),
@@ -476,7 +477,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
   return (
     <DrawerContentScrollView
       {...props}
-      contentContainerStyle={[styles.drawerContainer, { paddingTop: topInset }]}
+      contentContainerStyle={[styles.drawerContainer, { paddingTop: topInset, paddingBottom: bottomInset }]}
     >
       <View style={styles.drawerHeader}>
         <View style={styles.logoWrap}>

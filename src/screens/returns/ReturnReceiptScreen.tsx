@@ -16,6 +16,7 @@ interface ReturnReceiptItem {
   unitPriceCents: number;
   lineTotalCents: number;
   unit?: string | null;
+  reference?: string | null;
 }
 
 interface ReturnReceiptPayload {
@@ -53,6 +54,7 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
       (item) => `
         <div class="item">
           <div class="item-name">${escapeHtml(item.productName)}</div>
+          ${item.reference ? `<div class="item-ref">Ref: ${escapeHtml(item.reference)}</div>` : ''}
           <div class="item-line">
             <span>${formatProductQty(item.qty, item.unit)} x ${formatCurrency(item.unitPriceCents)}</span>
             <span class="item-total">${formatCurrency(item.lineTotalCents)}</span>
@@ -77,6 +79,7 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
           .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
           .item { border-bottom: 1px dashed #c4c4c4; padding-bottom: 7px; margin-bottom: 7px; }
           .item-name { font-weight: 700; }
+          .item-ref { font-size: 12px; color: #444; margin-top: 2px; }
           .item-line { display: flex; justify-content: space-between; margin-top: 4px; }
           .item-total { font-weight: 700; }
           .total { border-top: 1px dashed #444; padding-top: 7px; margin-top: 6px; font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; }
@@ -135,6 +138,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
             unitPriceCents: Number(item.unitPriceCents || 0),
             lineTotalCents: Number(item.lineTotalCents || 0),
             unit: item.unit || 'UNIDAD',
+            reference: item.reference || null,
           })),
         });
 
@@ -235,6 +239,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
             <View key={`${item.productName}-${index}`} style={styles.itemRow}>
               <View style={styles.itemInfo}>
                 <Text style={styles.itemName}>{item.productName}</Text>
+                {item.reference ? <Text style={styles.itemRef}>Ref: {item.reference}</Text> : null}
                 <Text style={styles.itemQty}>
                   {formatProductQty(item.qty, item.unit)} x {formatCurrency(item.unitPriceCents)}
                 </Text>
@@ -358,6 +363,11 @@ const styles = StyleSheet.create({
   itemName: {
     fontSize: 14,
     color: ui.colors.text,
+  },
+  itemRef: {
+    fontSize: 12,
+    color: ui.colors.textMuted,
+    marginTop: 2,
   },
   itemQty: {
     fontSize: 12,

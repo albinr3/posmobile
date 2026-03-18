@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText } from 'react-native';
-import { Searchbar, Text, Icon } from 'react-native-paper';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText, Share } from 'react-native';
+import { Searchbar, Text, Icon, TextInput } from 'react-native-paper';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
@@ -39,6 +41,15 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const todayIso = useMemo(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }, []);
+  const [startDate, setStartDate] = useState<string>(todayIso);
+  const [endDate, setEndDate] = useState<string>(todayIso);
   const { isOnline } = useSyncStore();
   const { runFullSyncIfAuthenticated } = useSyncAuth();
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
@@ -67,7 +78,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
        FROM payments
        ORDER BY rowid DESC`
     );
-    return rows.map((row) => {
+    const mapped = rows.map((row) => {
       let parsed: any = null;
       try {
         parsed = row?.data ? JSON.parse(row.data) : null;
@@ -97,6 +108,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         arId: row.ar_id ? String(row.ar_id) : null,
       } as PaymentReceiptItem;
     });
+    return mapped.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, []);
 
   const applyLocalCancelledState = useCallback(async (item: PaymentReceiptItem, cancelledAt: number) => {
@@ -197,14 +209,39 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
 
   const filteredReceipts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return receipts;
-    return receipts.filter(
-      (item) =>
-        item.receiptCode.toLowerCase().includes(q) ||
-        (item.customerName || '').toLowerCase().includes(q) ||
-        (item.invoiceCode || '').toLowerCase().includes(q)
-    );
-  }, [receipts, searchQuery]);
+    const parseDateStart = (value: string): number | null => {
+      const parts = value.trim().split('-').map((v) => Number(v));
+      if (parts.length !== 3) return null;
+      const [y, m, d] = parts;
+      if (!y || !m || !d) return null;
+      const date = new Date(y, m - 1, d, 0, 0, 0, 0);
+      return Number.isNaN(date.getTime()) ? null : date.getTime();
+    };
+    const parseDateEnd = (value: string): number | null => {
+      const parts = value.trim().split('-').map((v) => Number(v));
+      if (parts.length !== 3) return null;
+      const [y, m, d] = parts;
+      if (!y || !m || !d) return null;
+      const date = new Date(y, m - 1, d, 23, 59, 59, 999);
+      return Number.isNaN(date.getTime()) ? null : date.getTime();
+    };
+
+    const startTs = startDate ? parseDateStart(startDate) : null;
+    const endTs = endDate ? parseDateEnd(endDate) : null;
+
+    return receipts.filter((item) => {
+      if (q) {
+        const matchesQuery =
+          item.receiptCode.toLowerCase().includes(q) ||
+          (item.customerName || '').toLowerCase().includes(q) ||
+          (item.invoiceCode || '').toLowerCase().includes(q);
+        if (!matchesQuery) return false;
+      }
+      if (startTs !== null && item.createdAt < startTs) return false;
+      if (endTs !== null && item.createdAt > endTs) return false;
+      return true;
+    });
+  }, [receipts, searchQuery, startDate, endDate]);
 
   const handleReprint = async (item: PaymentReceiptItem) => {
     try {
@@ -241,6 +278,80 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     } catch (error) {
       console.error('Error imprimiendo recibo de pago:', error);
       Alert.alert('Impresión', 'No se pudo imprimir el recibo.');
+    }
+  };
+
+  const escapeHtml = (value: string) =>
+    String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+  const buildReceiptPdfHtml = (item: PaymentReceiptItem) => {
+    const paymentLabel = formatPaymentWithBank(item.paymentMethod, item.transferBankName);
+    const cancelledTag = item.cancelledAt ? '<div class="badge">CANCELADO</div>' : '';
+    return `
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #111827; background: #fff; }
+            .page { padding: 20px; }
+            .title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+            .badge { display: inline-block; background: #FEE2E2; color: #DC2626; font-weight: 700; font-size: 11px; padding: 4px 8px; border-radius: 999px; }
+            .row { display: flex; justify-content: space-between; margin: 6px 0; }
+            .label { color: #6B7280; font-size: 12px; }
+            .value { font-size: 13px; font-weight: 600; }
+            .total { margin-top: 12px; font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; }
+            .notes { margin-top: 10px; font-size: 12px; color: #374151; }
+            .divider { border-top: 1px solid #E5E7EB; margin: 10px 0; }
+          </style>
+        </head>
+        <body>
+          <div class="page">
+            <div class="title">Recibo de pago</div>
+            ${cancelledTag}
+            <div class="divider"></div>
+            <div class="row"><span class="label">Recibo</span><span class="value">${escapeHtml(item.receiptCode)}</span></div>
+            <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(item.customerName || 'Cliente')}</span></div>
+            <div class="row"><span class="label">Factura</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
+            <div class="row"><span class="label">Fecha</span><span class="value">${escapeHtml(formatDateTime(item.createdAt))}</span></div>
+            <div class="row"><span class="label">Método</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
+            <div class="row"><span class="label">Referencia</span><span class="value">${escapeHtml(item.reference || '-')}</span></div>
+            <div class="row"><span class="label">Balance</span><span class="value">${item.balanceAfterCents !== null && item.balanceAfterCents !== undefined ? escapeHtml(formatCurrency(item.balanceAfterCents)) : '-'}</span></div>
+            ${item.notes ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(item.notes)}</div>` : ''}
+            <div class="total"><span>Total</span><span>${formatCurrency(item.amountCents)}</span></div>
+          </div>
+        </body>
+      </html>
+    `;
+  };
+
+  const handleSharePdf = async (item: PaymentReceiptItem) => {
+    try {
+      const html = buildReceiptPdfHtml(item);
+      const pdf = await Print.printToFileAsync({ html });
+      const sharingAvailable = await Sharing.isAvailableAsync();
+      const dialogTitle = `Recibo ${item.receiptCode}`;
+
+      if (sharingAvailable) {
+        await Sharing.shareAsync(pdf.uri, {
+          mimeType: 'application/pdf',
+          dialogTitle,
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        await Share.share({
+          title: dialogTitle,
+          message: dialogTitle,
+          url: pdf.uri,
+        });
+      }
+    } catch (error) {
+      console.error('Error compartiendo PDF del recibo:', error);
+      Alert.alert('PDF', 'No se pudo compartir el PDF del recibo.');
     }
   };
 
@@ -311,6 +422,9 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         <Text style={styles.totalValue}>{formatCurrency(item.amountCents)}</Text>
       </View>
       <View style={styles.actionsRow}>
+        <TouchableOpacity style={[styles.actionButton, styles.shareButton]} onPress={() => handleSharePdf(item)}>
+          <Icon source="share-variant" size={18} color="#fff" />
+        </TouchableOpacity>
         <TouchableOpacity style={[styles.actionButton, styles.printButton]} onPress={() => handleReprint(item)}>
           <Icon source="printer" size={18} color="#fff" />
         </TouchableOpacity>
@@ -337,6 +451,28 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
             value={searchQuery}
             style={styles.searchbar}
             inputStyle={styles.searchInput}
+          />
+        </View>
+        <View style={styles.dateFilters}>
+          <TextInput
+            label="Desde (YYYY-MM-DD)"
+            value={startDate}
+            onChangeText={setStartDate}
+            mode="outlined"
+            style={styles.dateInput}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+            placeholder="2026-03-17"
+          />
+          <TextInput
+            label="Hasta (YYYY-MM-DD)"
+            value={endDate}
+            onChangeText={setEndDate}
+            mode="outlined"
+            style={styles.dateInput}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+            placeholder="2026-03-17"
           />
         </View>
       </View>
@@ -377,6 +513,13 @@ const styles = StyleSheet.create({
   },
   searchbar: { flex: 1, elevation: 0, backgroundColor: 'transparent' },
   searchInput: { minHeight: 40 },
+  dateFilters: {
+    marginTop: 8,
+    gap: 8,
+  },
+  dateInput: {
+    backgroundColor: '#fff',
+  },
   list: { padding: 12, paddingBottom: 76 },
   card: {
     backgroundColor: ui.colors.surface,
@@ -415,6 +558,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  shareButton: { backgroundColor: '#10B981' },
   printButton: { backgroundColor: '#2563EB' },
   cancelButton: { backgroundColor: '#EF4444' },
   cancelledNote: { color: '#DC2626', fontSize: 12, fontWeight: '700' },

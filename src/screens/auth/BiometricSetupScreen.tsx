@@ -79,7 +79,8 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
     navigation.navigate('SelectUser');
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    await setBiometricEnabledPreference(false);
     setBiometricEnabled(false);
     if (user) {
       setUser({

@@ -1,11 +1,12 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, Surface, Button, IconButton, Divider, Portal, Modal, Icon } from 'react-native-paper';
+import { Text, Surface, Button, IconButton, Divider, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
+import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { getBottomSafeInset } from '../../utils/safeArea';
@@ -38,6 +39,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const {
     items,
     updateQuantity,
+    updatePrice,
     removeItem,
     getTotal,
     customerId,
@@ -48,6 +50,15 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     editingQuoteServerId,
     editingQuoteCode,
   } = useQuoteCartStore();
+  const { subUser } = useAuthStore();
+  const canOverridePrice = !!subUser?.isOwner || subUser?.canOverridePrice === true || subUser?.role === 'ADMIN';
+  const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
+  const [priceDraft, setPriceDraft] = useState('');
+  const [priceError, setPriceError] = useState<string | null>(null);
+  const priceDialogItem = useMemo(
+    () => items.find(i => i.lineId === priceDialogLineId),
+    [items, priceDialogLineId]
+  );
   useFocusEffect(
     useCallback(() => {
       const routeCustomerId = route?.params?.customerId;
@@ -156,6 +167,36 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       }
     }
     closeRecipeDialog();
+  };
+
+  const openPriceDialog = (item: typeof items[0]) => {
+    if (!canOverridePrice) return;
+    setPriceDialogLineId(item.lineId);
+    setPriceDraft((item.priceCents / 100).toFixed(2));
+    setPriceError(null);
+  };
+
+  const closePriceDialog = () => {
+    setPriceDialogLineId(null);
+    setPriceDraft('');
+    setPriceError(null);
+  };
+
+  const applyPriceChange = () => {
+    const cartItem = items.find(i => i.lineId === priceDialogLineId);
+    if (!cartItem) {
+      closePriceDialog();
+      return;
+    }
+    const normalized = priceDraft.replace(',', '.').trim();
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setPriceError('Ingresa un precio válido.');
+      return;
+    }
+    const nextPriceCents = Math.round(parsed * 100);
+    updatePrice(cartItem.lineId, nextPriceCents);
+    closePriceDialog();
   };
 
   const handleConfirmQuote = async () => {
@@ -294,7 +335,15 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
           <Text style={styles.itemName} numberOfLines={2}>
             {item.productName}
           </Text>
-          <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
+          <View style={styles.priceRow}>
+            <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
+            {canOverridePrice ? (
+              <TouchableOpacity style={styles.priceEditChip} onPress={() => openPriceDialog(item)}>
+                <Icon source="pencil" size={12} color={ui.colors.primary} />
+                <Text style={styles.priceEditText}>Editar</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
           {hasRecipeItems && (
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
               {adjustments.length === 0 ? (
@@ -396,6 +445,39 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
           </Surface>
         </BottomDock>
       )}
+
+      <Portal>
+        <Modal
+          visible={!!priceDialogLineId}
+          onDismiss={closePriceDialog}
+          contentContainerStyle={styles.priceModalCard}
+        >
+          <Text style={styles.priceModalTitle}>Modificar precio</Text>
+          <Text style={styles.priceModalMeta}>{priceDialogItem?.productName || ''}</Text>
+          <TextInput
+            label="Precio (RD$)"
+            value={priceDraft}
+            onChangeText={(value) => {
+              setPriceDraft(value);
+              if (priceError) setPriceError(null);
+            }}
+            mode="outlined"
+            keyboardType="decimal-pad"
+            style={styles.priceModalInput}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+          />
+          {priceError ? <Text style={styles.priceErrorText}>{priceError}</Text> : null}
+          <View style={styles.priceModalActions}>
+            <Button mode="outlined" onPress={closePriceDialog}>
+              Cancelar
+            </Button>
+            <Button mode="contained" buttonColor={ui.colors.primary} onPress={applyPriceChange}>
+              Guardar
+            </Button>
+          </View>
+        </Modal>
+      </Portal>
 
       <Portal>
         <Modal
@@ -574,6 +656,28 @@ const styles = StyleSheet.create({
     color: ui.colors.textMuted,
     marginTop: 2,
   },
+  priceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  priceEditChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: ui.colors.primary,
+    backgroundColor: '#F5F3FF',
+  },
+  priceEditText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: ui.colors.primary,
+  },
   quantityContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -653,6 +757,37 @@ const styles = StyleSheet.create({
   completeButtonLabel: {
     fontSize: 18,
     fontWeight: '800',
+  },
+  priceModalCard: {
+    backgroundColor: ui.colors.surface,
+    margin: 20,
+    borderRadius: ui.radius.lg,
+    padding: 16,
+  },
+  priceModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: ui.colors.text,
+  },
+  priceModalMeta: {
+    marginTop: 4,
+    marginBottom: 12,
+    fontSize: 13,
+    color: ui.colors.textMuted,
+  },
+  priceModalInput: {
+    backgroundColor: ui.colors.surface,
+  },
+  priceErrorText: {
+    marginTop: 6,
+    color: ui.colors.danger,
+    fontSize: 12,
+  },
+  priceModalActions: {
+    marginTop: 14,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
   },
   systemBottomBg: {
     position: 'absolute',

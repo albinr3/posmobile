@@ -67,7 +67,7 @@ function RootApp() {
   const [error, setError] = useState<string | null>(null);
   const [authRefreshTick, setAuthRefreshTick] = useState(0);
   const { setLoading, setUser, isAuthenticated, loadSubUserToken, logout, setBiometricEnabled } = useAuthStore();
-  const { syncBlockedReason } = useSyncStore();
+  const { syncBlockedReason, pendingCount } = useSyncStore();
   const otaUpdates = useOtaUpdates();
   const lastSyncBlockedReasonRef = useRef<string | null>(null);
   const authHydratedRef = useRef(false);
@@ -244,7 +244,7 @@ function RootApp() {
   }, [isReady, isLoaded, isSignedIn, user?.id, isAuthenticated, setUser, loadSubUserToken, logout, authRefreshTick]);
 
   useEffect(() => {
-    if (!isReady || !syncBlockedReason) return;
+    if (!isReady || !syncBlockedReason || pendingCount === 0) return;
     let cancelled = false;
 
     const notifyBlockedReason = async () => {
@@ -261,7 +261,7 @@ function RootApp() {
     return () => {
       cancelled = true;
     };
-  }, [isReady, syncBlockedReason]);
+  }, [isReady, syncBlockedReason, pendingCount]);
 
   useEffect(() => {
     if (!isReady) return;

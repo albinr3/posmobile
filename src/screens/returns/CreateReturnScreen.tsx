@@ -72,6 +72,7 @@ interface ReturnDraftItem {
   saleItemId: string;
   productId: string;
   productName: string;
+  productReference?: string | null;
   availableQty: number;
   unitPriceCents: number;
   qty: number;
@@ -113,6 +114,7 @@ interface ReturnListItem {
     lineTotalCents: number;
     product?: {
       name?: string | null;
+      reference?: string | null;
       unit?: string | null;
     } | null;
   }>;
@@ -128,6 +130,7 @@ interface ReturnReceiptPayload {
   notes?: string | null;
   items: Array<{
     productName: string;
+    reference?: string | null;
     qty: number;
     unitPriceCents: number;
     lineTotalCents: number;
@@ -271,17 +274,18 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             qty: Number(returnItemParsed?.qty || returnItemRow.qty || 0),
             unitPriceCents: Number(returnItemParsed?.unitPriceCents || returnItemRow.unit_price_cents || 0),
             lineTotalCents: Number(returnItemParsed?.lineTotalCents || returnItemRow.line_total_cents || 0),
-            product: {
-              name: String(
-                returnItemParsed?.product?.name ||
+              product: {
+                name: String(
+                  returnItemParsed?.product?.name ||
                   returnItemParsed?.productName ||
                   returnItemRow.product_name ||
                   'Producto'
-              ),
-              unit: inferProductUnit({
-                unit: returnItemParsed?.product?.unit,
-              }),
-            },
+                ),
+                reference: returnItemParsed?.product?.reference ? String(returnItemParsed.product.reference) : null,
+                unit: inferProductUnit({
+                  unit: returnItemParsed?.product?.unit,
+                }),
+              },
           };
         });
 
@@ -349,6 +353,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     notes: item.notes || null,
     items: (item.items || []).map((returnItem) => ({
       productName: returnItem.product?.name || 'Producto',
+      reference: returnItem.product?.reference || null,
       qty: Number(returnItem.qty) || 0,
       unitPriceCents: Number(returnItem.unitPriceCents) || 0,
       lineTotalCents:
@@ -892,6 +897,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           saleItemId: item.saleItemId,
           productId: item.productId,
           productName: item.product?.name || 'Producto',
+          productReference: item.product?.reference || null,
           availableQty: item.availableQty,
           unitPriceCents: item.unitPriceCents,
           qty: initialQty,
@@ -989,6 +995,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           lineTotalCents: item.unitPriceCents * item.qty,
           product: {
             name: item.productName,
+            reference: item.productReference || null,
             unit: item.unit || 'UNIDAD',
           },
         })),
@@ -1031,7 +1038,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             qty: item.qty,
             unitPriceCents: item.unitPriceCents,
             lineTotalCents,
-            product: { name: item.productName, unit: item.unit || 'UNIDAD' },
+            product: { name: item.productName, reference: item.productReference || null, unit: item.unit || 'UNIDAD' },
           }),
         });
       }
@@ -1091,6 +1098,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         notes: notesSnapshot || null,
         items: returnItemsSnapshot.map((item) => ({
           productName: item.productName,
+          reference: item.productReference || null,
           qty: item.qty,
           unitPriceCents: item.unitPriceCents,
           lineTotalCents: item.unitPriceCents * item.qty,

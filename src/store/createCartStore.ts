@@ -16,6 +16,7 @@ export interface BaseCartState {
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (lineId: string) => void;
   updateQuantity: (lineId: string, quantity: number) => void;
+  updatePrice: (lineId: string, priceCents: number) => void;
   setCustomer: (customerId: string | null, customerName: string | null) => void;
   clear: () => void;
   getTotal: () => number;
@@ -111,6 +112,24 @@ function createBaseCartSlice<TState extends BaseCartState>(
                 ...item,
                 quantity,
                 totalCents: quantity * item.priceCents,
+              }
+            : item
+        ),
+      }) as Partial<TState>);
+    },
+
+    updatePrice: (lineId: string, priceCents: number) => {
+      if (!Number.isFinite(priceCents) || priceCents < 0) return;
+      const nextPriceCents = Math.round(priceCents);
+
+      set((state) => ({
+        items: state.items.map((item) =>
+          item.lineId === lineId
+            ? {
+                ...item,
+                priceCents: nextPriceCents,
+                totalCents: item.quantity * nextPriceCents,
+                wasPriceOverridden: true,
               }
             : item
         ),

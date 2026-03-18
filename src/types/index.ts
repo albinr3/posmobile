@@ -5,6 +5,7 @@ export interface Product {
   serverId?: string;
   name: string;
   sku?: string;
+  reference?: string | null;
   priceCents: number;
   costCents?: number;
   stock: number;
@@ -53,6 +54,7 @@ export interface SaleItem {
   quantity: number;
   priceCents: number;
   totalCents: number;
+  wasPriceOverridden?: boolean;
   unit?: string;
   productKind?: 'BASIC' | 'MEASURED' | 'RECIPE';
   recipeItems?: Array<{ ingredientId: string; ingredientName: string; qty: number; ingredientUnit?: string }>;
