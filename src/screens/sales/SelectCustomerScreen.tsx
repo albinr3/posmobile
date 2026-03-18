@@ -111,6 +111,19 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
             <Text>{loading ? 'Cargando clientes...' : 'No hay clientes disponibles'}</Text>
           </View>
         }
+        ListFooterComponent={
+          <View style={styles.footer}>
+            <View style={styles.footerDivider} />
+            <Button
+              mode="text"
+              icon="plus"
+              onPress={() => navigation.navigate('AddCustomer')}
+              contentStyle={styles.footerButtonContent}
+            >
+              Crear cliente nuevo
+            </Button>
+          </View>
+        }
       />
     </SafeAreaView>
   );
@@ -154,5 +167,17 @@ const styles = StyleSheet.create({
   empty: {
     paddingVertical: 32,
     alignItems: 'center',
+  },
+  footer: {
+    marginTop: 12,
+    paddingTop: 12,
+  },
+  footerDivider: {
+    height: 1,
+    backgroundColor: '#e0e0e0',
+    marginBottom: 8,
+  },
+  footerButtonContent: {
+    justifyContent: 'flex-start',
   },
 });

@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert } from 'react-native';
-import { TextInput, Button, Text, Switch } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
+import { TextInput, Button, Text, Switch, Menu, Icon, Divider } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
@@ -15,6 +15,40 @@ interface AddCustomerScreenProps {
   route: any;
 }
 
+const DOMINICAN_PROVINCES = [
+  'Azua',
+  'Baoruco',
+  'Barahona',
+  'Dajabón',
+  'Distrito Nacional',
+  'Duarte',
+  'El Seibo',
+  'Espaillat',
+  'Hato Mayor',
+  'Hermanas Mirabal',
+  'Independencia',
+  'La Altagracia',
+  'La Romana',
+  'La Vega',
+  'María Trinidad Sánchez',
+  'Monseñor Nouel',
+  'Monte Cristi',
+  'Monte Plata',
+  'Pedernales',
+  'Peravia',
+  'Puerto Plata',
+  'Samaná',
+  'San Cristóbal',
+  'San José de Ocoa',
+  'San Juan',
+  'San Pedro de Macorís',
+  'Sánchez Ramírez',
+  'Santiago',
+  'Santiago Rodríguez',
+  'Santo Domingo',
+  'Valverde',
+];
+
 export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps) {
   const customerId = route?.params?.customerId;
   const isEditMode = !!customerId;
@@ -22,6 +56,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
+  const [province, setProvince] = useState('');
   const [creditEnabled, setCreditEnabled] = useState(false);
   const [creditDays, setCreditDays] = useState('');
   const [notes, setNotes] = useState('');
@@ -29,6 +64,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const [localId, setLocalId] = useState<string>('');
   const [serverId, setServerId] = useState<string | null>(null);
+  const [provinceMenuVisible, setProvinceMenuVisible] = useState(false);
   const { getToken } = useAuth();
 
   useFocusEffect(
@@ -59,6 +95,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           setPhone(String(row.phone || parsed?.phone || ''));
           setEmail(String(parsed?.email || ''));
           setAddress(String(parsed?.address || ''));
+          setProvince(String(parsed?.province || ''));
           setCreditEnabled(Boolean(parsed?.creditEnabled));
           setCreditDays(String(parsed?.creditDays ?? ''));
           setNotes(String(parsed?.notes || ''));
@@ -96,6 +133,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
         phone: phone.trim() || null,
         email: email.trim() || null,
         address: address.trim() || null,
+        province: province.trim() || null,
         creditEnabled,
         creditDays: Number.isNaN(creditDaysValue) ? 0 : creditDaysValue,
         notes: notes.trim() || null,
@@ -170,6 +208,35 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           <TextInput label="Telefono" value={phone} onChangeText={setPhone} mode="outlined" keyboardType="phone-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
           <TextInput label="Email" value={email} onChangeText={setEmail} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
           <TextInput label="Direccion" value={address} onChangeText={setAddress} mode="outlined" multiline numberOfLines={2} style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          <Menu
+            visible={provinceMenuVisible}
+            onDismiss={() => setProvinceMenuVisible(false)}
+            anchor={
+              <TouchableOpacity style={styles.selectLike} onPress={() => setProvinceMenuVisible(true)}>
+                <Text style={[styles.selectLikeText, !province && styles.selectLikePlaceholder]}>{province || 'Provincia'}</Text>
+                <Icon source="chevron-down" size={18} color="#6B7280" />
+              </TouchableOpacity>
+            }
+          >
+            {DOMINICAN_PROVINCES.map((item) => (
+              <Menu.Item
+                key={item}
+                title={item}
+                onPress={() => {
+                  setProvince(item);
+                  setProvinceMenuVisible(false);
+                }}
+              />
+            ))}
+            <Divider />
+            <Menu.Item
+              title="Limpiar"
+              onPress={() => {
+                setProvince('');
+                setProvinceMenuVisible(false);
+              }}
+            />
+          </Menu>
         </View>
 
         <View style={styles.card}>
@@ -223,6 +290,20 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 10 },
   input: { marginBottom: 10, backgroundColor: ui.colors.surface },
+  selectLike: {
+    minHeight: 56,
+    borderRadius: ui.radius.md,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: ui.colors.border,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  selectLikeText: { color: ui.colors.text, fontSize: 14 },
+  selectLikePlaceholder: { color: ui.colors.textMuted },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   switchTextWrap: { flex: 1, paddingRight: 12 },
   switchLabel: { color: ui.colors.text, fontWeight: '700' },
@@ -230,5 +311,3 @@ const styles = StyleSheet.create({
   saveButton: { borderRadius: ui.radius.md },
   saveButtonContent: { height: 50 },
 });
-
-

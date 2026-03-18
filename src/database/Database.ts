@@ -6,6 +6,29 @@ class DatabaseService {
   private currentDbName: string | null = null;
   private opQueue: Promise<any> = Promise.resolve();
 
+  private truncateSql(sql: string, maxLength: number = 280): string {
+    const normalized = String(sql || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, maxLength)}...`;
+  }
+
+  private async reportDbError(
+    error: unknown,
+    metadata: Record<string, unknown>,
+    severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
+  ): Promise<void> {
+    try {
+      const { reportError } = await import('../services/error/errorReporter');
+      void reportError(error, {
+        code: 'DB_QUERY_ERROR',
+        severity,
+        metadata,
+      });
+    } catch {
+      // ignore
+    }
+  }
+
   private normalizeSqlValue(value: any): any {
     if (value === undefined) return null;
     if (typeof value === 'number' && !Number.isFinite(value)) return null;
@@ -462,6 +485,16 @@ class DatabaseService {
       );
     } catch (error) {
       console.error('SQLite insert error:', { table, keys, values, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'insert',
+          table,
+          columns: keys,
+          valuesCount: values.length,
+        },
+        'HIGH'
+      );
       throw error;
     }
   }
@@ -488,6 +521,18 @@ class DatabaseService {
       );
     } catch (error) {
       console.error('SQLite update error:', { table, idColumn, id, keys, values, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'update',
+          table,
+          idColumn,
+          id,
+          columns: keys,
+          valuesCount: values.length,
+        },
+        'HIGH'
+      );
       throw error;
     }
   }
@@ -503,6 +548,16 @@ class DatabaseService {
       );
     } catch (error) {
       console.error('SQLite delete error:', { table, idColumn, id, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'delete',
+          table,
+          idColumn,
+          id,
+        },
+        'MEDIUM'
+      );
       throw error;
     }
   }
@@ -514,6 +569,15 @@ class DatabaseService {
       return await this.enqueueTask(() => this.withDbRetry(() => this.db!.getAllAsync<T>(sql, normalizedParams), 'query'));
     } catch (error) {
       console.error('SQLite query error:', { sql, params: normalizedParams, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'query',
+          sql: this.truncateSql(sql),
+          paramsCount: normalizedParams.length,
+        },
+        'MEDIUM'
+      );
       throw error;
     }
   }
@@ -525,6 +589,15 @@ class DatabaseService {
       return await this.enqueueTask(() => this.withDbRetry(() => this.db!.getFirstAsync<T>(sql, normalizedParams), 'queryFirst'));
     } catch (error) {
       console.error('SQLite queryFirst error:', { sql, params: normalizedParams, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'queryFirst',
+          sql: this.truncateSql(sql),
+          paramsCount: normalizedParams.length,
+        },
+        'MEDIUM'
+      );
       throw error;
     }
   }
@@ -536,6 +609,15 @@ class DatabaseService {
       return await this.enqueueTask(() => this.withDbRetry(() => this.db!.runAsync(sql, normalizedParams), 'runAsync'));
     } catch (error) {
       console.error('SQLite runAsync error:', { sql, params: normalizedParams, error });
+      void this.reportDbError(
+        error,
+        {
+          operation: 'runAsync',
+          sql: this.truncateSql(sql),
+          paramsCount: normalizedParams.length,
+        },
+        'HIGH'
+      );
       throw error;
     }
   }

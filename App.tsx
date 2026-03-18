@@ -19,6 +19,7 @@ import {
   hasStoredSubUserSession,
   promptBiometric,
 } from './src/services/auth/biometricAuthService';
+import { flushErrorQueue, reportError, setErrorSubUserTokenGetter, setErrorTokenGetter } from './src/services/error/errorReporter';
 import {
   evaluateOfflineSessionWindow,
   markInternetConnectionSeen,
@@ -76,6 +77,20 @@ function RootApp() {
   const { user } = useUser();
 
   useEffect(() => {
+    const ErrorUtilsRef = (global as any)?.ErrorUtils;
+    const defaultHandler = ErrorUtilsRef?.getGlobalHandler?.();
+    if (ErrorUtilsRef?.setGlobalHandler) {
+      ErrorUtilsRef.setGlobalHandler((error: Error, isFatal?: boolean) => {
+        void reportError(error, {
+          code: 'UNHANDLED_ERROR',
+          severity: isFatal ? 'CRITICAL' : 'HIGH',
+          isFatal: !!isFatal,
+        });
+        if (defaultHandler) {
+          defaultHandler(error, isFatal);
+        }
+      });
+    }
     initializeApp();
     return () => {
       syncService.destroy();
@@ -90,6 +105,7 @@ function RootApp() {
       const hasInternet = !!state.isConnected && state.isInternetReachable !== false;
       if (!hasInternet) return;
       void markInternetConnectionSeen();
+      void flushErrorQueue();
     });
 
     return () => {
@@ -104,6 +120,7 @@ function RootApp() {
       syncService.handleConnectivityChange(hasInternet);
       if (hasInternet) {
         void markInternetConnectionSeen();
+        void flushErrorQueue();
         void syncService.incrementalSync();
       }
     };
@@ -124,7 +141,7 @@ function RootApp() {
   useEffect(() => {
     if (isLoaded && getToken) {
       if (APP_AUTH_DEBUG) console.log('[App] configurando syncService.setTokenGetter');
-      syncService.setTokenGetter(async () => {
+      const tokenGetter = async () => {
         try {
           const freshToken = await (getToken as any)?.({ skipCache: true });
           if (freshToken) {
@@ -138,14 +155,16 @@ function RootApp() {
           console.error('Error obteniendo token:', error);
           return null;
         }
-      });
+      };
+      syncService.setTokenGetter(tokenGetter);
+      setErrorTokenGetter(tokenGetter);
     }
   }, [isLoaded, getToken]);
 
   // Configurar token getter del subusuario
   useEffect(() => {
     if (APP_AUTH_DEBUG) console.log('[App] configurando syncService.setSubUserTokenGetter');
-    syncService.setSubUserTokenGetter(async () => {
+    const subUserTokenGetter = async () => {
       try {
         const token = useAuthStore.getState().subUserToken;
         if (APP_AUTH_DEBUG) console.log('[App] subUserToken getter', { hasToken: !!token, len: token?.length || 0 });
@@ -154,7 +173,9 @@ function RootApp() {
         console.error('Error obteniendo token de subusuario:', error);
         return null;
       }
-    });
+    };
+    syncService.setSubUserTokenGetter(subUserTokenGetter);
+    setErrorSubUserTokenGetter(subUserTokenGetter);
   }, []);
 
   useEffect(() => {

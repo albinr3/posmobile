@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { reportError } from '../services/error/errorReporter';
 
 type ErrorBoundaryProps = {
   children: React.ReactNode;
@@ -28,6 +29,12 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       message: error?.message,
       stack: error?.stack,
       componentStack: errorInfo?.componentStack,
+    });
+    void reportError(error, {
+      code: 'UNHANDLED_ERROR',
+      severity: 'CRITICAL',
+      metadata: { componentStack: errorInfo?.componentStack },
+      isFatal: true,
     });
   }
 
@@ -88,4 +95,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

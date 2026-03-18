@@ -581,6 +581,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       <Surface style={styles.itemCard}>
         <View style={styles.itemInfo}>
           <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
+          {item.sku ? (
+            <Text style={styles.itemReference}>Ref: {item.sku}</Text>
+          ) : null}
           <View style={styles.priceRow}>
             <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>
             {canOverridePrice ? (
@@ -1072,16 +1075,20 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: ui.colors.text,
   },
-  itemPrice: {
+  itemReference: {
     fontSize: 12,
     color: ui.colors.textMuted,
     marginTop: 2,
+  },
+  itemPrice: {
+    fontSize: 12,
+    color: ui.colors.textMuted,
   },
   priceRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 2,
+    marginTop: 6,
   },
   priceEditChip: {
     flexDirection: 'row',

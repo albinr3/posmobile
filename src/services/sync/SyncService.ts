@@ -3,6 +3,7 @@ import axios from 'axios';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { db } from '../../database/Database';
 import { useSyncStore } from '../../store/syncStore';
+import { reportError } from '../error/errorReporter';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
 import { prepareSyncRequestData } from './prepareSyncRequestData';
 import { downloadFromServer } from './downloadFromServer';
@@ -623,14 +624,34 @@ class SyncService {
   }
 
   private async handleSyncError(item: any, error: any): Promise<boolean> {
+    const errorSummary = summarizeError(error);
     if (SYNC_DEBUG) {
       console.log('[SyncService] handleSyncError()', {
         queueId: item?.id,
         entityType: item?.entity_type,
         action: item?.action,
-        summary: summarizeError(error),
+        summary: errorSummary,
       });
     }
+    const backendStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
+    const backendErrorRaw = axios.isAxiosError(error)
+      ? String(error.response?.data?.error || error.response?.data?.message || error.message || '')
+      : String(error?.message || '');
+    const backendErrorMessage = backendErrorRaw.toLowerCase();
+
+    void reportError(error, {
+      code: 'SYNC_ERROR',
+      severity: 'HIGH',
+      metadata: {
+        entityType: item?.entity_type || null,
+        queueId: item?.id ?? null,
+        action: item?.action || null,
+        retryCount: item?.retry_count ?? null,
+        backendStatus: backendStatus ?? null,
+        backendMessage: backendErrorRaw ? backendErrorRaw.slice(0, 200) : null,
+        summary: errorSummary,
+      },
+    });
     const dependencyError =
       (typeof error?.message === 'string' &&
         (error.message.includes('Producto sin server_id') ||
@@ -657,13 +678,6 @@ class SyncService {
       return true;
     }
 
-    const backendErrorMessage = axios.isAxiosError(error)
-      ? String(error.response?.data?.error || error.response?.data?.message || '').toLowerCase()
-      : '';
-    const backendErrorRaw = axios.isAxiosError(error)
-      ? String(error.response?.data?.error || error.response?.data?.message || error.message || '')
-      : String(error?.message || '');
-    const backendStatus = axios.isAxiosError(error) ? error.response?.status : undefined;
     const backendAuthError =
       axios.isAxiosError(error) &&
       (backendStatus === 401 || backendStatus === 403);
