@@ -665,107 +665,107 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       {items.length > 0 && (
         <BottomDock>
           <Surface style={styles.summaryCard}>
-          {editingSaleLocalId ? (
-            <View style={styles.editingBanner}>
-              <Text style={styles.editingBannerText}>Editando factura {editingInvoiceCode || '-'}</Text>
+            {editingSaleLocalId ? (
+              <View style={styles.editingBanner}>
+                <Text style={styles.editingBannerText}>Editando factura {editingInvoiceCode || '-'}</Text>
+              </View>
+            ) : null}
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cliente:</Text>
+              <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
+                {customerName || '(General) Cliente general'}
+              </Button>
             </View>
-          ) : null}
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Cliente:</Text>
-            <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
-              {customerName || '(General) Cliente general'}
-            </Button>
-          </View>
 
-          <View style={styles.summaryRow}>
-            <Text style={styles.summaryLabel}>Método de Pago:</Text>
-            <Menu
-              visible={menuVisible}
-              onDismiss={() => setMenuVisible(false)}
-              anchor={
-                <Button mode="text" onPress={() => setMenuVisible(true)}>
-                  {paymentMethods.find(m => m.value === paymentMethod)?.label}
-                </Button>
-              }
-            >
-              {paymentMethods.map((method) => (
-                <Menu.Item
-                  key={method.value}
-                  onPress={() => {
-                    handlePaymentMethodSelect(method.value);
-                  }}
-                  title={method.label}
-                />
-              ))}
-            </Menu>
-          </View>
-
-          {paymentMethod === 'TRANSFERENCIA' && (
-            <View style={styles.selectorBlock}>
-              <Text style={styles.summaryLabel}>Banco:</Text>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Método de Pago:</Text>
               <Menu
-                visible={transferBankMenuVisible}
-                onDismiss={() => setTransferBankMenuVisible(false)}
+                visible={menuVisible}
+                onDismiss={() => setMenuVisible(false)}
                 anchor={
-                  <Button mode="text" onPress={() => setTransferBankMenuVisible(true)}>
-                    {transferBankName || 'Seleccionar banco'}
+                  <Button mode="text" onPress={() => setMenuVisible(true)}>
+                    {paymentMethods.find(m => m.value === paymentMethod)?.label}
                   </Button>
                 }
               >
-                {DOMINICAN_BANKS.map((bankName) => (
+                {paymentMethods.map((method) => (
                   <Menu.Item
-                    key={bankName}
+                    key={method.value}
                     onPress={() => {
-                      setTransferBankName(bankName);
-                      setTransferBankMenuVisible(false);
+                      handlePaymentMethodSelect(method.value);
                     }}
-                    title={bankName}
+                    title={method.label}
                   />
                 ))}
               </Menu>
             </View>
-          )}
 
-          {paymentMethod === 'DIVIDIR_PAGO' && (
-            <View style={styles.selectorBlock}>
-              <Button mode="outlined" onPress={() => setSplitPaymentModalVisible(true)}>
-                Configurar pago dividido
-              </Button>
-              {paymentSplits.length > 0 ? (
-                <View style={styles.splitSummaryWrap}>
-                  {paymentSplits.map((split, index) => (
-                    <Text key={`${split.method}-${index}`} style={styles.splitSummaryText}>
-                      {`${formatPaymentWithBank(split.method, split.transferBankName)}: ${formatCurrency(split.amountCents)}`}
-                    </Text>
+            {paymentMethod === 'TRANSFERENCIA' && (
+              <View style={styles.selectorBlock}>
+                <Text style={styles.summaryLabel}>Banco:</Text>
+                <Menu
+                  visible={transferBankMenuVisible}
+                  onDismiss={() => setTransferBankMenuVisible(false)}
+                  anchor={
+                    <Button mode="text" onPress={() => setTransferBankMenuVisible(true)}>
+                      {transferBankName || 'Seleccionar banco'}
+                    </Button>
+                  }
+                >
+                  {DOMINICAN_BANKS.map((bankName) => (
+                    <Menu.Item
+                      key={bankName}
+                      onPress={() => {
+                        setTransferBankName(bankName);
+                        setTransferBankMenuVisible(false);
+                      }}
+                      title={bankName}
+                    />
                   ))}
-                  <Text style={[styles.splitSummaryText, splitDifferenceCents === 0 ? styles.splitOk : styles.splitError]}>
-                    Diferencia: {formatCurrency(splitDifferenceCents)}
-                  </Text>
-                </View>
-              ) : null}
+                </Menu>
+              </View>
+            )}
+
+            {paymentMethod === 'DIVIDIR_PAGO' && (
+              <View style={styles.selectorBlock}>
+                <Button mode="outlined" onPress={() => setSplitPaymentModalVisible(true)}>
+                  Configurar pago dividido
+                </Button>
+                {paymentSplits.length > 0 ? (
+                  <View style={styles.splitSummaryWrap}>
+                    {paymentSplits.map((split, index) => (
+                      <Text key={`${split.method}-${index}`} style={styles.splitSummaryText}>
+                        {`${formatPaymentWithBank(split.method, split.transferBankName)}: ${formatCurrency(split.amountCents)}`}
+                      </Text>
+                    ))}
+                    <Text style={[styles.splitSummaryText, splitDifferenceCents === 0 ? styles.splitOk : styles.splitError]}>
+                      Diferencia: {formatCurrency(splitDifferenceCents)}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            )}
+
+            <Divider style={styles.divider} />
+
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total:</Text>
+              <Text style={styles.totalValue}>{formatCurrency(getTotal())}</Text>
             </View>
-          )}
 
-          <Divider style={styles.divider} />
-
-          <View style={styles.totalRow}>
-            <Text style={styles.totalLabel}>Total:</Text>
-            <Text style={styles.totalValue}>{formatCurrency(getTotal())}</Text>
-          </View>
-
-          <Button
-            mode="contained"
-            buttonColor={ui.colors.primary}
-            textColor="#fff"
-            labelStyle={styles.completeButtonLabel}
-            onPress={handleCompleteSale}
-            loading={loading}
-            disabled={loading}
-            style={styles.completeButton}
-            contentStyle={styles.completeButtonContent}
-          >
-            {editingSaleLocalId ? 'Guardar Cambios' : 'Completar Venta'}
-          </Button>
+            <Button
+              mode="contained"
+              buttonColor={ui.colors.primary}
+              textColor="#fff"
+              labelStyle={styles.completeButtonLabel}
+              onPress={handleCompleteSale}
+              loading={loading}
+              disabled={loading}
+              style={styles.completeButton}
+              contentStyle={styles.completeButtonContent}
+            >
+              {editingSaleLocalId ? 'Guardar Cambios' : 'Completar Venta'}
+            </Button>
           </Surface>
         </BottomDock>
       )}
@@ -1088,7 +1088,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 14,
+    marginTop: 20,
   },
   priceEditChip: {
     flexDirection: 'row',
