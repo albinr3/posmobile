@@ -1,11 +1,12 @@
 import React, { useCallback, useState } from 'react';
-import { View, StyleSheet, FlatList } from 'react-native';
+import { View, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from '../../components/SafeAreaView';
-import { Searchbar, Surface, Text, Button } from 'react-native-paper';
+import { Searchbar, Surface, Text, Button, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { db } from '../../database/Database';
 import { useCartStore } from '../../store/cartStore';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
+import { ui } from '../../theme/ui';
 
 interface SelectCustomerScreenProps {
   navigation: any;
@@ -86,7 +87,7 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
               <Text style={styles.name}>{item.name}</Text>
               {item.phone ? <Text style={styles.phone}>{item.phone}</Text> : null}
             </View>
-            <Button mode="text" onPress={() => handleSelectCustomer(item.local_id, item.name)}>
+            <Button mode="text" textColor={ui.colors.primary} onPress={() => handleSelectCustomer(item.local_id, item.name)}>
               Elegir
             </Button>
           </Surface>
@@ -99,7 +100,7 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
                     <Text style={styles.name}>Cotizacion sin cliente</Text>
                     <Text style={styles.phone}>Opcional para cotizaciones</Text>
                   </View>
-                  <Button mode="text" onPress={() => handleSelectCustomer(null, null)}>
+                  <Button mode="text" textColor={ui.colors.primary} onPress={() => handleSelectCustomer(null, null)}>
                     Limpiar
                   </Button>
                 </Surface>
@@ -114,14 +115,17 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
         ListFooterComponent={
           <View style={styles.footer}>
             <View style={styles.footerDivider} />
-            <Button
-              mode="text"
-              icon="plus"
+            <TouchableOpacity
+              style={styles.createCustomerButton}
+              activeOpacity={0.8}
               onPress={() => navigation.navigate('AddCustomer')}
-              contentStyle={styles.footerButtonContent}
             >
-              Crear cliente nuevo
-            </Button>
+              <View style={styles.createCustomerIconWrap}>
+                <Icon source="account-plus" size={20} color="#fff" />
+              </View>
+              <Text style={styles.createCustomerText}>Crear cliente nuevo</Text>
+              <Icon source="chevron-right" size={20} color={ui.colors.primary} />
+            </TouchableOpacity>
           </View>
         }
       />
@@ -175,9 +179,31 @@ const styles = StyleSheet.create({
   footerDivider: {
     height: 1,
     backgroundColor: '#e0e0e0',
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  footerButtonContent: {
-    justifyContent: 'flex-start',
+  createCustomerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3EAFF',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: ui.colors.primary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    gap: 12,
+  },
+  createCustomerIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: ui.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createCustomerText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: ui.colors.primary,
   },
 });

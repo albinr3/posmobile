@@ -1088,7 +1088,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginTop: 6,
+    marginTop: 14,
   },
   priceEditChip: {
     flexDirection: 'row',

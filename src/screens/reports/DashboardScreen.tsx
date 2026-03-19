@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
 import { Button, Icon, Text } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -7,6 +7,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { useSyncStore } from '../../store/syncStore';
 
 interface DashboardScreenProps {
   navigation: any;
@@ -108,6 +109,14 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
       loadStats();
     }, [])
   );
+
+  // Recargar stats automáticamente cuando se completa un sync
+  const lastSyncTime = useSyncStore((s) => s.lastSyncTime);
+  useEffect(() => {
+    if (lastSyncTime) {
+      loadStats();
+    }
+  }, [lastSyncTime]);
 
   const loadStats = async () => {
     const DAY_MS = 24 * 60 * 60 * 1000;

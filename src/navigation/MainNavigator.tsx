@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image, Platform } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image, Platform, AppState } from 'react-native';
 import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -13,6 +13,8 @@ import { ui } from '../theme/ui';
 import { AppTopHeader } from '../components/AppTopHeader';
 import { useAuthStore } from '../store/authStore';
 import { getBillingOverviewWithOptions } from '../services/billing/billingService';
+import { syncService } from '../services/sync/SyncService';
+import { useSyncStore } from '../store/syncStore';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
@@ -60,6 +62,7 @@ const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
 const BILLING_TOKEN_TIMEOUT_MS = 4000;
+const APP_RESUME_SYNC_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutos
 
 const commonStackOptions = {
   header: () => <AppTopHeader />,
@@ -636,6 +639,46 @@ export function MainNavigator() {
       mounted = false;
     };
   }, [accountId, subUserToken]);
+
+  // Auto-sync: fullSync al montar y al volver del background (con cooldown de 10 min)
+  useEffect(() => {
+    if (!subUserToken) return;
+
+    const runSync = async () => {
+      try {
+        const netInfo = await NetInfo.fetch();
+        const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+        if (!hasInternet) return;
+
+        const clerkToken = await getTokenRef.current();
+        if (!clerkToken) return;
+
+        syncService.setTokenGetter(() => getTokenRef.current());
+        syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+        await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+      } catch (error) {
+        console.error('[MainNavigator] Error en auto-sync:', error);
+      }
+    };
+
+    // Sync inmediato al montar
+    runSync();
+
+    // Sync al volver del background (con cooldown de 10 min)
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        const lastSync = useSyncStore.getState().lastSyncTime;
+        const elapsed = lastSync ? Date.now() - lastSync : Infinity;
+        if (elapsed >= APP_RESUME_SYNC_COOLDOWN_MS) {
+          runSync();
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [subUserToken]);
 
   if (checkingBillingAccess) {
     return (
