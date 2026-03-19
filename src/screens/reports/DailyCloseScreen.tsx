@@ -13,7 +13,7 @@ interface CashSalesSummaryBank {
   totalCents: number;
 }
 
-interface CashSalesSummaryItem {
+interface MethodBreakdown {
   method: string;
   label: string;
   totalCents: number;
@@ -21,38 +21,51 @@ interface CashSalesSummaryItem {
 }
 
 interface DailyCloseMetrics {
-  soldTotal: number;
-  soldCash: number;
-  soldCredit: number;
-  cashReturnsTotalCents: number;
-  soldCashNetCents: number;
-  soldTotalNetCents: number;
-  collectedTotal: number;
-  paymentsCount: number;
-  salesCount: number;
-  collectedByMethod: Record<string, number>;
-  cashSalesSummary: {
+  sales: {
+    cashEfectivoCents: number;
+    cashTarjetaCents: number;
+    cashTransferenciaCents: number;
+    cashTotalCents: number;
+    creditCents: number;
     totalCents: number;
-    salesCount: number;
-    byMethod: CashSalesSummaryItem[];
+    returnsCents: number;
+    netCents: number;
+    cashCount: number;
+    creditCount: number;
+    totalCount: number;
+    byMethod: MethodBreakdown[];
+  };
+  collections: {
+    arEfectivoCents: number;
+    arTarjetaCents: number;
+    arTransferenciaCents: number;
+    totalCents: number;
+    arPaymentsCount: number;
+    arByMethod: MethodBreakdown[];
+  };
+  cashRegister: {
+    cashFromSalesCents: number;
+    cashFromArCents: number;
+    totalCashInCents: number;
+    returnsCents: number;
+    expensesCents: number;
+    expenses: { description: string; amountCents: number }[];
   };
 }
 
 const EMPTY_METRICS: DailyCloseMetrics = {
-  soldTotal: 0,
-  soldCash: 0,
-  soldCredit: 0,
-  cashReturnsTotalCents: 0,
-  soldCashNetCents: 0,
-  soldTotalNetCents: 0,
-  collectedTotal: 0,
-  paymentsCount: 0,
-  salesCount: 0,
-  collectedByMethod: {},
-  cashSalesSummary: {
-    totalCents: 0,
-    salesCount: 0,
-    byMethod: [],
+  sales: {
+    cashEfectivoCents: 0, cashTarjetaCents: 0, cashTransferenciaCents: 0,
+    cashTotalCents: 0, creditCents: 0, totalCents: 0, returnsCents: 0, netCents: 0,
+    cashCount: 0, creditCount: 0, totalCount: 0, byMethod: [],
+  },
+  collections: {
+    arEfectivoCents: 0, arTarjetaCents: 0, arTransferenciaCents: 0,
+    totalCents: 0, arPaymentsCount: 0, arByMethod: [],
+  },
+  cashRegister: {
+    cashFromSalesCents: 0, cashFromArCents: 0, totalCashInCents: 0,
+    returnsCents: 0, expensesCents: 0, expenses: [],
   },
 };
 
@@ -90,7 +103,7 @@ export function DailyCloseScreen() {
 
     setLoading(true);
     try {
-      const [salesRows, paymentRows, returnRows] = await Promise.all([
+      const [salesRows, paymentRows, returnRows, expenseRows] = await Promise.all([
         db.query<any>('SELECT total_cents, status, data, created_at FROM sales WHERE created_at >= ? AND created_at <= ?', [fromTs, toTs]),
         db.query<any>('SELECT amount_cents, data FROM payments'),
         db.query<any>(
@@ -99,33 +112,38 @@ export function DailyCloseScreen() {
            WHERE returned_at >= ? AND returned_at <= ?`,
           [fromTs, toTs]
         ),
+        db.query<any>(
+          `SELECT amount_cents, description FROM operating_expenses WHERE expense_date >= ? AND expense_date <= ?`,
+          [fromTs, toTs]
+        ),
       ]);
 
-      let soldTotal = 0;
-      let soldCash = 0;
-      let soldCredit = 0;
+      let soldTotalCents = 0;
+      let soldCashCents = 0;
+      let soldCreditCents = 0;
       let salesCount = 0;
       let cashSalesCount = 0;
-      const cashSalesSummaryMap = new Map<string, { method: string; label: string; totalCents: number; banks: Map<string, number> }>();
+      let creditSalesCount = 0;
+      
+      const cashSalesMethodMap = new Map<string, { method: string; label: string; totalCents: number; banks: Map<string, number> }>();
 
       for (const row of salesRows) {
         const statusRaw = String(row.status || '').toUpperCase();
         if (statusRaw === 'CANCELLED' || statusRaw === 'CANCELADO') continue;
         let parsed: any = null;
-        try {
-          parsed = row.data ? JSON.parse(row.data) : null;
-        } catch {
-          parsed = null;
-        }
+        try { parsed = row.data ? JSON.parse(row.data) : null; } catch { parsed = null; }
         if (parsed?.cancelledAt) continue;
 
         const cents = Number(row.total_cents || 0);
         const type = String(parsed?.type || '').toUpperCase();
-        soldTotal += cents;
+        soldTotalCents += cents;
         salesCount += 1;
-        if (type === 'CREDITO') soldCredit += cents;
-        else {
-          soldCash += cents;
+        
+        if (type === 'CREDITO') {
+          soldCreditCents += cents;
+          creditSalesCount += 1;
+        } else {
+          soldCashCents += cents;
           cashSalesCount += 1;
 
           const paymentSplits = Array.isArray(parsed?.paymentSplits) ? parsed.paymentSplits : [];
@@ -135,11 +153,8 @@ export function DailyCloseScreen() {
               const amountCents = Number(split?.amountCents || 0);
               if (!Number.isFinite(amountCents) || amountCents <= 0) continue;
 
-              const current = cashSalesSummaryMap.get(method) || {
-                method,
-                label: getPaymentMethodLabel(method),
-                totalCents: 0,
-                banks: new Map<string, number>(),
+              const current = cashSalesMethodMap.get(method) || {
+                method, label: getPaymentMethodLabel(method), totalCents: 0, banks: new Map<string, number>(),
               };
 
               current.totalCents += amountCents;
@@ -147,18 +162,14 @@ export function DailyCloseScreen() {
                 const bankName = String(split.transferBankName);
                 current.banks.set(bankName, (current.banks.get(bankName) || 0) + amountCents);
               }
-
-              cashSalesSummaryMap.set(method, current);
+              cashSalesMethodMap.set(method, current);
             }
             continue;
           }
 
           const method = String(parsed?.paymentMethod || 'OTRO').toUpperCase();
-          const current = cashSalesSummaryMap.get(method) || {
-            method,
-            label: getPaymentMethodLabel(method),
-            totalCents: 0,
-            banks: new Map<string, number>(),
+          const current = cashSalesMethodMap.get(method) || {
+            method, label: getPaymentMethodLabel(method), totalCents: 0, banks: new Map<string, number>(),
           };
 
           current.totalCents += cents;
@@ -166,19 +177,14 @@ export function DailyCloseScreen() {
             const bankName = String(parsed.transferBankName);
             current.banks.set(bankName, (current.banks.get(bankName) || 0) + cents);
           }
-
-          cashSalesSummaryMap.set(method, current);
+          cashSalesMethodMap.set(method, current);
         }
       }
 
-      let cashReturnsTotalCents = 0;
+      let cashReturnsCents = 0;
       for (const row of returnRows) {
         let parsed: any = null;
-        try {
-          parsed = row.data ? JSON.parse(row.data) : null;
-        } catch {
-          parsed = null;
-        }
+        try { parsed = row.data ? JSON.parse(row.data) : null; } catch { parsed = null; }
         if (row.cancelled_at || parsed?.cancelledAt) continue;
 
         const saleType = String(parsed?.sale?.type || parsed?.type || '').toUpperCase();
@@ -186,68 +192,95 @@ export function DailyCloseScreen() {
 
         const cents = Number(row.total_cents || parsed?.totalCents || 0);
         if (!Number.isFinite(cents) || cents <= 0) continue;
-        cashReturnsTotalCents += cents;
+        cashReturnsCents += cents;
       }
 
-      const soldCashNetCents = soldCash - cashReturnsTotalCents;
-      const soldTotalNetCents = soldTotal - cashReturnsTotalCents;
-
-      let collectedTotal = 0;
-      let paymentsCount = 0;
-      const byMethod: Record<string, number> = {};
+      let arCollectedTotal = 0;
+      let arPaymentsCount = 0;
+      const arByMethodMap = new Map<string, { method: string; label: string; totalCents: number; banks: Map<string, number> }>();
 
       for (const row of paymentRows) {
         let parsed: any = null;
-        try {
-          parsed = row.data ? JSON.parse(row.data) : null;
-        } catch {
-          parsed = null;
-        }
+        try { parsed = row.data ? JSON.parse(row.data) : null; } catch { parsed = null; }
         if (parsed?.cancelledAt) continue;
         const paidAtRaw = parsed?.paidAt ?? parsed?.createdAt ?? parsed?.date ?? null;
-        const paidAt =
-          typeof paidAtRaw === 'number'
-            ? paidAtRaw
-            : typeof paidAtRaw === 'string'
-              ? new Date(paidAtRaw).getTime()
-              : NaN;
+        const paidAt = typeof paidAtRaw === 'number' ? paidAtRaw : typeof paidAtRaw === 'string' ? new Date(paidAtRaw).getTime() : NaN;
         if (!Number.isFinite(paidAt) || paidAt < fromTs || paidAt > toTs) continue;
 
         const cents = Number(row.amount_cents || 0);
         const method = String(parsed?.method || parsed?.paymentMethod || 'OTRO').toUpperCase();
-        collectedTotal += cents;
-        paymentsCount += 1;
-        byMethod[method] = (byMethod[method] || 0) + cents;
+        
+        arCollectedTotal += cents;
+        arPaymentsCount += 1;
+        
+        const current = arByMethodMap.get(method) || {
+          method, label: getPaymentMethodLabel(method), totalCents: 0, banks: new Map<string, number>(),
+        };
+
+        current.totalCents += cents;
+        if (method === 'TRANSFERENCIA' && parsed?.transferBankName) {
+          const bankName = String(parsed.transferBankName);
+          current.banks.set(bankName, (current.banks.get(bankName) || 0) + cents);
+        }
+        arByMethodMap.set(method, current);
       }
 
-      const cashSalesSummaryByMethod: CashSalesSummaryItem[] = Array.from(cashSalesSummaryMap.values())
-        .map((item) => ({
-          method: item.method,
-          label: item.label,
-          totalCents: item.totalCents,
-          banks: Array.from(item.banks.entries())
-            .map(([bankName, totalCents]) => ({ bankName, totalCents }))
-            .filter((bank) => bank.totalCents > 0)
-            .sort((a, b) => b.totalCents - a.totalCents || a.bankName.localeCompare(b.bankName, 'es')),
-        }))
-        .sort((a, b) => b.totalCents - a.totalCents || a.label.localeCompare(b.label, 'es'));
+      let expensesTotalCents = 0;
+      const expensesList: {description: string, amountCents: number}[] = [];
+      for (const row of expenseRows) {
+        const cents = Number(row.amount_cents || 0);
+        expensesTotalCents += cents;
+        expensesList.push({ description: row.description || 'Gasto', amountCents: cents });
+      }
+
+      const mapToBreakdown = (map: typeof cashSalesMethodMap) => {
+        return Array.from(map.values())
+          .map((item) => ({
+            method: item.method,
+            label: item.label,
+            totalCents: item.totalCents,
+            banks: Array.from(item.banks.entries())
+              .map(([bankName, totalCents]) => ({ bankName, totalCents }))
+              .filter((bank) => bank.totalCents > 0)
+              .sort((a, b) => b.totalCents - a.totalCents || a.bankName.localeCompare(b.bankName, 'es')),
+          }))
+          .sort((a, b) => b.totalCents - a.totalCents || a.label.localeCompare(b.label, 'es'));
+      };
+
+      const cashFromSales = cashSalesMethodMap.get('EFECTIVO')?.totalCents || 0;
+      const cashFromAr = arByMethodMap.get('EFECTIVO')?.totalCents || 0;
 
       setMetrics({
-        soldTotal,
-        soldCash,
-        soldCredit,
-        cashReturnsTotalCents,
-        soldCashNetCents,
-        soldTotalNetCents,
-        collectedTotal,
-        paymentsCount,
-        salesCount,
-        collectedByMethod: byMethod,
-        cashSalesSummary: {
-          totalCents: soldCash,
-          salesCount: cashSalesCount,
-          byMethod: cashSalesSummaryByMethod,
+        sales: {
+          cashEfectivoCents: cashFromSales,
+          cashTarjetaCents: cashSalesMethodMap.get('TARJETA')?.totalCents || 0,
+          cashTransferenciaCents: cashSalesMethodMap.get('TRANSFERENCIA')?.totalCents || 0,
+          cashTotalCents: soldCashCents,
+          creditCents: soldCreditCents,
+          totalCents: soldTotalCents,
+          returnsCents: cashReturnsCents,
+          netCents: soldTotalCents - cashReturnsCents,
+          cashCount: cashSalesCount,
+          creditCount: creditSalesCount,
+          totalCount: salesCount,
+          byMethod: mapToBreakdown(cashSalesMethodMap),
         },
+        collections: {
+          arEfectivoCents: cashFromAr,
+          arTarjetaCents: arByMethodMap.get('TARJETA')?.totalCents || 0,
+          arTransferenciaCents: arByMethodMap.get('TRANSFERENCIA')?.totalCents || 0,
+          totalCents: arCollectedTotal,
+          arPaymentsCount: arPaymentsCount,
+          arByMethod: mapToBreakdown(arByMethodMap),
+        },
+        cashRegister: {
+          cashFromSalesCents: cashFromSales,
+          cashFromArCents: cashFromAr,
+          totalCashInCents: cashFromSales + cashFromAr,
+          returnsCents: cashReturnsCents,
+          expensesCents: expensesTotalCents,
+          expenses: expensesList,
+        }
       });
     } catch (error) {
       console.error('Error cargando cuadre diario:', error);
@@ -313,87 +346,66 @@ export function DailyCloseScreen() {
         </View>
 
         <View style={styles.cardsGrid}>
-          <Card style={styles.metricCard}>
-            <Card.Content>
-              <Text style={styles.metricLabel}>Vendido hoy</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.soldTotalNetCents)}</Text>
-              <Text style={styles.metricHint}>{metrics.salesCount} facturas</Text>
-              <Text style={styles.metricHint}>Bruto: {formatCurrency(metrics.soldTotal)}</Text>
-            </Card.Content>
-          </Card>
-          <Card style={styles.metricCard}>
-            <Card.Content>
-              <Text style={styles.metricLabel}>Vendido contado</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.soldCashNetCents)}</Text>
-              <Text style={styles.metricHint}>Bruto: {formatCurrency(metrics.soldCash)}</Text>
-            </Card.Content>
-          </Card>
-          <Card style={styles.metricCard}>
-            <Card.Content>
-              <Text style={styles.metricLabel}>Vendido crédito</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.soldCredit)}</Text>
-            </Card.Content>
-          </Card>
-          <Card style={styles.metricCard}>
-            <Card.Content>
-              <Text style={styles.metricLabel}>Cobrado (abonos)</Text>
-              <Text style={styles.metricValue}>{formatCurrency(metrics.collectedTotal)}</Text>
-              <Text style={styles.metricHint}>{metrics.paymentsCount} pagos</Text>
-            </Card.Content>
-          </Card>
-          <Card style={styles.metricCard}>
-            <Card.Content>
-              <Text style={styles.metricLabel}>Devoluciones contado</Text>
-              <Text style={styles.metricDanger}>-{formatCurrency(metrics.cashReturnsTotalCents)}</Text>
-              <Text style={styles.metricHint}>Descontadas por fecha de devolucion</Text>
-            </Card.Content>
-          </Card>
-        </View>
+          <Text style={styles.sectionTitle}>🧾 Ventas del día</Text>
+          <View style={styles.cardsRow}>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>En efectivo</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.sales.cashEfectivoCents)}</Text>
+              </Card.Content>
+            </Card>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Tarjeta / Transf.</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.sales.cashTarjetaCents + metrics.sales.cashTransferenciaCents)}</Text>
+              </Card.Content>
+            </Card>
+          </View>
+          <View style={styles.cardsRow}>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>A crédito</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.sales.creditCents)}</Text>
+                <Text style={styles.metricHint}>{metrics.sales.creditCount} facturas</Text>
+              </Card.Content>
+            </Card>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Total ventas</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.sales.totalCents)}</Text>
+                <Text style={styles.metricHint}>{metrics.sales.totalCount} facturas</Text>
+              </Card.Content>
+            </Card>
+          </View>
 
-        <Card style={styles.detailCard}>
-          <Card.Content>
-            <Text style={styles.detailTitle}>Detalle de cobros por método</Text>
-            {loading ? <Text style={styles.emptyText}>Cargando...</Text> : null}
-            {!loading && Object.keys(metrics.collectedByMethod).length === 0 ? <Text style={styles.emptyText}>No hay cobros registrados.</Text> : null}
-            {!loading
-              ? Object.entries(metrics.collectedByMethod).map(([method, cents]) => (
-                  <View key={method} style={styles.methodRow}>
-                    <Text style={styles.methodName}>{method}</Text>
-                    <Text style={styles.methodValue}>{formatCurrency(cents)}</Text>
-                  </View>
-                ))
-              : null}
-          </Card.Content>
-        </Card>
+          {metrics.sales.returnsCents > 0 && (
+            <Card style={styles.metricCard}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Devoluciones contado</Text>
+                <Text style={styles.metricDanger}>-{formatCurrency(metrics.sales.returnsCents)}</Text>
+                <Text style={styles.metricHint}>Neto: {formatCurrency(metrics.sales.netCents)}</Text>
+              </Card.Content>
+            </Card>
+          )}
 
-        <Card style={styles.detailCard}>
-          <Card.Content>
-            <View style={styles.summaryHeader}>
-              <View style={styles.summaryHeaderText}>
-                <Text style={styles.detailTitle}>Ventas al contado por método</Text>
-                <Text style={styles.metricHint}>
-                  {formatCurrency(metrics.cashSalesSummary.totalCents)} · {metrics.cashSalesSummary.salesCount} ventas
-                </Text>
-              </View>
-              <Button mode="outlined" onPress={() => setShowCashSalesSummary((value) => !value)} textColor={ui.colors.primary}>
-                {showCashSalesSummary ? 'Ocultar' : 'Ver resumen'}
-              </Button>
-            </View>
+          {metrics.sales.byMethod.length > 0 && (
+            <Card style={styles.detailCard}>
+              <Card.Content>
+                <View style={styles.summaryHeader}>
+                  <Text style={styles.detailTitle}>Ventas al contado por método</Text>
+                  <Button mode="outlined" onPress={() => setShowCashSalesSummary(!showCashSalesSummary)} textColor={ui.colors.primary} compact>
+                    {showCashSalesSummary ? 'Ocultar' : 'Ver'}
+                  </Button>
+                </View>
 
-            {showCashSalesSummary ? (
-              loading ? (
-                <Text style={styles.emptyText}>Cargando...</Text>
-              ) : metrics.cashSalesSummary.byMethod.length === 0 ? (
-                <Text style={styles.emptyText}>No hay ventas al contado en el rango seleccionado.</Text>
-              ) : (
-                metrics.cashSalesSummary.byMethod.map((item) => (
+                {showCashSalesSummary && metrics.sales.byMethod.map((item) => (
                   <View key={item.method} style={styles.summaryMethodCard}>
                     <View style={styles.methodRowCompact}>
                       <Text style={styles.methodName}>{item.label}</Text>
                       <Text style={styles.methodValue}>{formatCurrency(item.totalCents)}</Text>
                     </View>
 
-                    {item.method === 'TRANSFERENCIA' && item.banks.length > 0 ? (
+                    {item.method === 'TRANSFERENCIA' && item.banks.length > 0 && (
                       <View style={styles.bankList}>
                         {item.banks.map((bank) => (
                           <View key={bank.bankName} style={styles.bankRow}>
@@ -402,13 +414,114 @@ export function DailyCloseScreen() {
                           </View>
                         ))}
                       </View>
-                    ) : null}
+                    )}
                   </View>
-                ))
-              )
-            ) : null}
-          </Card.Content>
-        </Card>
+                ))}
+              </Card.Content>
+            </Card>
+          )}
+
+          <Text style={[styles.sectionTitle, { marginTop: 16 }]}>💰 Cobros del día</Text>
+          <Text style={styles.sectionSubtitle}>Lo que realmente entra a caja (abonos)</Text>
+          <View style={styles.cardsRow}>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Efectivo recibido</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.collections.arEfectivoCents)}</Text>
+              </Card.Content>
+            </Card>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Con tarjeta</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.collections.arTarjetaCents)}</Text>
+              </Card.Content>
+            </Card>
+          </View>
+          <View style={styles.cardsRow}>
+            <Card style={styles.metricCardHalf}>
+              <Card.Content>
+                <Text style={styles.metricLabel}>Transferencias</Text>
+                <Text style={styles.metricValue}>{formatCurrency(metrics.collections.arTransferenciaCents)}</Text>
+              </Card.Content>
+            </Card>
+            <Card style={[styles.metricCardHalf, { borderColor: ui.colors.primary + '50', backgroundColor: ui.colors.primary + '10' }]}>
+              <Card.Content>
+                <Text style={[styles.metricLabel, { color: ui.colors.primary, fontWeight: '700' }]}>Total cobrado</Text>
+                <Text style={[styles.metricValue, { color: ui.colors.primary }]}>{formatCurrency(metrics.collections.totalCents)}</Text>
+                <Text style={styles.metricHint}>{metrics.collections.arPaymentsCount} abonos</Text>
+              </Card.Content>
+            </Card>
+          </View>
+
+          {metrics.collections.arByMethod.length > 0 && (
+            <Card style={styles.detailCard}>
+              <Card.Content>
+                <Text style={styles.detailTitle}>Recibos por método de pago</Text>
+                {metrics.collections.arByMethod.map((item) => (
+                  <View key={item.method} style={styles.summaryMethodCard}>
+                    <View style={styles.methodRowCompact}>
+                      <Text style={styles.methodName}>{item.label}</Text>
+                      <Text style={styles.methodValue}>{formatCurrency(item.totalCents)}</Text>
+                    </View>
+
+                    {item.method === 'TRANSFERENCIA' && item.banks.length > 0 && (
+                      <View style={styles.bankList}>
+                        {item.banks.map((bank) => (
+                          <View key={bank.bankName} style={styles.bankRow}>
+                            <Text style={styles.bankName}>{bank.bankName}</Text>
+                            <Text style={styles.bankValue}>{formatCurrency(bank.totalCents)}</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                  </View>
+                ))}
+              </Card.Content>
+            </Card>
+          )}
+
+          <Text style={[styles.sectionTitle, { marginTop: 16 }]}>🏦 Efectivo en caja</Text>
+          <Text style={styles.sectionSubtitle}>Dinero físico ingresado</Text>
+          <Card style={[styles.metricCard, { borderColor: '#16a34a50', backgroundColor: '#16a34a10' }]}>
+            <Card.Content>
+              <View style={styles.cashRow}>
+                <Text style={styles.cashLabel}>Efectivo ventas contado</Text>
+                <Text style={styles.cashValue}>{formatCurrency(metrics.cashRegister.cashFromSalesCents)}</Text>
+              </View>
+              <View style={styles.cashRow}>
+                <Text style={styles.cashLabel}>Efectivo abonos (créditos)</Text>
+                <Text style={styles.cashValue}>{formatCurrency(metrics.cashRegister.cashFromArCents)}</Text>
+              </View>
+              <View style={[styles.cashRow, { borderTopWidth: 1, borderTopColor: '#16a34a50', marginTop: 10, paddingTop: 10 }]}>
+                <Text style={[styles.cashLabel, { fontWeight: 'bold', color: '#15803d' }]}>Total efectivo ingresado</Text>
+                <Text style={[styles.cashValue, { fontWeight: 'bold', color: '#15803d', fontSize: 20 }]}>{formatCurrency(metrics.cashRegister.totalCashInCents)}</Text>
+              </View>
+            </Card.Content>
+          </Card>
+
+          {(metrics.cashRegister.returnsCents > 0 || metrics.cashRegister.expensesCents > 0) && (
+            <Card style={[styles.detailCard, { borderStyle: 'dashed' }]}>
+              <Card.Content>
+                <Text style={styles.detailTitle}>Ref: Salidas del día</Text>
+                <Text style={styles.metricHint}>Gastos y dev. no se restan auto. porque podrían ser banco y no físico.</Text>
+                <View style={{ marginTop: 10, gap: 8 }}>
+                  {metrics.cashRegister.returnsCents > 0 && (
+                    <View style={styles.methodRowCompact}>
+                      <Text style={styles.bankName}>Devoluciones totales</Text>
+                      <Text style={styles.metricDanger}>-{formatCurrency(metrics.cashRegister.returnsCents)}</Text>
+                    </View>
+                  )}
+                  {metrics.cashRegister.expenses.map((expense, i) => (
+                    <View key={i} style={styles.methodRowCompact}>
+                      <Text style={styles.bankName}>Gasto: {expense.description}</Text>
+                      <Text style={styles.metricDanger}>-{formatCurrency(expense.amountCents)}</Text>
+                    </View>
+                  ))}
+                </View>
+              </Card.Content>
+            </Card>
+          )}
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -420,27 +533,31 @@ const styles = StyleSheet.create({
   header: { marginBottom: 10 },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: '800' },
   subtitle: { color: ui.colors.textMuted, marginTop: 4 },
+  sectionTitle: { color: ui.colors.text, fontSize: 18, fontWeight: '700', marginBottom: 2 },
+  sectionSubtitle: { color: ui.colors.textMuted, fontSize: 13, marginBottom: 8 },
   filtersCard: {
     backgroundColor: ui.colors.surface,
     borderWidth: 1,
     borderColor: ui.colors.border,
     borderRadius: ui.radius.lg,
     padding: 12,
-    marginBottom: 10,
+    marginBottom: 16,
   },
   row: { flexDirection: 'row', gap: 10 },
   input: { marginBottom: 10, backgroundColor: ui.colors.surface },
   halfInput: { flex: 1 },
   halfBtn: { flex: 1 },
   cardsGrid: { gap: 10 },
+  cardsRow: { flexDirection: 'row', gap: 10, flex: 1 },
   metricCard: { borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
+  metricCardHalf: { flex: 1, borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
   metricLabel: { color: ui.colors.textMuted, fontSize: 13 },
-  metricValue: { color: ui.colors.text, fontSize: 23, fontWeight: '800', marginTop: 4 },
-  metricDanger: { color: '#B91C1C', fontSize: 23, fontWeight: '800', marginTop: 4 },
+  metricValue: { color: ui.colors.text, fontSize: 21, fontWeight: '800', marginTop: 4 },
+  metricDanger: { color: '#B91C1C', fontSize: 16, fontWeight: '700' },
   metricHint: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
-  detailCard: { marginTop: 10, borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
-  detailTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  summaryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
+  detailCard: { marginTop: 4, borderRadius: ui.radius.lg, borderWidth: 1, borderColor: ui.colors.border, backgroundColor: ui.colors.surface },
+  detailTitle: { color: ui.colors.text, fontSize: 15, fontWeight: '700' },
+  summaryHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   summaryHeaderText: { flex: 1 },
   summaryMethodCard: {
     borderWidth: 1,
@@ -450,6 +567,9 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     marginTop: 8,
   },
+  cashRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 4 },
+  cashLabel: { color: ui.colors.text, fontSize: 14 },
+  cashValue: { color: ui.colors.text, fontSize: 15, fontWeight: '600' },
   methodRow: {
     borderWidth: 1,
     borderColor: ui.colors.border,

@@ -1,3 +1,5 @@
+RESPONDE EN ESPAÑOL SIEMPRE
+
 ## Backend Reference (Local)
 Si necesitas validar endpoints, contratos o lógica del backend, consulta este path local:
 
