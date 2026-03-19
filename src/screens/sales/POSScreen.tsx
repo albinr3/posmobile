@@ -380,12 +380,12 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                 <Text style={styles.productNameList} numberOfLines={1}>
                   {item.name}
                 </Text>
-                <Text style={styles.productPriceList}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
+                <Text style={styles.productPriceList}>RD$ {(item.priceCents / 100).toFixed(2)}</Text>
               </View>
               <View style={styles.listBottomRow}>
                 <Text style={styles.skuTextList}>
                   {item.sku ? `SKU ${item.sku}` : 'Sin SKU'}
-                  {item.reference ? ` | Ref ${item.reference}` : ''}
+                  {item.reference ? ` | ${item.reference}` : ''}
                 </Text>
                 <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
               </View>
@@ -434,10 +434,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           </Text>
           {item.reference ? (
             <Text style={styles.referenceText} numberOfLines={1}>
-              Ref: {item.reference}
+              {item.reference}
             </Text>
           ) : null}
-          <Text style={styles.productPrice}>DOP {(item.priceCents / 100).toFixed(2)}</Text>
+          <Text style={styles.productPrice}>RD$ {(item.priceCents / 100).toFixed(2)}</Text>
           <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
         </View>
       </TouchableOpacity>
@@ -583,7 +583,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         <View style={styles.bottomTop}>
           <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
-            <Text style={styles.totalAmount}>DOP {(getTotal() / 100).toFixed(2)}</Text>
+            <Text style={styles.totalAmount}>RD$ {(getTotal() / 100).toFixed(2)}</Text>
             <Text style={styles.itemsText}>{items.length} productos</Text>
           </View>
         </View>

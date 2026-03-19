@@ -1069,6 +1069,8 @@ const styles = StyleSheet.create({
   },
   itemInfo: {
     flex: 1,
+    minWidth: 0,
+    paddingRight: 8,
   },
   itemName: {
     fontSize: 14,
@@ -1087,8 +1089,9 @@ const styles = StyleSheet.create({
   priceRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 8,
-    marginTop: 20,
+    marginTop: 6,
   },
   priceEditChip: {
     flexDirection: 'row',
@@ -1109,7 +1112,8 @@ const styles = StyleSheet.create({
   quantityContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: 8,
+    marginLeft: 6,
+    marginRight: 4,
   },
   quantity: {
     fontSize: 16,
