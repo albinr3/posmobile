@@ -19,6 +19,8 @@ import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterService';
 import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
+import { getSalesSettings } from '../../services/settings/salesSettings';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface CartScreenProps {
   navigation: any;
@@ -39,7 +41,6 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     updateQuantity,
     updatePrice,
     removeItem,
-    getTotal,
     customerId,
     customerName,
     paymentMethod,
@@ -59,9 +60,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
   const [splitMethodMenuIndex, setSplitMethodMenuIndex] = useState<number | null>(null);
   const [splitBankMenuIndex, setSplitBankMenuIndex] = useState<number | null>(null);
+  const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const { setCustomer } = useCartStore();
   const { subUser } = useAuthStore();
-  const canOverridePrice = !!subUser?.isOwner || subUser?.canOverridePrice === true || subUser?.role === 'ADMIN';
+  const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
 
   const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
@@ -192,6 +194,59 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   useFocusEffect(
     useCallback(() => {
+      let active = true;
+      getSalesSettings()
+        .then((settings) => {
+          if (active) setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
+        })
+        .catch(() => {
+          if (active) setSalePricesIncludeItbis(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!editingSaleLocalId) return;
+      let active = true;
+      const loadDocumentMode = async () => {
+        try {
+          const sale = await db.queryFirst<{ data?: string }>('SELECT data FROM sales WHERE local_id = ?', [editingSaleLocalId]);
+          const parsed = sale?.data ? JSON.parse(sale.data) : null;
+          if (!active) return;
+          if (typeof parsed?.salePricesIncludeItbis === 'boolean') {
+            setSalePricesIncludeItbis(parsed.salePricesIncludeItbis);
+          }
+        } catch {
+          // no-op
+        }
+      };
+      void loadDocumentMode();
+      return () => {
+        active = false;
+      };
+    }, [editingSaleLocalId])
+  );
+
+  const cartTotals = useMemo(
+    () =>
+      calcDocumentTotalsByTaxMode({
+        items: items.map((item) => ({
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      }),
+    [items, salePricesIncludeItbis]
+  );
+
+  useFocusEffect(
+    useCallback(() => {
       const routeCustomerId = route?.params?.customerId;
       const routeCustomerName = route?.params?.customerName;
 
@@ -290,7 +345,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     [paymentSplits]
   );
 
-  const splitDifferenceCents = getTotal() - totalSplitCents;
+  const splitDifferenceCents = cartTotals.totalCents - totalSplitCents;
 
   const handleCompleteSale = async () => {
     if (items.length === 0) return;
@@ -360,7 +415,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         Alert.alert('Pago dividido', 'Debes agregar al menos un método en el pago dividido.');
         return;
       }
-      if (totalSplitCents !== getTotal()) {
+      if (totalSplitCents !== cartTotals.totalCents) {
         Alert.alert('Pago dividido', 'La suma de los pagos debe ser igual al total de la venta.');
         return;
       }
@@ -396,12 +451,20 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           quantity: item.quantity,
           priceCents: item.priceCents,
           unitPriceCents: item.priceCents,
-          totalCents: item.totalCents,
+          totalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: item.quantity, priceCents: item.priceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+            shippingCents: 0,
+            salePricesIncludeItbis,
+          }).totalCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
           unit: item.unit || 'UNIDAD',
           wasPriceOverridden: !!item.wasPriceOverridden,
           recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
         })),
-        totalCents: getTotal(),
+        subtotalCents: cartTotals.subtotalCents,
+        itbisCents: cartTotals.itbisCents,
+        totalCents: cartTotals.totalCents,
+        salePricesIncludeItbis,
         paymentMethod,
         transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
@@ -430,6 +493,37 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           existingData = null;
         }
 
+        const documentSalePricesIncludeItbis =
+          typeof existingData?.salePricesIncludeItbis === 'boolean'
+            ? existingData.salePricesIncludeItbis
+            : salePricesIncludeItbis;
+        const documentTotals = calcDocumentTotalsByTaxMode({
+          items: items.map((item) => ({
+            quantity: item.quantity,
+            priceCents: item.priceCents,
+            itbisRateBp: item.itbisRateBp ?? 1800,
+          })),
+          shippingCents: 0,
+          salePricesIncludeItbis: documentSalePricesIncludeItbis,
+        });
+        const documentItems = items.map((item) => ({
+          productId: item.productId,
+          productName: item.productName,
+          sku: item.sku,
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          unitPriceCents: item.priceCents,
+          totalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: item.quantity, priceCents: item.priceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+            shippingCents: 0,
+            salePricesIncludeItbis: documentSalePricesIncludeItbis,
+          }).totalCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+          unit: item.unit || 'UNIDAD',
+          wasPriceOverridden: !!item.wasPriceOverridden,
+          recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
+        }));
+
         const oldItems = Array.isArray(existingData?.items) ? existingData.items : [];
 
         // Revertir stock anterior
@@ -453,18 +547,24 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           createdAt,
           soldAt: createdAt,
           ...basePayload,
+          items: documentItems,
+          subtotalCents: documentTotals.subtotalCents,
+          itbisCents: documentTotals.itbisCents,
+          totalCents: documentTotals.totalCents,
+          salePricesIncludeItbis: documentSalePricesIncludeItbis,
           editedAt: now,
         };
 
         await db.update('sales', editingSaleLocalId, {
           customer_id: selectedCustomerId,
-          total_cents: getTotal(),
+          total_cents: documentTotals.totalCents,
           status: 'completed',
           synced: 0,
           data: JSON.stringify(updatedData),
         });
 
         await queueSaleUpdateForEdit(editingSaleLocalId, {
+          salePricesIncludeItbis: documentSalePricesIncludeItbis,
           customerId: selectedCustomerId,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
@@ -477,6 +577,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             sku: item.sku,
             quantity: item.quantity,
             unitPriceCents: item.priceCents,
+            itbisRateBp: item.itbisRateBp ?? 1800,
             unit: item.unit || 'UNIDAD',
             price: item.priceCents / 100,
             wasPriceOverridden: !!item.wasPriceOverridden,
@@ -491,7 +592,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           customerId: selectedCustomerId,
           customerName: selectedCustomerName,
           items,
-          totalCents: getTotal(),
+          subtotalCents: cartTotals.subtotalCents,
+          itbisCents: cartTotals.itbisCents,
+          totalCents: cartTotals.totalCents,
+          salePricesIncludeItbis,
           paymentMethod,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
           paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
@@ -504,7 +608,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           local_id: localId,
           invoice_code: invoiceCode,
           customer_id: selectedCustomerId,
-          total_cents: getTotal(),
+          total_cents: cartTotals.totalCents,
           status: 'completed',
           created_at: now,
           synced: 0,
@@ -533,12 +637,17 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
-        totalCents: getTotal(),
+        totalCents: cartTotals.totalCents,
+        salePricesIncludeItbis,
         items: items.map((item) => ({
           productName: item.productName,
           quantity: item.quantity,
           priceCents: item.priceCents,
-          totalCents: item.totalCents,
+          totalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: item.quantity, priceCents: item.priceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+            shippingCents: 0,
+            salePricesIncludeItbis,
+          }).totalCents,
           unit: item.unit || 'UNIDAD',
           reference: item.sku || null,
           productId: item.productId,
@@ -748,9 +857,20 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
             <Divider style={styles.divider} />
 
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Subtotal:</Text>
+              <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.subtotalCents)}</Text>
+            </View>
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>
+                ITBIS {salePricesIncludeItbis ? '(incluido)' : '(no incluido)'}:
+              </Text>
+              <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.itbisCents)}</Text>
+            </View>
+
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total:</Text>
-              <Text style={styles.totalValue}>{formatCurrency(getTotal())}</Text>
+              <Text style={styles.totalValue}>{formatCurrency(cartTotals.totalCents)}</Text>
             </View>
 
             <Button
@@ -778,7 +898,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         >
           <ScrollView contentContainerStyle={styles.modalContent}>
             <Text style={styles.modalTitle}>Dividir pago</Text>
-            <Text style={styles.modalMeta}>Total de la venta: {formatCurrency(getTotal())}</Text>
+            <Text style={styles.modalMeta}>Total de la venta: {formatCurrency(cartTotals.totalCents)}</Text>
 
             {paymentSplits.map((split, index) => (
               <Surface key={`split-${index}`} style={styles.splitCard}>

@@ -137,6 +137,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
             quantity,
             priceCents,
             totalCents: quantity * priceCents,
+            itbisRateBp: Number(item.itbisRateBp ?? (productData as any)?.itbisRateBp ?? 1800),
             unit: inferProductUnit({
               ...(productData || {}),
               unit: item?.unit ?? item?.product?.unit,

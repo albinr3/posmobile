@@ -4,6 +4,7 @@ export type SalesSettings = {
   defaultViewMode: 'list' | 'grid';
   showItbisOnReceipts: boolean;
   defaultProfitMarginBp: number;
+  salePricesIncludeItbis: boolean;
 };
 
 const SALES_SETTINGS_KEY = 'movopos_sales_settings_v1';
@@ -12,6 +13,7 @@ const FALLBACK_SETTINGS: SalesSettings = {
   defaultViewMode: 'list',
   showItbisOnReceipts: true,
   defaultProfitMarginBp: 3000,
+  salePricesIncludeItbis: true,
 };
 
 function normalizeMarginBp(value: unknown): number {
@@ -29,6 +31,12 @@ export function normalizeSalesSettings(raw: any): SalesSettings {
     defaultViewMode: normalizeViewMode(raw?.defaultViewMode),
     showItbisOnReceipts: typeof raw?.showItbisOnReceipts === 'boolean' ? raw.showItbisOnReceipts : true,
     defaultProfitMarginBp: normalizeMarginBp(raw?.defaultProfitMarginBp),
+    salePricesIncludeItbis:
+      typeof raw?.salePricesIncludeItbis === 'boolean'
+        ? raw.salePricesIncludeItbis
+        : typeof raw?.preciosVentaIncluyenItbis === 'boolean'
+          ? raw.preciosVentaIncluyenItbis
+          : true,
   };
 }
 

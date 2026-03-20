@@ -26,6 +26,9 @@ interface ReturnReceiptPayload {
   invoiceCode: string;
   customerName: string;
   totalCents: number;
+  subtotalCents?: number;
+  itbisCents?: number;
+  salePricesIncludeItbis?: boolean;
   notes?: string | null;
   items: ReturnReceiptItem[];
 }
@@ -64,6 +67,10 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
     )
     .join('');
 
+  const subtotalCents = Number(receipt.subtotalCents || 0);
+  const itbisCents = Number(receipt.itbisCents || 0);
+  const showTaxRows = subtotalCents > 0 || itbisCents > 0;
+
   return `
     <html>
       <head>
@@ -99,6 +106,12 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
             <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(receipt.customerName || 'Cliente general')}</div>
           </div>
           <div>${itemsRows}</div>
+          ${
+            showTaxRows
+              ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
+                 <div class="row"><span>ITBIS (${receipt.salePricesIncludeItbis === false ? 'no incluido' : 'incluido'})</span><span>${formatCurrency(itbisCents)}</span></div>`
+              : ''
+          }
           <div class="total"><span>TOTAL DEVUELTO</span><span>${formatCurrency(receipt.totalCents)}</span></div>
           ${receipt.notes ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(receipt.notes)}</div>` : ''}
         </div>
@@ -193,6 +206,10 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
     );
   }
 
+  const subtotalCents = Number(receipt.subtotalCents || 0);
+  const itbisCents = Number(receipt.itbisCents || 0);
+  const showTaxRows = subtotalCents > 0 || itbisCents > 0;
+
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -254,6 +271,18 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
             <Text style={styles.totalLabel}>Total devuelto</Text>
             <Text style={styles.totalValue}>{formatCurrency(receipt.totalCents)}</Text>
           </View>
+          {showTaxRows ? (
+            <View style={{ marginTop: 8 }}>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Subtotal:</Text>
+                <Text style={styles.value}>{formatCurrency(subtotalCents)}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>ITBIS ({receipt.salePricesIncludeItbis === false ? 'no incluido' : 'incluido'}):</Text>
+                <Text style={styles.value}>{formatCurrency(itbisCents)}</Text>
+              </View>
+            </View>
+          ) : null}
         </Surface>
 
         <View style={styles.actions}>

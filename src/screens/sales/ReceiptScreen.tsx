@@ -12,6 +12,7 @@ import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -66,6 +67,7 @@ const buildReceiptHtml = (params: {
   items: SaleItem[];
   logoUri: string;
   showItbisBreakdown: boolean;
+  salePricesIncludeItbis?: boolean;
 }) => {
   const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, items, logoUri, showItbisBreakdown } = params;
 
@@ -86,12 +88,20 @@ const buildReceiptHtml = (params: {
     )
     .join('');
 
-  const subtotalCents = Math.round(totalCents / 1.18);
-  const itbisCents = totalCents - subtotalCents;
+  const salePricesIncludeItbis = params.salePricesIncludeItbis !== false;
+  const totals = calcDocumentTotalsByTaxMode({
+    items: (items || []).map((item: any) => ({
+      quantity: Number(item.quantity || 0),
+      priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+      itbisRateBp: Number(item.itbisRateBp || 1800),
+    })),
+    shippingCents: 0,
+    salePricesIncludeItbis,
+  });
   const taxRows = showItbisBreakdown
     ? `
-          <div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-          <div class="row"><span>ITBIS (18% incluido)</span><span>${formatCurrency(itbisCents)}</span></div>
+          <div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
+          <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>
       `
     : '';
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
@@ -194,6 +204,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       items: sale.items || [],
       logoUri,
       showItbisBreakdown,
+      salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
     });
 
     try {
@@ -235,6 +246,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       items: sale.items || [],
       logoUri,
       showItbisBreakdown,
+      salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
     });
 
     try {

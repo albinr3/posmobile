@@ -169,6 +169,7 @@ function resolvePurchaseSalePricingMobile(input: {
   purchaseIncludesItbis: boolean;
   purchaseItbisRateBp?: number | null;
   productItbisRateBp?: number | null;
+  salePricesIncludeItbis?: boolean;
   defaultSaleMarginBp?: number | null;
   saleMarginBp?: number | null;
   salePriceCents?: number | null;
@@ -190,11 +191,14 @@ function resolvePurchaseSalePricingMobile(input: {
 
   const saleItbisRateBp = normalizeItbisRateBp(input.productItbisRateBp);
   const appliedItbisRateBp = saleItbisRateBp > 0 ? saleItbisRateBp : 0;
+  const salePricesIncludeItbis = input.salePricesIncludeItbis !== false;
 
   if (input.salePriceCents !== null && input.salePriceCents !== undefined && Number.isFinite(Number(input.salePriceCents))) {
     const salePriceCents = Math.max(0, Math.round(Number(input.salePriceCents)));
     const saleNoItbisCents =
-      appliedItbisRateBp > 0 ? Math.round(salePriceCents / (1 + appliedItbisRateBp / 10000)) : salePriceCents;
+      salePricesIncludeItbis && appliedItbisRateBp > 0
+        ? Math.round(salePriceCents / (1 + appliedItbisRateBp / 10000))
+        : salePriceCents;
     const rawMarginBp = purchaseNoItbisCents > 0 ? ((saleNoItbisCents / purchaseNoItbisCents) - 1) * 10000 : 0;
     return {
       netCostCents,
@@ -206,7 +210,9 @@ function resolvePurchaseSalePricingMobile(input: {
   const saleMarginBp = normalizeMarginBp(input.saleMarginBp ?? input.defaultSaleMarginBp ?? 3000);
   const saleNoItbisCents = Math.round(purchaseNoItbisCents * (1 + saleMarginBp / 10000));
   const salePriceCents =
-    appliedItbisRateBp > 0 ? Math.round(saleNoItbisCents * (1 + appliedItbisRateBp / 10000)) : saleNoItbisCents;
+    salePricesIncludeItbis && appliedItbisRateBp > 0
+      ? Math.round(saleNoItbisCents * (1 + appliedItbisRateBp / 10000))
+      : saleNoItbisCents;
 
   return {
     netCostCents,
@@ -225,6 +231,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [updateProductPrice, setUpdateProductPrice] = useState(true);
   const [defaultSaleMarginPercent, setDefaultSaleMarginPercent] = useState(DEFAULT_SALE_MARGIN_PERCENT);
+  const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const [items, setItems] = useState<PurchaseFormItem[]>([createEmptyItem(DEFAULT_SALE_MARGIN_PERCENT)]);
 
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
@@ -485,6 +492,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           const salesSettings = await getSalesSettings();
           const nextDefaultMarginPercent = (Math.max(0, Number(salesSettings.defaultProfitMarginBp || 3000)) / 100).toFixed(2);
           setDefaultSaleMarginPercent(nextDefaultMarginPercent);
+          setSalePricesIncludeItbis(salesSettings.salePricesIncludeItbis !== false);
 
           let catalog = await loadLocalCatalogsRef.current();
           if (isOnlineRef.current) {
@@ -582,6 +590,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       purchaseIncludesItbis,
       purchaseItbisRateBp: purchaseItbisForSupplier,
       productItbisRateBp: product?.itbisRateBp ?? 0,
+      salePricesIncludeItbis,
       defaultSaleMarginBp,
       saleMarginBp: mode === 'price' ? undefined : saleMarginBp,
       salePriceCents: mode === 'price' ? salePriceCents : undefined,
@@ -839,6 +848,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         purchaseIncludesItbis: Boolean(selectedSupplier.chargesItbis),
         purchaseItbisRateBp: getPurchaseItbisRateBp(selectedSupplier),
         productItbisRateBp: matchedProduct?.itbisRateBp ?? 0,
+        salePricesIncludeItbis,
         defaultSaleMarginBp,
         saleMarginBp: parsedSalePriceCents !== undefined ? undefined : parsedSaleMarginBp,
         salePriceCents: parsedSalePriceCents,

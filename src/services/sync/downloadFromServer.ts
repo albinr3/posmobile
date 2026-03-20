@@ -398,6 +398,7 @@ export async function downloadFromServer(options: {
           quantity,
           priceCents,
           totalCents,
+          itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
           wasPriceOverridden: Boolean(item?.wasPriceOverridden),
           recipeAdjustments: Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [],
         };
@@ -424,6 +425,10 @@ export async function downloadFromServer(options: {
         items,
         subtotalCents: Number(saleDetail?.subtotalCents || sale?.subtotalCents || localSale?.subtotalCents || 0),
         itbisCents: Number(saleDetail?.itbisCents || sale?.itbisCents || localSale?.itbisCents || 0),
+        salePricesIncludeItbis:
+          typeof (saleDetail?.salePricesIncludeItbis ?? sale?.salePricesIncludeItbis ?? localSale?.salePricesIncludeItbis) === 'boolean'
+            ? Boolean(saleDetail?.salePricesIncludeItbis ?? sale?.salePricesIncludeItbis ?? localSale?.salePricesIncludeItbis)
+            : true,
         shippingCents: Number(saleDetail?.shippingCents || sale?.shippingCents || localSale?.shippingCents || 0),
         totalCents: Number(saleDetail?.totalCents || sale?.totalCents || localSale?.totalCents || 0),
         status,
@@ -489,6 +494,10 @@ export async function downloadFromServer(options: {
         saleId: saleServerId,
         saleLocalId,
         totalCents: Number(ret?.totalCents || 0),
+        subtotalCents: Number(ret?.subtotalCents || 0),
+        itbisCents: Number(ret?.itbisCents || 0),
+        salePricesIncludeItbis:
+          typeof ret?.salePricesIncludeItbis === 'boolean' ? Boolean(ret.salePricesIncludeItbis) : true,
         notes: ret?.notes ? String(ret.notes) : null,
         returnedAt: returnedAtMs,
         cancelledAt: cancelledAtMs,
@@ -559,7 +568,10 @@ export async function downloadFromServer(options: {
           unit_price_cents: unitPriceCents,
           line_total_cents: lineTotalCents,
           synced: 1,
-          data: JSON.stringify(item),
+          data: JSON.stringify({
+            ...item,
+            itbisRateBp: Number(item?.itbisRateBp ?? item?.saleItem?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
+          }),
         });
       }
     }
@@ -646,6 +658,7 @@ export async function downloadFromServer(options: {
           quantity,
           priceCents,
           totalCents,
+          itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
           wasPriceOverridden: Boolean(item?.wasPriceOverridden),
         };
       });
@@ -656,6 +669,12 @@ export async function downloadFromServer(options: {
         customerId,
         customerName,
         items,
+        subtotalCents: Number(quoteDetail?.subtotalCents || quote?.subtotalCents || localQuote?.subtotalCents || 0),
+        itbisCents: Number(quoteDetail?.itbisCents || quote?.itbisCents || localQuote?.itbisCents || 0),
+        salePricesIncludeItbis:
+          typeof (quoteDetail?.salePricesIncludeItbis ?? quote?.salePricesIncludeItbis ?? localQuote?.salePricesIncludeItbis) === 'boolean'
+            ? Boolean(quoteDetail?.salePricesIncludeItbis ?? quote?.salePricesIncludeItbis ?? localQuote?.salePricesIncludeItbis)
+            : true,
         totalCents: Number(quoteDetail?.totalCents || quote?.totalCents || localQuote?.totalCents || 0),
         status: 'synced',
         createdAt,

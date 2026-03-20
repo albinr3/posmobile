@@ -16,6 +16,7 @@ import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -35,13 +36,12 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const [recipeDialogMode, setRecipeDialogMode] = useState<'SIN' | 'EXTRA' | null>(null);
   const [recipeDraft, setRecipeDraft] = useState<Record<string, 'SIN' | 'EXTRA'>>({});
   const [recipeApplyScope, setRecipeApplyScope] = useState<'ONE' | 'ALL'>('ALL');
-  const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
+  const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const {
     items,
     updateQuantity,
     updatePrice,
     removeItem,
-    getTotal,
     customerId,
     customerName,
     clear,
@@ -51,7 +51,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     editingQuoteCode,
   } = useQuoteCartStore();
   const { subUser } = useAuthStore();
-  const canOverridePrice = !!subUser?.isOwner || subUser?.canOverridePrice === true || subUser?.role === 'ADMIN';
+  const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
   const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
   const [priceError, setPriceError] = useState<string | null>(null);
@@ -75,15 +75,52 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       let active = true;
       getSalesSettings()
         .then((settings) => {
-          if (active) setShowItbisBreakdown(settings.showItbisOnReceipts);
+          if (active) setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
         })
         .catch(() => {
-          if (active) setShowItbisBreakdown(true);
+          if (active) setSalePricesIncludeItbis(true);
         });
       return () => {
         active = false;
       };
     }, [])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!editingQuoteLocalId) return;
+      let active = true;
+      const loadDocumentMode = async () => {
+        try {
+          const quote = await db.queryFirst<{ data?: string }>('SELECT data FROM quotes WHERE local_id = ?', [editingQuoteLocalId]);
+          const parsed = quote?.data ? JSON.parse(quote.data) : null;
+          if (!active) return;
+          if (typeof parsed?.salePricesIncludeItbis === 'boolean') {
+            setSalePricesIncludeItbis(parsed.salePricesIncludeItbis);
+          }
+        } catch {
+          // no-op
+        }
+      };
+      void loadDocumentMode();
+      return () => {
+        active = false;
+      };
+    }, [editingQuoteLocalId])
+  );
+
+  const quoteTotals = useMemo(
+    () =>
+      calcDocumentTotalsByTaxMode({
+        items: items.map((item) => ({
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      }),
+    [items, salePricesIncludeItbis]
   );
 
   const openRecipeDialog = (item: typeof items[0]) => {
@@ -216,7 +253,10 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         customerId: customerId ?? null,
         customerName: customerName ?? null,
         items,
-        totalCents: getTotal(),
+        subtotalCents: quoteTotals.subtotalCents,
+        itbisCents: quoteTotals.itbisCents,
+        totalCents: quoteTotals.totalCents,
+        salePricesIncludeItbis,
         status: 'draft',
         createdAt: now,
       };
@@ -280,7 +320,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
           local_id: localId,
           quote_code: localQuoteCode,
           customer_id: quoteData.customerId,
-          total_cents: getTotal(),
+          total_cents: quoteData.totalCents,
           status: 'pending',
           created_at: now,
           synced: 0,
@@ -295,11 +335,16 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         createdAt: quoteData.createdAt,
         customerName: quoteData.customerName || '(General) Cliente general',
         totalCents: quoteData.totalCents,
+        salePricesIncludeItbis: quoteData.salePricesIncludeItbis,
         items: quoteData.items.map((item: any) => ({
           productName: String(item.productName || 'Producto'),
           quantity: Number(item.quantity || 0),
           priceCents: Number(item.priceCents || item.unitPriceCents || 0),
-          totalCents: Number(item.totalCents || 0),
+          totalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: Number(item.quantity || 0), priceCents: Number(item.priceCents || item.unitPriceCents || 0), itbisRateBp: Number(item.itbisRateBp || 1800) }],
+            shippingCents: 0,
+            salePricesIncludeItbis,
+          }).totalCents,
           unit: item.unit || 'UNIDAD',
           reference: String(item.reference || item.sku || '').trim() || null,
           productId: String(item.productId || '').trim() || null,
@@ -420,9 +465,20 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
 
           <Divider style={styles.divider} />
 
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Subtotal:</Text>
+            <Text style={styles.summaryLabel}>{formatCurrency(quoteTotals.subtotalCents)}</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>
+              ITBIS {salePricesIncludeItbis ? '(incluido)' : '(no incluido)'}:
+            </Text>
+            <Text style={styles.summaryLabel}>{formatCurrency(quoteTotals.itbisCents)}</Text>
+          </View>
+
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total:</Text>
-            <Text style={styles.totalValue}>{formatCurrency(getTotal())}</Text>
+            <Text style={styles.totalValue}>{formatCurrency(quoteTotals.totalCents)}</Text>
           </View>
 
           <Button

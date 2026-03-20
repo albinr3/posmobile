@@ -57,6 +57,7 @@ type CompanySettingsResponse = {
   defaultViewMode?: string | null;
   showItbisOnReceipts?: boolean | null;
   defaultProfitMarginBp?: number | null;
+  salePricesIncludeItbis?: boolean | null;
 };
 
 type CompanySettingsData = {
@@ -127,6 +128,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [defaultViewMode, setDefaultViewMode] = useState<'list' | 'grid'>('list');
   const [showItbisOnReceipts, setShowItbisOnReceipts] = useState(true);
+  const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const [defaultProfitMargin, setDefaultProfitMargin] = useState('30.00');
   const [savingSalesSettings, setSavingSalesSettings] = useState(false);
 
@@ -200,12 +202,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       setIsEditingCompany(false);
       setDefaultViewMode(response.data?.defaultViewMode === 'grid' ? 'grid' : 'list');
       setShowItbisOnReceipts(Boolean(response.data?.showItbisOnReceipts ?? true));
+      setSalePricesIncludeItbis(Boolean(response.data?.salePricesIncludeItbis ?? true));
       const marginBp = Number(response.data?.defaultProfitMarginBp ?? 3000);
       setDefaultProfitMargin((Math.max(0, Number.isFinite(marginBp) ? marginBp : 3000) / 100).toFixed(2));
       await setSalesSettings({
         defaultViewMode: response.data?.defaultViewMode === 'grid' ? 'grid' : 'list',
         showItbisOnReceipts: Boolean(response.data?.showItbisOnReceipts ?? true),
         defaultProfitMarginBp: Math.max(0, Number.isFinite(marginBp) ? marginBp : 3000),
+        salePricesIncludeItbis: Boolean(response.data?.salePricesIncludeItbis ?? true),
       });
     } catch (error) {
       console.error('Error cargando configuración de empresa:', error);
@@ -257,6 +261,8 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         logoUrl: logoUrl || null,
         defaultViewMode,
         showItbisOnReceipts,
+        salePricesIncludeItbis,
+        preciosVentaIncluyenItbis: salePricesIncludeItbis,
         defaultProfitMarginBp: Math.max(0, marginBp),
         company: {
           nombre: name,
@@ -292,6 +298,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         defaultViewMode,
         showItbisOnReceipts,
         defaultProfitMarginBp: marginBpFromForm,
+        salePricesIncludeItbis,
       });
       setCompanySettingsSuccess('Configuración guardada.');
     } catch (error) {
@@ -343,6 +350,8 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         logoUrl: logoUrl || null,
         defaultViewMode,
         showItbisOnReceipts,
+        salePricesIncludeItbis,
+        preciosVentaIncluyenItbis: salePricesIncludeItbis,
         defaultProfitMarginBp: Math.max(0, marginBp),
         company: {
           nombre: name,
@@ -373,12 +382,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
 
       setDefaultViewMode(response.data?.defaultViewMode === 'grid' ? 'grid' : defaultViewMode);
       setShowItbisOnReceipts(Boolean(response.data?.showItbisOnReceipts ?? showItbisOnReceipts));
+      setSalePricesIncludeItbis(Boolean(response.data?.salePricesIncludeItbis ?? salePricesIncludeItbis));
       const marginBpFromApi = Number(response.data?.defaultProfitMarginBp ?? marginBp);
       setDefaultProfitMargin((Math.max(0, Number.isFinite(marginBpFromApi) ? marginBpFromApi : marginBp) / 100).toFixed(2));
       await setSalesSettings({
         defaultViewMode: response.data?.defaultViewMode === 'grid' ? 'grid' : defaultViewMode,
         showItbisOnReceipts: Boolean(response.data?.showItbisOnReceipts ?? showItbisOnReceipts),
         defaultProfitMarginBp: Math.max(0, Number.isFinite(marginBpFromApi) ? marginBpFromApi : marginBp),
+        salePricesIncludeItbis: Boolean(response.data?.salePricesIncludeItbis ?? salePricesIncludeItbis),
       });
       await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
       setCompanySettingsSuccess('Configuración de ventas guardada.');
@@ -931,6 +942,14 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
               <Text style={styles.saleSwitchHint}>Mostrar detalle ITBIS en recibos y facturas.</Text>
             </View>
             <Switch value={showItbisOnReceipts} onValueChange={setShowItbisOnReceipts} color={ui.colors.primary} />
+          </View>
+
+          <View style={styles.saleSwitchCard}>
+            <View style={styles.saleSwitchMeta}>
+              <Text style={styles.saleSwitchTitle}>Precio de venta incluye ITBIS</Text>
+              <Text style={styles.saleSwitchHint}>Si se desactiva, el ITBIS se suma al total al facturar.</Text>
+            </View>
+            <Switch value={salePricesIncludeItbis} onValueChange={setSalePricesIncludeItbis} color={ui.colors.primary} />
           </View>
 
           <Text style={styles.companyDetailLabel}>% ganancia por defecto en compras</Text>

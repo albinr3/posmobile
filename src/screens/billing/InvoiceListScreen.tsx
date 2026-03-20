@@ -17,6 +17,7 @@ import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { hasConnectedPrinter, printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface InvoiceListItem {
   localId: string;
@@ -324,11 +325,20 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         type: saleType,
         dueDate,
         totalCents,
+        salePricesIncludeItbis: typeof parsedData?.salePricesIncludeItbis === 'boolean' ? parsedData.salePricesIncludeItbis : true,
         items: items.map((item: any) => ({
           productName: String(item.productName || 'Producto'),
           quantity: Number(item.quantity || item.qty || 0),
           priceCents: Number(item.priceCents || item.unitPriceCents || 0),
-          totalCents: Number(item.totalCents || 0),
+          totalCents: calcDocumentTotalsByTaxMode({
+            items: [{
+              quantity: Number(item.quantity || item.qty || 0),
+              priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+              itbisRateBp: Number(item.itbisRateBp || 1800),
+            }],
+            shippingCents: 0,
+            salePricesIncludeItbis: typeof parsedData?.salePricesIncludeItbis === 'boolean' ? parsedData.salePricesIncludeItbis : true,
+          }).totalCents,
           unit: item.unit || 'UNIDAD',
           reference: String(item.reference || '').trim() || null,
           productId: String(item.productId || '').trim() || null,
@@ -383,11 +393,21 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         transferBankName: parsedData?.transferBankName || invoice.transferBankName,
         paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
       });
-      const subtotalCents = Math.round(totalCents / 1.18);
-      const itbisCents = totalCents - subtotalCents;
+      const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
+        ? parsedData.salePricesIncludeItbis
+        : true;
+      const totals = calcDocumentTotalsByTaxMode({
+        items: items.map((item: any) => ({
+          quantity: Number(item.quantity || item.qty || 0),
+          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+          itbisRateBp: Number(item.itbisRateBp || 1800),
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      });
       const taxRows = showItbisBreakdown
-        ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(subtotalCents)}</span></div>
-              <div class="row"><span>ITBIS (18%)</span><span>${formatCurrency(itbisCents)}</span></div>`
+        ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
+              <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>`
         : '';
 
       const itemsRows = items
@@ -397,7 +417,15 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
               <div><strong>${String(item.productName || 'Producto')} | ${String(item.reference || '').trim() || '-'}</strong></div>
               <div class="row">
                 <span>${formatProductQty(Number(item.quantity || item.qty || 0), item.unit)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
-                <span><strong>${formatCurrency(Number(item.totalCents || 0))}</strong></span>
+                <span><strong>${formatCurrency(calcDocumentTotalsByTaxMode({
+                  items: [{
+                    quantity: Number(item.quantity || item.qty || 0),
+                    priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+                    itbisRateBp: Number(item.itbisRateBp || 1800),
+                  }],
+                  shippingCents: 0,
+                  salePricesIncludeItbis,
+                }).totalCents)}</strong></span>
               </div>
             </div>
           `

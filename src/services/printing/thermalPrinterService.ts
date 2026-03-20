@@ -61,6 +61,7 @@ export interface SaleTicketPayload {
   paymentSplits?: SalePaymentSplit[];
   type?: string | null;
   dueDate?: number | null;
+  salePricesIncludeItbis?: boolean;
   totalCents: number;
   items: TicketItem[];
 }
@@ -69,6 +70,7 @@ export interface QuoteTicketPayload {
   quoteCode: string;
   createdAt: number;
   customerName?: string | null;
+  salePricesIncludeItbis?: boolean;
   totalCents: number;
   items: TicketItem[];
 }
@@ -189,6 +191,7 @@ export const buildSaleTicketText = (
 
   lines.push(separator);
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
+  lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
   if (isCreditSale) {
     lines.push('VENTA A CREDITO');
     if (Number.isFinite(Number(payload.dueDate || NaN))) {
@@ -288,6 +291,7 @@ export const buildQuoteTicketText = (
 
   lines.push(separator);
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
+  lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
   lines.push('Gracias por su preferencia');
   lines.push('\n\n\n');
 

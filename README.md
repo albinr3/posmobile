@@ -9,8 +9,18 @@ App móvil de punto de venta (POS) construida con React Native + Expo, con arqui
 - Flujo de subusuarios obligatorio para operar la app.
 - Datos locales en SQLite por cuenta (`account scope`) + cola de sincronización.
 
-## Módulos implementados
+## Cambio fiscal ITBIS (marzo 2026)
 
+- Se soporta la preferencia por cuenta `salePricesIncludeItbis` sincronizada con backend.
+- Modo incluido (`true`): el precio de venta ya contiene ITBIS.
+- Modo no incluido (`false`): el precio es base y el total se calcula sumando ITBIS.
+- La app móvil conserva historial por documento usando snapshot de modo en ventas/cotizaciones/devoluciones.
+- Los ítems usan snapshot `itbisRateBp` para mantener consistencia en cálculo, devoluciones y reportes.
+- Se ajustaron desglose y etiquetas en carrito, recibos/PDF e impresión según el modo del documento.
+- Offline/sync: las ventas pendientes guardan `salePricesIncludeItbis` y lo envían al sincronizar para no cambiar cálculos por toggles posteriores.
+- Compras: el precio de venta sugerido/guardado respeta el modo activo de la cuenta (incluido o no incluido).
+
+## Módulos implementados
 - Ventas POS (`sales`)
 - Cotizaciones (`sales/Quote*`)
 - Facturas (`billing`)
@@ -21,7 +31,7 @@ App móvil de punto de venta (POS) construida con React Native + Expo, con arqui
 - Clientes (`customers`)
 - Gastos operativos (`operating-expenses`)
 - Dashboard, cuadre diario y reportes (`reports`)
-- Ajustes (impresora + reset local) (`settings`)
+- Ajustes (incluye preferencia fiscal de ITBIS, impresora + reset local) (settings)
 
 ## Requisitos
 
@@ -304,3 +314,6 @@ Si necesitas validar contratos/endpoints del backend:
 ## Licencia
 
 Privado - MOVOPos
+
+
+

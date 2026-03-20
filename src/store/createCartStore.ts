@@ -58,6 +58,7 @@ function createBaseCartSlice<TState extends BaseCartState>(
 
         // Extract recipeItems from product parsed data
         let recipeItems: any[] | undefined;
+        let productItbisRateBp = 1800;
         try {
           const parsed = product.data ? JSON.parse(product.data) : null;
           if (Array.isArray(parsed?.recipeItems) && parsed.recipeItems.length > 0) {
@@ -67,6 +68,15 @@ function createBaseCartSlice<TState extends BaseCartState>(
               qty: Number(ri.qty || ri.quantity || 0),
               ingredientUnit: String(ri.ingredientUnit || ri.unit || 'UNIDAD'),
             }));
+          }
+          const rawItbisRateBp = Number(parsed?.itbisRateBp);
+          if (Number.isFinite(rawItbisRateBp) && rawItbisRateBp >= 0) {
+            productItbisRateBp = Math.round(rawItbisRateBp);
+          } else {
+            const rawTaxPercent = Number(parsed?.taxRate);
+            if (Number.isFinite(rawTaxPercent) && rawTaxPercent >= 0) {
+              productItbisRateBp = rawTaxPercent <= 100 ? Math.round(rawTaxPercent * 100) : Math.round(rawTaxPercent);
+            }
           }
         } catch {
           // ignore parse errors
@@ -83,6 +93,7 @@ function createBaseCartSlice<TState extends BaseCartState>(
               quantity,
               priceCents: product.priceCents,
               totalCents: quantity * product.priceCents,
+              itbisRateBp: productItbisRateBp,
               unit: product.unit,
               productKind: product.productKind,
               recipeItems,

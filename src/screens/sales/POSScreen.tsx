@@ -14,6 +14,7 @@ import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface POSScreenProps {
   navigation: any;
@@ -49,6 +50,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const [loading, setLoading] = useState(true);
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
+  const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const insets = useSafeAreaInsets();
   const hydratedEditSaleRef = useRef<string | null>(null);
   const internalNavigationRef = useRef(false);
@@ -83,6 +85,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     let mounted = true;
     const loadSavedViewMode = async () => {
       try {
+        const salesSettings = await getSalesSettings();
+        if (mounted) {
+          setSalePricesIncludeItbis(salesSettings.salePricesIncludeItbis !== false);
+        }
         const savedViewMode = await AsyncStorage.getItem(VIEW_MODE_STORAGE_KEY);
         if (!mounted) return;
         if (savedViewMode === 'LISTA' || savedViewMode === 'IMAGENES') {
@@ -90,8 +96,6 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           return;
         }
 
-        const salesSettings = await getSalesSettings();
-        if (!mounted) return;
         setViewMode(salesSettings.defaultViewMode === 'list' ? 'LISTA' : 'IMAGENES');
       } catch (error) {
         console.error('Error cargando vista de POS:', error);
@@ -195,6 +199,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             quantity,
             priceCents: unitPriceCents,
             totalCents: Math.round(quantity * unitPriceCents),
+            itbisRateBp: Number(rawItem?.itbisRateBp ?? productData?.itbisRateBp ?? 1800),
             unit: inferProductUnit({
               ...(productData || {}),
               unit: rawItem?.unit ?? rawItem?.product?.unit,
@@ -299,6 +304,20 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         (product.reference && product.reference.toLowerCase().includes(normalizedSearch))
     );
   }, [products, searchQuery, scanExactSkuQuery]);
+
+  const cartTotals = useMemo(
+    () =>
+      calcDocumentTotalsByTaxMode({
+        items: items.map((item) => ({
+          quantity: item.quantity,
+          priceCents: item.priceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      }),
+    [items, salePricesIncludeItbis]
+  );
 
   const cartQuantityByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -581,9 +600,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
       <BottomDock containerStyle={styles.bottomDockContainer} style={styles.bottomBar} maxBottomInset={8}>
         <View style={styles.bottomTop}>
-          <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalLabel}>Total</Text>
           <View style={styles.totalInfo}>
-            <Text style={styles.totalAmount}>RD$ {(getTotal() / 100).toFixed(2)}</Text>
+            <Text style={styles.totalAmount}>RD$ {(cartTotals.totalCents / 100).toFixed(2)}</Text>
             <Text style={styles.itemsText}>{items.length} productos</Text>
           </View>
         </View>

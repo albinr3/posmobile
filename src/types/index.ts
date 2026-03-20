@@ -41,6 +41,9 @@ export interface Sale {
   paymentMethod?: string;
   transferBankName?: string | null;
   paymentSplits?: SalePaymentSplit[];
+  salePricesIncludeItbis?: boolean;
+  subtotalCents?: number;
+  itbisCents?: number;
   createdAt: number;
   synced: boolean;
   data: string;
@@ -55,6 +58,7 @@ export interface SaleItem {
   priceCents: number;
   totalCents: number;
   wasPriceOverridden?: boolean;
+  itbisRateBp?: number;
   unit?: string;
   productKind?: 'BASIC' | 'MEASURED' | 'RECIPE';
   recipeItems?: Array<{ ingredientId: string; ingredientName: string; qty: number; ingredientUnit?: string }>;

@@ -9,6 +9,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { ui } from '../../theme/ui';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 import {
   isCancelledStatus,
   parseJsonObject,
@@ -367,8 +368,22 @@ export function ProfitReportScreen() {
           if (Number.isFinite(parsedSubtotal) && parsedSubtotal > 0) {
             returnsItbisCents += Math.max(0, totalCents - parsedSubtotal);
           } else {
-            const inferredSubtotal = Math.round(totalCents / 1.18);
-            returnsItbisCents += Math.max(0, totalCents - inferredSubtotal);
+            const parsedItems = Array.isArray(parsed?.items) ? parsed.items : [];
+            if (parsedItems.length > 0) {
+              const computed = calcDocumentTotalsByTaxMode({
+                items: parsedItems.map((item: any) => ({
+                  quantity: Number(item?.qty ?? item?.quantity ?? 0),
+                  priceCents: Number(item?.unitPriceCents ?? item?.priceCents ?? 0),
+                  itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
+                })),
+                shippingCents: 0,
+                salePricesIncludeItbis: parsed?.salePricesIncludeItbis !== false,
+              });
+              returnsItbisCents += Math.max(0, computed.itbisCents);
+            } else {
+              const inferredSubtotal = Math.round(totalCents / 1.18);
+              returnsItbisCents += Math.max(0, totalCents - inferredSubtotal);
+            }
           }
         }
 
@@ -442,6 +457,20 @@ export function ProfitReportScreen() {
         const subtotalCents = Number(sale.parsed?.subtotalCents || 0);
         if (Number.isFinite(subtotalCents) && subtotalCents > 0) {
           grossSalesItbisCents += Math.max(0, sale.totalCents - subtotalCents);
+          continue;
+        }
+        const parsedItems = Array.isArray(sale.parsed?.items) ? sale.parsed.items : [];
+        if (parsedItems.length > 0) {
+          const computed = calcDocumentTotalsByTaxMode({
+            items: parsedItems.map((item: any) => ({
+              quantity: Number(item?.qty ?? item?.quantity ?? 0),
+              priceCents: Number(item?.unitPriceCents ?? item?.priceCents ?? 0),
+              itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
+            })),
+            shippingCents: Number(sale.parsed?.shippingCents || 0),
+            salePricesIncludeItbis: sale.parsed?.salePricesIncludeItbis !== false,
+          });
+          grossSalesItbisCents += Math.max(0, computed.itbisCents);
           continue;
         }
         const inferredSubtotal = Math.round(sale.totalCents / 1.18);

@@ -112,6 +112,10 @@ export async function prepareSyncRequestData(
             quantity: item.quantity || item.qty,
             price: item.price || resolvedUnitPriceCents / 100,
             unitPriceCents: resolvedUnitPriceCents,
+            itbisRateBp:
+              Number.isFinite(Number(item?.itbisRateBp))
+                ? Math.max(0, Math.round(Number(item.itbisRateBp)))
+                : undefined,
             wasPriceOverridden: Boolean(item.wasPriceOverridden),
             recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
           };
@@ -137,6 +141,8 @@ export async function prepareSyncRequestData(
         paymentMethod: data.paymentMethod || null,
         transferBankName: data.transferBankName || null,
         paymentSplits: Array.isArray(data.paymentSplits) ? data.paymentSplits : undefined,
+        salePricesIncludeItbis:
+          typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
         shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
         ...(soldAtIso ? { soldAt: soldAtIso } : {}),
@@ -278,6 +284,10 @@ export async function prepareSyncRequestData(
             productId: product.server_id,
             qty: item.quantity || item.qty || 1,
             unitPriceCents: resolvedUnitPriceCents,
+            itbisRateBp:
+              Number.isFinite(Number(item?.itbisRateBp))
+                ? Math.max(0, Math.round(Number(item.itbisRateBp)))
+                : undefined,
             wasPriceOverridden: item.wasPriceOverridden || false,
           };
         })
@@ -285,6 +295,8 @@ export async function prepareSyncRequestData(
 
       return {
         customerId: resolvedQuoteCustomerId,
+        salePricesIncludeItbis:
+          typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: quoteItems,
         shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
         notes: data.notes || null,
@@ -502,11 +514,16 @@ export async function prepareSyncRequestData(
             productId: String(resolvedProductId),
             qty: Number(item?.qty || 0),
             unitPriceCents: Number(item?.unitPriceCents || 0),
+            ...(Number.isFinite(Number(item?.itbisRateBp))
+              ? { itbisRateBp: Math.max(0, Math.round(Number(item.itbisRateBp))) }
+              : {}),
           });
         }
 
         return {
           saleId: resolvedSaleId,
+          salePricesIncludeItbis:
+            typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
           items: returnItems,
           notes: data?.notes ? String(data.notes).trim() : null,
         };

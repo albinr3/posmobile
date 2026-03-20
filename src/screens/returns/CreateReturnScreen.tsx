@@ -11,6 +11,7 @@ import { useSyncStore } from '../../store/syncStore';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { syncService } from '../../services/sync/SyncService';
 import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
+import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 
 interface CreateReturnScreenProps {
   navigation: any;
@@ -36,6 +37,7 @@ interface SaleDetailItem {
   returnedQty: number;
   availableQty: number;
   unitPriceCents: number;
+  itbisRateBp: number;
   product?: {
     id: string;
     name: string;
@@ -59,6 +61,7 @@ interface SaleDetail {
   soldAt: string | null;
   type: string;
   totalCents: number;
+  salePricesIncludeItbis: boolean;
   returnPolicy: ReturnPolicy;
   customer?: {
     id: string;
@@ -75,6 +78,7 @@ interface ReturnDraftItem {
   productReference?: string | null;
   availableQty: number;
   unitPriceCents: number;
+  itbisRateBp: number;
   qty: number;
   unit?: string | null;
 }
@@ -93,6 +97,9 @@ interface ReturnListItem {
   returnCode: string;
   saleId: string;
   totalCents: number;
+  subtotalCents?: number;
+  itbisCents?: number;
+  salePricesIncludeItbis?: boolean;
   notes?: string | null;
   returnedAt: string | null;
   cancelledAt: string | null;
@@ -112,6 +119,7 @@ interface ReturnListItem {
     qty: number;
     unitPriceCents: number;
     lineTotalCents: number;
+    itbisRateBp?: number;
     product?: {
       name?: string | null;
       reference?: string | null;
@@ -127,6 +135,9 @@ interface ReturnReceiptPayload {
   invoiceCode: string;
   customerName: string;
   totalCents: number;
+  subtotalCents?: number;
+  itbisCents?: number;
+  salePricesIncludeItbis?: boolean;
   notes?: string | null;
   items: Array<{
     productName: string;
@@ -134,6 +145,7 @@ interface ReturnReceiptPayload {
     qty: number;
     unitPriceCents: number;
     lineTotalCents: number;
+    itbisRateBp?: number;
     unit?: string | null;
   }>;
 }
@@ -186,10 +198,20 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const [refreshingReturns, setRefreshingReturns] = useState(false);
   const [returnsError, setReturnsError] = useState<string | null>(null);
 
-  const totalCents = useMemo(
-    () => returnItems.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0),
-    [returnItems]
+  const returnTotals = useMemo(
+    () =>
+      calcDocumentTotalsByTaxMode({
+        items: returnItems.map((item) => ({
+          quantity: item.qty,
+          priceCents: item.unitPriceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis: selectedSale?.salePricesIncludeItbis ?? true,
+      }),
+    [returnItems, selectedSale?.salePricesIncludeItbis]
   );
+  const totalCents = returnTotals.totalCents;
   const maxReturnCents = selectedSale?.returnPolicy.maxReturnCents ?? null;
   const isReturnBlocked = selectedSale ? !selectedSale.returnPolicy.canCreateReturn : false;
   const exceedsCreditLimit = maxReturnCents !== null && totalCents > maxReturnCents;
@@ -274,6 +296,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             qty: Number(returnItemParsed?.qty || returnItemRow.qty || 0),
             unitPriceCents: Number(returnItemParsed?.unitPriceCents || returnItemRow.unit_price_cents || 0),
             lineTotalCents: Number(returnItemParsed?.lineTotalCents || returnItemRow.line_total_cents || 0),
+            itbisRateBp: Number(returnItemParsed?.itbisRateBp || returnItemParsed?.saleItem?.itbisRateBp || 1800),
               product: {
                 name: String(
                   returnItemParsed?.product?.name ||
@@ -295,6 +318,10 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           serverId: row.server_id ? String(row.server_id) : null,
           returnCode: String(row.return_code || parsed?.returnCode || `DEV-LOCAL-${localId.slice(-6)}`),
           saleId: String(parsed?.saleId || saleServerId || saleLocalId || ''),
+          subtotalCents: Number(parsed?.subtotalCents || 0),
+          itbisCents: Number(parsed?.itbisCents || 0),
+          salePricesIncludeItbis:
+            typeof parsed?.salePricesIncludeItbis === 'boolean' ? parsed.salePricesIncludeItbis : true,
           totalCents: Number(parsed?.totalCents || row.total_cents || 0),
           notes: parsed?.notes ? String(parsed.notes) : row.notes ? String(row.notes) : null,
           returnedAt: toIsoString(parsed?.returnedAt || row.returned_at),
@@ -350,6 +377,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     invoiceCode: item.sale?.invoiceCode || '-',
     customerName: item.sale?.customer?.name || 'Cliente general',
     totalCents: item.totalCents,
+    subtotalCents: Number((item as any)?.subtotalCents || 0),
+    itbisCents: Number((item as any)?.itbisCents || 0),
+    salePricesIncludeItbis: typeof (item as any)?.salePricesIncludeItbis === 'boolean' ? (item as any).salePricesIncludeItbis : true,
     notes: item.notes || null,
     items: (item.items || []).map((returnItem) => ({
       productName: returnItem.product?.name || 'Producto',
@@ -359,6 +389,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       lineTotalCents:
         Number(returnItem.lineTotalCents) ||
         (Number(returnItem.unitPriceCents) || 0) * (Number(returnItem.qty) || 0),
+      itbisRateBp: Number((returnItem as any).itbisRateBp || 1800),
       unit: inferProductUnit({ unit: returnItem.product?.unit }),
     })),
   });
@@ -716,6 +747,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       const saleServerId = saleRow.server_id ? String(saleRow.server_id) : null;
       const soldAt = toIsoString(parsedSale?.soldAt || parsedSale?.createdAt || saleRow.created_at);
       const saleType = String(parsedSale?.type || 'CONTADO').toUpperCase();
+      const salePricesIncludeItbis =
+        typeof parsedSale?.salePricesIncludeItbis === 'boolean' ? parsedSale.salePricesIncludeItbis : true;
 
       const returnRows = await db.query<{ sale_item_id: string; returned_qty: number }>(
         `SELECT ri.sale_item_id, SUM(ri.qty) AS returned_qty
@@ -739,6 +772,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           const returnedQty = Number(returnedByItem.get(saleItemId) || 0);
           const availableQty = Math.max(0, soldQty - returnedQty);
           const unitPriceCents = Number(item?.unitPriceCents ?? item?.priceCents ?? item?.price ?? 0);
+          const itbisRateBp = Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800);
           const productId = String(item?.productId || '');
           const productUnit = inferProductUnit({
             unit: item?.product?.unit ?? item?.unit ?? item?.product?.saleUnit,
@@ -751,6 +785,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             returnedQty,
             availableQty,
             unitPriceCents: Number.isFinite(unitPriceCents) ? unitPriceCents : 0,
+            itbisRateBp: Number.isFinite(itbisRateBp) ? Math.max(0, Math.round(itbisRateBp)) : 1800,
             product: {
               id: productId,
               name: String(item?.product?.name || item?.productName || 'Producto'),
@@ -846,6 +881,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         soldAt,
         type: saleType,
         totalCents: Number(parsedSale?.totalCents || saleRow.total_cents || 0),
+        salePricesIncludeItbis,
         returnPolicy,
         customer: {
           id: String(parsedSale?.customerId || selectedCustomer?.serverId || selectedCustomer?.localId || ''),
@@ -900,6 +936,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           productReference: item.product?.reference || null,
           availableQty: item.availableQty,
           unitPriceCents: item.unitPriceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
           qty: initialQty,
           unit: item.product?.unit || 'UNIDAD',
         },
@@ -964,9 +1001,19 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         productId: item.productId,
         qty: item.qty,
         unitPriceCents: item.unitPriceCents,
+        itbisRateBp: item.itbisRateBp ?? 1800,
         unit: item.unit || 'UNIDAD',
       }));
-      const totalReturnCents = returnItemsSnapshot.reduce((sum, item) => sum + item.unitPriceCents * item.qty, 0);
+      const computedTotals = calcDocumentTotalsByTaxMode({
+        items: returnItemsSnapshot.map((item) => ({
+          quantity: item.qty,
+          priceCents: item.unitPriceCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+        })),
+        shippingCents: 0,
+        salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+      });
+      const totalReturnCents = computedTotals.totalCents;
       const returnData = {
         localId: returnLocalId,
         returnCode,
@@ -974,6 +1021,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         saleLocalId: selectedSaleSnapshot.id,
         saleServerId,
         arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+        salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+        subtotalCents: computedTotals.subtotalCents,
+        itbisCents: computedTotals.itbisCents,
         totalCents: totalReturnCents,
         notes: notesSnapshot || null,
         returnedAt,
@@ -992,7 +1042,12 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           productId: item.productId,
           qty: item.qty,
           unitPriceCents: item.unitPriceCents,
-          lineTotalCents: item.unitPriceCents * item.qty,
+          itbisRateBp: item.itbisRateBp ?? 1800,
+          lineTotalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: item.qty, priceCents: item.unitPriceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+            shippingCents: 0,
+            salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+          }).totalCents,
           product: {
             name: item.productName,
             reference: item.productReference || null,
@@ -1016,7 +1071,11 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       });
 
       for (const item of returnItemsSnapshot) {
-        const lineTotalCents = item.unitPriceCents * item.qty;
+        const lineTotalCents = calcDocumentTotalsByTaxMode({
+          items: [{ quantity: item.qty, priceCents: item.unitPriceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+          shippingCents: 0,
+          salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+        }).totalCents;
         const productRow = await db.queryFirst<{ local_id?: string; server_id?: string }>(
           'SELECT local_id, server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
           [item.productId, item.productId]
@@ -1038,6 +1097,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             qty: item.qty,
             unitPriceCents: item.unitPriceCents,
             lineTotalCents,
+            itbisRateBp: item.itbisRateBp ?? 1800,
             product: { name: item.productName, reference: item.productReference || null, unit: item.unit || 'UNIDAD' },
           }),
         });
@@ -1082,6 +1142,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           saleId: selectedSaleSnapshot.id,
           saleServerId,
           arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+          salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
           items: queueItems,
           notes: notesSnapshot || null,
         },
@@ -1094,6 +1155,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         returnedAt,
         invoiceCode: selectedSaleSnapshot.invoiceCode || '-',
         customerName: selectedSaleSnapshot.customer?.name || 'Cliente general',
+        salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+        subtotalCents: computedTotals.subtotalCents,
+        itbisCents: computedTotals.itbisCents,
         totalCents: totalReturnCents,
         notes: notesSnapshot || null,
         items: returnItemsSnapshot.map((item) => ({
@@ -1101,7 +1165,12 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           reference: item.productReference || null,
           qty: item.qty,
           unitPriceCents: item.unitPriceCents,
-          lineTotalCents: item.unitPriceCents * item.qty,
+          lineTotalCents: calcDocumentTotalsByTaxMode({
+            items: [{ quantity: item.qty, priceCents: item.unitPriceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
+            shippingCents: 0,
+            salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
+          }).totalCents,
+          itbisRateBp: item.itbisRateBp ?? 1800,
           unit: item.unit || 'UNIDAD',
         })),
       };
@@ -1459,6 +1528,16 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         <BottomDock>
           <Surface style={styles.bottomCard}>
             <Divider style={{ marginBottom: 12 }} />
+            <View style={styles.totalRow}>
+              <Text style={styles.summaryLabel}>Subtotal:</Text>
+              <Text style={styles.summaryValue}>{formatCurrency(returnTotals.subtotalCents)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={styles.summaryLabel}>
+                ITBIS ({selectedSale?.salePricesIncludeItbis === false ? 'no incluido' : 'incluido'}):
+              </Text>
+              <Text style={styles.summaryValue}>{formatCurrency(returnTotals.itbisCents)}</Text>
+            </View>
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total devolución:</Text>
               <Text style={styles.totalValue}>{formatCurrency(totalCents)}</Text>
