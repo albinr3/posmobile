@@ -9,6 +9,17 @@ App móvil de punto de venta (POS) construida con React Native + Expo, con arqui
 - Flujo de subusuarios obligatorio para operar la app.
 - Datos locales en SQLite por cuenta (`account scope`) + cola de sincronización.
 
+## Billing y avisos (marzo 2026)
+
+- Banner superior con paridad visual web/móvil para facturación:
+  - Trial: mensajes de días de prueba restantes.
+  - `ACTIVE` + proveedor `MANUAL` (transferencia): aviso en 2, 1 y 0 días.
+- Texto de aviso en activo manual:
+  - `Recuerda: el pago de tu suscripción vence hoy.`
+  - `Recuerda: el pago de tu suscripción vence mañana.`
+  - `Recuerda: el pago de tu suscripción vence en X días.`
+- Para `LEMON` (tarjeta), no se muestra aviso previo de vencimiento en banner; la notificación principal llega por correo al confirmarse el cargo mensual desde backend.
+
 ## Cambio fiscal ITBIS (marzo 2026)
 
 - Se soporta la preferencia por cuenta `salePricesIncludeItbis` sincronizada con backend.

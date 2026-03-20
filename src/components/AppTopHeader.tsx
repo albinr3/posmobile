@@ -13,6 +13,9 @@ import { ui } from '../theme/ui';
 type BillingStateResponse = {
   status: string;
   isTrialing: boolean;
+  isActive?: boolean;
+  provider?: string;
+  daysRemaining?: number | null;
   trialDaysRemaining: number | null;
 };
 
@@ -274,26 +277,46 @@ export function AppTopHeader() {
     };
   }, [accountId, subUserToken]);
 
-  const trialMessage = useMemo(() => {
-    if (!billingState?.isTrialing) return null;
-    const days = Number(billingState.trialDaysRemaining ?? 0);
-    if (days <= 0) return 'Tu prueba vence hoy.';
-    if (days === 1) return 'Te queda 1 día de prueba.';
-    return `Te quedan ${days} días de prueba.`;
+  const billingBanner = useMemo(() => {
+    if (!billingState) return null;
+
+    if (billingState.isTrialing) {
+      const days = Number(billingState.trialDaysRemaining ?? 0);
+      if (days <= 0) return { message: 'Tu prueba vence hoy.', actionLabel: 'Elegir plan' };
+      if (days === 1) return { message: 'Te queda 1 día de prueba.', actionLabel: 'Elegir plan' };
+      return { message: `Te quedan ${days} días de prueba.`, actionLabel: 'Elegir plan' };
+    }
+
+    const status = String(billingState.status || '').toUpperCase();
+    const provider = String(billingState.provider || '').toUpperCase();
+    const daysRemaining = Number(billingState.daysRemaining ?? NaN);
+    const isManualDueActive =
+      status === 'ACTIVE' &&
+      provider === 'MANUAL' &&
+      Number.isFinite(daysRemaining) &&
+      daysRemaining <= 2;
+
+    if (isManualDueActive) {
+      if (daysRemaining <= 0) return { message: 'Recuerda: el pago de tu suscripción vence hoy.', actionLabel: 'Ver facturación' };
+      if (daysRemaining === 1) return { message: 'Recuerda: el pago de tu suscripción vence mañana.', actionLabel: 'Ver facturación' };
+      return { message: `Recuerda: el pago de tu suscripción vence en ${daysRemaining} días.`, actionLabel: 'Ver facturación' };
+    }
+
+    return null;
   }, [billingState]);
 
   return (
     <View style={{ paddingTop: insets.top }}>
-      {trialMessage ? (
+      {billingBanner ? (
         <View style={styles.trialBar}>
           <Icon source="clock-outline" size={14} color="#7A5200" />
-          <Text style={styles.trialText}>{trialMessage}</Text>
+          <Text style={styles.trialText}>{billingBanner.message}</Text>
           <TouchableOpacity
             onPress={() => {
               navigation.navigate('BillingPlansMenu', { screen: 'BillingPlans' });
             }}
           >
-            <Text style={styles.trialLink}>Elegir plan</Text>
+            <Text style={styles.trialLink}>{billingBanner.actionLabel}</Text>
           </TouchableOpacity>
         </View>
       ) : null}
