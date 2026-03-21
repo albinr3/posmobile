@@ -16,13 +16,16 @@ interface RegisterPaymentScreenProps {
   route?: {
     params?: {
       arId?: string;
+      arIds?: string[];
     };
   };
 }
 
 export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScreenProps) {
   const arId = route?.params?.arId || '';
-  const [arItem, setARItem] = useState<AccountReceivable | null>(null);
+  const arIdsParam = Array.isArray(route?.params?.arIds) ? route?.params?.arIds : [];
+  const targetArIds = arIdsParam.length > 0 ? arIdsParam : arId ? [arId] : [];
+  const [arItems, setARItems] = useState<AccountReceivable[]>([]);
   const [amount, setAmount] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('EFECTIVO');
   const [transferBankName, setTransferBankName] = useState<string | null>(null);
@@ -39,43 +42,55 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
   ];
 
   useEffect(() => {
-    loadARItem();
+    loadARItems();
   }, []);
 
-  const loadARItem = async () => {
+  const loadARItems = async () => {
+    if (!targetArIds.length) return;
     try {
-      const result = await db.queryFirst<any>(
-        'SELECT * FROM accounts_receivable WHERE local_id = ?',
-        [arId]
+      const placeholders = targetArIds.map(() => '?').join(', ');
+      const result = await db.query<any>(
+        `SELECT * FROM accounts_receivable WHERE local_id IN (${placeholders}) ORDER BY due_date ASC, rowid ASC`,
+        targetArIds
       );
-      if (result) {
-        setARItem({
-          localId: result.local_id,
-          serverId: result.server_id,
-          customerId: result.customer_id,
-          customerName: result.customer_name,
-          totalCents: result.total_cents,
-          paidCents: result.paid_cents,
-          balanceCents: result.balance_cents,
-          status: result.status,
-          dueDate: result.due_date,
-          synced: result.synced === 1,
-          data: result.data,
-        });
-      }
+      const mapped = result.map((row) => ({
+          localId: row.local_id,
+          serverId: row.server_id,
+          customerId: row.customer_id,
+          customerName: row.customer_name,
+          totalCents: row.total_cents,
+          paidCents: row.paid_cents,
+          balanceCents: row.balance_cents,
+          status: row.status,
+          dueDate: row.due_date,
+          synced: row.synced === 1,
+          data: row.data,
+        } as AccountReceivable));
+      setARItems(mapped);
     } catch (error) {
       console.error('Error cargando cuenta:', error);
     }
   };
 
-  const handlePayFull = () => {
-    if (arItem) {
-      setAmount((arItem.balanceCents / 100).toFixed(2));
+  const isBatch = arItems.length > 1;
+  const firstItem = arItems[0] || null;
+  const totalPendingCents = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
+
+  const getInvoiceCode = (item: AccountReceivable): string | null => {
+    try {
+      const parsed = item?.data ? JSON.parse(item.data) : null;
+      return String(parsed?.sale?.invoiceCode || parsed?.invoiceCode || '').trim() || null;
+    } catch {
+      return null;
     }
   };
 
+  const handlePayFull = () => {
+    setAmount((totalPendingCents / 100).toFixed(2));
+  };
+
   const handleSave = async () => {
-    if (!arItem) return;
+    if (!arItems.length) return;
     
     const amountCents = Math.round(parseFloat(amount) * 100);
     
@@ -84,7 +99,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       return;
     }
 
-    if (amountCents > arItem.balanceCents) {
+    if (amountCents > totalPendingCents) {
       Alert.alert('Error', 'El monto no puede ser mayor al balance pendiente');
       return;
     }
@@ -96,61 +111,109 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
     setLoading(true);
     try {
-      const localId = generateLocalId();
       const receiptCode = generateReceiptCode();
       const now = Date.now();
-      let invoiceCode: string | null = null;
-      try {
-        const parsedArData = arItem?.data ? JSON.parse(arItem.data) : null;
-        invoiceCode = String(parsedArData?.sale?.invoiceCode || parsedArData?.invoiceCode || '').trim() || null;
-      } catch {
-        invoiceCode = null;
+      const batchLocalId = generateLocalId();
+      let remaining = Math.min(amountCents, totalPendingCents);
+      const sortedItems = [...arItems].sort((a, b) => {
+        const aDue = Number(a.dueDate || 0);
+        const bDue = Number(b.dueDate || 0);
+        if (aDue !== bDue) return aDue - bDue;
+        return String(a.localId).localeCompare(String(b.localId));
+      });
+      const createdLocalPaymentIds: string[] = [];
+      let appliedTotal = 0;
+      let firstInvoiceCode: string | null = null;
+      let lastBalanceAfterCents: number | null = null;
+
+      for (const item of sortedItems) {
+        if (remaining <= 0) break;
+        const appliedCents = Math.min(remaining, item.balanceCents);
+        remaining -= appliedCents;
+        appliedTotal += appliedCents;
+
+        const localId = generateLocalId();
+        const invoiceCode = getInvoiceCode(item);
+        if (!firstInvoiceCode && invoiceCode) firstInvoiceCode = invoiceCode;
+
+        const newPaidCents = item.paidCents + appliedCents;
+        const newBalanceCents = item.totalCents - newPaidCents;
+        const newStatus = newBalanceCents <= 0 ? 'PAGADO' : newPaidCents > 0 ? 'PARCIAL' : 'PENDIENTE';
+        lastBalanceAfterCents = newBalanceCents;
+
+        const paymentDataWithBalance = {
+          localId,
+          receiptCode,
+          arId: item.localId,
+          arServerId: item.serverId,
+          customerId: item.customerId,
+          customerName: item.customerName,
+          invoiceCode,
+          amountCents: appliedCents,
+          paymentMethod,
+          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+          reference: reference.trim() || null,
+          notes: notes.trim() || null,
+          createdAt: now,
+          balanceAfterCents: newBalanceCents,
+          batchPayment: isBatch,
+          batchLocalId,
+        };
+
+        await db.insert('payments', {
+          local_id: localId,
+          receipt_code: receiptCode,
+          amount_cents: appliedCents,
+          ar_id: item.localId,
+          synced: 0,
+          data: JSON.stringify(paymentDataWithBalance),
+        });
+
+        await db.update('accounts_receivable', item.localId, {
+          paid_cents: newPaidCents,
+          balance_cents: newBalanceCents,
+          status: newStatus,
+        });
+
+        createdLocalPaymentIds.push(localId);
       }
 
-      const paymentData = {
-        localId,
-        receiptCode,
-        arId: arItem.localId,
-        arServerId: arItem.serverId,
-        customerId: arItem.customerId,
-        customerName: arItem.customerName,
-        invoiceCode,
-        amountCents,
-        paymentMethod,
-        transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
-        reference: reference.trim() || null,
-        notes: notes.trim() || null,
-        createdAt: now,
-      };
-
-      // Actualizar cuenta por cobrar
-      const newPaidCents = arItem.paidCents + amountCents;
-      const newBalanceCents = arItem.totalCents - newPaidCents;
-      const newStatus = newBalanceCents <= 0 ? 'PAGADO' : newPaidCents > 0 ? 'PARCIAL' : 'PENDIENTE';
-
-      const paymentDataWithBalance = {
-        ...paymentData,
-        balanceAfterCents: newBalanceCents,
-      };
-
-      // Guardar pago en SQLite
-      await db.insert('payments', {
-        local_id: localId,
-        receipt_code: receiptCode,
-        amount_cents: amountCents,
-        ar_id: arItem.localId,
-        synced: 0,
-        data: JSON.stringify(paymentDataWithBalance),
-      });
-
-      await db.update('accounts_receivable', arItem.localId, {
-        paid_cents: newPaidCents,
-        balance_cents: newBalanceCents,
-        status: newStatus,
-      });
-
-      // Agregar a cola de sincronización
-      await syncService.queueOperation('payment', 'create', paymentDataWithBalance, localId);
+      if (isBatch) {
+        await syncService.queueOperation(
+          'payment_batch',
+          'create',
+          {
+            arIds: sortedItems.map((item) => item.localId),
+            amountCents: appliedTotal,
+            method: paymentMethod,
+            transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+            note: notes.trim() || null,
+            localPaymentIds: createdLocalPaymentIds,
+            localReceiptCode: receiptCode,
+          },
+          batchLocalId
+        );
+      } else {
+        const singlePaymentId = createdLocalPaymentIds[0];
+        const item = sortedItems[0];
+        const paymentDataWithBalance = {
+          localId: singlePaymentId,
+          receiptCode,
+          arId: item.localId,
+          arServerId: item.serverId,
+          customerId: item.customerId,
+          customerName: item.customerName,
+          invoiceCode: getInvoiceCode(item),
+          amountCents: appliedTotal,
+          paymentMethod,
+          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
+          reference: reference.trim() || null,
+          notes: notes.trim() || null,
+          createdAt: now,
+          balanceAfterCents: lastBalanceAfterCents,
+        };
+        await syncService.queueOperation('payment', 'create', paymentDataWithBalance, singlePaymentId);
+      }
 
       let printNotice = '';
       try {
@@ -159,14 +222,14 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           const printResult = await printPaymentReceiptDirect({
             receiptCode,
             createdAt: now,
-            customerName: arItem.customerName,
-            invoiceCode,
+            customerName: firstItem?.customerName || 'Cliente',
+            invoiceCode: isBatch ? `${createdLocalPaymentIds.length} facturas` : firstInvoiceCode,
             paymentMethod,
             transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
             reference: reference.trim() || null,
             notes: notes.trim() || null,
-            amountCents,
-            balanceAfterCents: newBalanceCents,
+            amountCents: appliedTotal,
+            balanceAfterCents: lastBalanceAfterCents,
             cancelledAt: null,
           });
 
@@ -184,7 +247,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
         printNotice = '\n\nPago guardado, pero no se pudo imprimir el recibo.';
       }
 
-      Alert.alert('Éxito', `Pago de ${formatCurrency(amountCents)} registrado\nRecibo: ${receiptCode}${printNotice}`, [
+      Alert.alert('Éxito', `Pago de ${formatCurrency(appliedTotal)} registrado\nRecibo: ${receiptCode}${printNotice}`, [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
     } catch (error) {
@@ -195,7 +258,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
     }
   };
 
-  if (!arItem) {
+  if (!firstItem) {
     return (
       <SafeAreaView style={styles.container}>
         <View style={styles.loadingContainer}>
@@ -209,20 +272,33 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 }]}>
         <Surface style={styles.summaryCard}>
-          <Text style={styles.customerName}>{arItem.customerName}</Text>
+          <Text style={styles.customerName}>
+            {firstItem.customerName}
+            {isBatch ? ` (${arItems.length} facturas)` : ''}
+          </Text>
           <Divider style={styles.divider} />
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Total Factura:</Text>
-            <Text style={styles.summaryValue}>{formatCurrency(arItem.totalCents)}</Text>
+            <Text style={styles.summaryValue}>{formatCurrency(isBatch ? arItems.reduce((sum, item) => sum + item.totalCents, 0) : firstItem.totalCents)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Ya Pagado:</Text>
-            <Text style={styles.summaryValue}>{formatCurrency(arItem.paidCents)}</Text>
+            <Text style={styles.summaryValue}>{formatCurrency(isBatch ? arItems.reduce((sum, item) => sum + item.paidCents, 0) : firstItem.paidCents)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Balance Pendiente:</Text>
-            <Text style={styles.balanceValue}>{formatCurrency(arItem.balanceCents)}</Text>
+            <Text style={styles.balanceValue}>{formatCurrency(totalPendingCents)}</Text>
           </View>
+          {isBatch && (
+            <View style={styles.batchInvoicesWrap}>
+              {arItems.map((item) => (
+                <View key={item.localId} style={styles.batchInvoiceRow}>
+                  <Text style={styles.batchInvoiceCode}>{getInvoiceCode(item) || item.localId.slice(-6)}</Text>
+                  <Text style={styles.batchInvoiceAmount}>{formatCurrency(item.balanceCents)}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </Surface>
 
         <Surface style={styles.formSection}>
@@ -241,7 +317,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           />
 
           <Button mode="outlined" onPress={handlePayFull} style={styles.fullPayButton} textColor={ui.colors.primary}>
-            Pagar Total ({formatCurrency(arItem.balanceCents)})
+            Pagar Total ({formatCurrency(totalPendingCents)})
           </Button>
         </Surface>
 
@@ -395,6 +471,28 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: ui.colors.primary,
+  },
+  batchInvoicesWrap: {
+    marginTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: ui.colors.border,
+    paddingTop: 8,
+    gap: 4,
+  },
+  batchInvoiceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  batchInvoiceCode: {
+    fontSize: 12,
+    color: ui.colors.textMuted,
+    fontWeight: '700',
+  },
+  batchInvoiceAmount: {
+    fontSize: 12,
+    color: ui.colors.text,
+    fontWeight: '700',
   },
   formSection: {
     padding: 16,

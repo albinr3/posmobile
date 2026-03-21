@@ -34,6 +34,7 @@ interface PaymentReceiptItem {
   balanceAfterCents?: number | null;
   cancelledAt?: number | null;
   arId?: string | null;
+  batchItems?: PaymentReceiptItem[];
 }
 
 export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps) {
@@ -243,6 +244,35 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     });
   }, [receipts, searchQuery, startDate, endDate]);
 
+  const groupedReceipts = useMemo(() => {
+    const groups = new Map<string, PaymentReceiptItem[]>();
+    for (const item of filteredReceipts) {
+      const key = item.receiptCode || item.id;
+      const list = groups.get(key) || [];
+      list.push(item);
+      groups.set(key, list);
+    }
+
+    return Array.from(groups.values())
+      .map((items) => {
+        const sorted = [...items].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        const first = sorted[0];
+        if (!first) return null;
+        if (sorted.length === 1) return first;
+        const totalCents = sorted.reduce((sum, row) => sum + row.amountCents, 0);
+        const hasCancelled = sorted.some((row) => !!row.cancelledAt);
+        return {
+          ...first,
+          amountCents: totalCents,
+          invoiceCode: `${sorted.length} facturas`,
+          cancelledAt: hasCancelled ? first.cancelledAt || null : null,
+          batchItems: sorted,
+        } as PaymentReceiptItem;
+      })
+      .filter((item): item is PaymentReceiptItem => !!item)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [filteredReceipts]);
+
   const handleReprint = async (item: PaymentReceiptItem) => {
     try {
       const shouldAttemptPrint = await hasConnectedPrinter();
@@ -405,6 +435,9 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
 
   const renderReceipt = ({ item }: { item: PaymentReceiptItem }) => (
     <View style={styles.card}>
+      {item.batchItems && item.batchItems.length > 1 ? (
+        <Text style={styles.batchLabel}>Recibo multi-factura</Text>
+      ) : null}
       <View style={styles.rowBetween}>
         <Text style={styles.receiptCode}>{item.receiptCode}</Text>
         {item.cancelledAt ? (
@@ -417,23 +450,35 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       <Text style={styles.meta}>Factura: {item.invoiceCode || '-'}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
       <Text style={styles.meta}>Método: {formatPaymentWithBank(item.paymentMethod, item.transferBankName)}</Text>
+      {item.batchItems && item.batchItems.length > 1 ? (
+        <View style={styles.breakdownWrap}>
+          {item.batchItems.map((batchItem) => (
+            <View key={batchItem.localId || batchItem.id} style={styles.breakdownRow}>
+              <Text style={styles.breakdownInvoice}>{batchItem.invoiceCode || '-'}</Text>
+              <Text style={styles.breakdownAmount}>{formatCurrency(batchItem.amountCents)}</Text>
+            </View>
+          ))}
+        </View>
+      ) : null}
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Monto</Text>
         <Text style={styles.totalValue}>{formatCurrency(item.amountCents)}</Text>
       </View>
       <View style={styles.actionsRow}>
-        <TouchableOpacity style={[styles.actionButton, styles.shareButton]} onPress={() => handleSharePdf(item)}>
+        <TouchableOpacity style={[styles.actionButton, styles.shareButton]} onPress={() => handleSharePdf(item.batchItems?.[0] || item)}>
           <Icon source="share-variant" size={18} color="#fff" />
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionButton, styles.printButton]} onPress={() => handleReprint(item)}>
+        <TouchableOpacity style={[styles.actionButton, styles.printButton]} onPress={() => handleReprint(item.batchItems?.[0] || item)}>
           <Icon source="printer" size={18} color="#fff" />
         </TouchableOpacity>
-        {!item.cancelledAt ? (
-          <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={() => handleCancelReceipt(item)}>
+        {!item.cancelledAt && !(item.batchItems && item.batchItems.length > 1) ? (
+          <TouchableOpacity style={[styles.actionButton, styles.cancelButton]} onPress={() => handleCancelReceipt(item.batchItems?.[0] || item)}>
             <Icon source="close" size={18} color="#fff" />
           </TouchableOpacity>
         ) : (
-          <Text style={styles.cancelledNote}>Cancelado</Text>
+          <Text style={styles.cancelledNote}>
+            {item.batchItems && item.batchItems.length > 1 ? 'Cancelar por factura' : 'Cancelado'}
+          </Text>
         )}
       </View>
     </View>
@@ -478,7 +523,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       </View>
 
       <FlatList
-        data={filteredReceipts}
+        data={groupedReceipts}
         renderItem={renderReceipt}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.list}
@@ -550,6 +595,39 @@ const styles = StyleSheet.create({
   totalRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   totalLabel: { color: ui.colors.textMuted, fontSize: 12, fontWeight: '700' },
   totalValue: { color: ui.colors.text, fontSize: 16, fontWeight: '800' },
+  batchLabel: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#DCFCE7',
+    color: '#166534',
+    fontSize: 11,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginBottom: 6,
+  },
+  breakdownWrap: {
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: ui.colors.border,
+    paddingTop: 6,
+    gap: 4,
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  breakdownInvoice: {
+    fontSize: 12,
+    color: ui.colors.textMuted,
+    fontWeight: '700',
+  },
+  breakdownAmount: {
+    fontSize: 12,
+    color: ui.colors.text,
+    fontWeight: '700',
+  },
   actionsRow: { marginTop: 10, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },
   actionButton: {
     width: 34,

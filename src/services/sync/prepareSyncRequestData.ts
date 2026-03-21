@@ -178,6 +178,31 @@ export async function prepareSyncRequestData(
         note: data.note || data.notes || null,
       };
       }
+    case 'payment_batch':
+      {
+      const rawArIds = Array.isArray(data?.arIds) ? data.arIds : [];
+      const resolvedArIds: string[] = [];
+      for (const rawArId of rawArIds) {
+        if (!rawArId) continue;
+        let resolved = String(rawArId);
+        const ar = await db.queryFirst<{ server_id?: string }>(
+          'SELECT server_id FROM accounts_receivable WHERE local_id = ?',
+          [resolved]
+        );
+        if (ar?.server_id) {
+          resolved = String(ar.server_id);
+        }
+        resolvedArIds.push(resolved);
+      }
+
+      return {
+        arIds: resolvedArIds,
+        amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
+        method: data.method || data.paymentMethod,
+        transferBankName: data.transferBankName || null,
+        note: data.note || data.notes || null,
+      };
+      }
     case 'purchase':
       {
       const supplierRawId = data?.supplierServerId || data?.supplierId || null;

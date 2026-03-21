@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as RNText } from 'react-native';
-import { Text, Chip, Button, Searchbar } from 'react-native-paper';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as RNText, Alert } from 'react-native';
+import { Text, Chip, Button, Searchbar, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
@@ -24,6 +24,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'all' | 'pending' | 'partial' | 'overdue'>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const { isOnline } = useSyncStore();
   const { runFullSyncIfAuthenticated } = useSyncAuth();
   const isSyncingOnFocusRef = useRef(false);
@@ -140,6 +141,9 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
   });
 
   const totalPending = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
+  const selectedItems = arItems.filter((item) => selectedIds.has(item.localId));
+  const selectedCustomerId = selectedItems.length > 0 ? selectedItems[0].customerId : null;
+  const selectedTotalPending = selectedItems.reduce((sum, item) => sum + item.balanceCents, 0);
 
   const getStatusColor = (status: string, dueDate?: number) => {
     if (isOverdue(dueDate)) return ui.colors.danger;
@@ -147,14 +151,48 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
     return ui.colors.primary;
   };
 
+  const toggleSelect = (item: ARListItem) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(item.localId)) {
+        next.delete(item.localId);
+        return next;
+      }
+
+      if (next.size > 0) {
+        const firstSelected = arItems.find((ar) => next.has(ar.localId));
+        if (firstSelected && firstSelected.customerId !== item.customerId) {
+          Alert.alert('Cliente diferente', 'Solo puedes seleccionar facturas del mismo cliente.');
+          return prev;
+        }
+      }
+
+      next.add(item.localId);
+      return next;
+    });
+  };
+
   const renderARItem = ({ item }: { item: ARListItem }) => {
     const statusColor = getStatusColor(item.status, item.dueDate);
     const paidPercent = item.totalCents > 0 ? Math.round((item.paidCents / item.totalCents) * 100) : 0;
+    const isChecked = selectedIds.has(item.localId);
+    const disableSelect = selectedCustomerId !== null && selectedCustomerId !== item.customerId && !isChecked;
+    const disableIndividualPay = selectedIds.size > 1 && isChecked;
 
     return (
-      <TouchableOpacity style={styles.arCard} onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })}>
+      <View style={styles.arCard}>
         <View style={styles.arHeader}>
-          <Text style={styles.customerName}>{item.customerName}</Text>
+          <View style={styles.customerWrap}>
+            <TouchableOpacity
+              style={[styles.checkCircle, isChecked && styles.checkCircleActive, disableSelect && styles.checkCircleDisabled]}
+              onPress={() => !disableSelect && toggleSelect(item)}
+              activeOpacity={0.8}
+              disabled={disableSelect}
+            >
+              <Icon source={isChecked ? 'check' : 'plus'} size={14} color={isChecked ? '#fff' : ui.colors.primary} />
+            </TouchableOpacity>
+            <Text style={styles.customerName}>{item.customerName}</Text>
+          </View>
           <View style={[styles.statusBadge, { backgroundColor: `${statusColor}20` }]}>
             <RNText style={[styles.statusBadgeText, { color: statusColor }]}>
               {isOverdue(item.dueDate) ? 'Vencida' : item.status}
@@ -181,10 +219,17 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
 
         {item.dueDate ? <Text style={[styles.dueDate, isOverdue(item.dueDate) && styles.overdue]}>Vence: {formatDate(item.dueDate)}</Text> : null}
 
-        <Button mode="contained" buttonColor={ui.colors.primary} compact onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })} style={styles.payButton}>
+        <Button
+          mode="contained"
+          buttonColor={ui.colors.primary}
+          compact
+          onPress={() => navigation.navigate('RegisterPayment', { arId: item.localId })}
+          style={styles.payButton}
+          disabled={disableIndividualPay}
+        >
           Registrar Pago
         </Button>
-      </TouchableOpacity>
+      </View>
     );
   };
 
@@ -246,6 +291,31 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
           </Chip>
         </View>
       </View>
+
+      {selectedIds.size > 0 && (
+        <View style={styles.batchBar}>
+          <View style={styles.batchInfo}>
+            <Text style={styles.batchCount}>{selectedIds.size} seleccionada(s)</Text>
+            <Text style={styles.batchTotal}>Total: {formatCurrency(selectedTotalPending)}</Text>
+          </View>
+          <View style={styles.batchActions}>
+            <Button
+              mode="text"
+              textColor={ui.colors.primary}
+              onPress={() => setSelectedIds(new Set())}
+            >
+              Limpiar
+            </Button>
+            <Button
+              mode="contained"
+              buttonColor={ui.colors.success}
+              onPress={() => navigation.navigate('RegisterPayment', { arIds: selectedItems.map((ar) => ar.localId) })}
+            >
+              Cobrar seleccionadas
+            </Button>
+          </View>
+        </View>
+      )}
 
       <FlatList
         data={filteredItems}
@@ -312,6 +382,25 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   arHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  customerWrap: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8 },
+  checkCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: ui.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+    backgroundColor: '#fff',
+  },
+  checkCircleActive: {
+    backgroundColor: ui.colors.primary,
+    borderColor: ui.colors.primary,
+  },
+  checkCircleDisabled: {
+    opacity: 0.35,
+  },
   customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flex: 1, marginRight: 8 },
   statusBadge: {
     minHeight: 32,
@@ -338,6 +427,20 @@ const styles = StyleSheet.create({
   dueDate: { marginTop: 9, color: ui.colors.textMuted, fontSize: 12 },
   overdue: { color: ui.colors.danger, fontWeight: '700' },
   payButton: { marginTop: 10, borderRadius: ui.radius.md, height: 40, justifyContent: 'center' },
+  batchBar: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: ui.radius.lg,
+    borderWidth: 1,
+    borderColor: '#22C55E',
+    backgroundColor: '#ECFDF3',
+    padding: 10,
+    gap: 8,
+  },
+  batchInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  batchCount: { color: '#166534', fontWeight: '800' },
+  batchTotal: { color: '#166534', fontWeight: '700' },
+  batchActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8 },
   emptyContainer: { alignItems: 'center', justifyContent: 'center', paddingVertical: 50 },
   emptyText: { color: ui.colors.textMuted },
 });

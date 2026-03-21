@@ -346,6 +346,54 @@ class SyncService {
       },
     });
 
+    if (item.action === 'create' && item.entity_type === 'payment_batch') {
+      const responsePaymentIds = Array.isArray(response.data?.paymentIds)
+        ? response.data.paymentIds
+        : Array.isArray(response.data?.data?.paymentIds)
+          ? response.data.data.paymentIds
+          : [];
+      const receiptCode =
+        response.data?.receiptCode ||
+        response.data?.data?.receiptCode ||
+        data?.localReceiptCode ||
+        null;
+      const localPaymentIds = Array.isArray(data?.localPaymentIds)
+        ? data.localPaymentIds.map((id: unknown) => String(id))
+        : [];
+
+      for (let i = 0; i < localPaymentIds.length; i += 1) {
+        const localPaymentId = localPaymentIds[i];
+        const serverPaymentId = responsePaymentIds[i] ? String(responsePaymentIds[i]) : null;
+        const paymentRow = await db.queryFirst<any>(
+          'SELECT data, receipt_code FROM payments WHERE local_id = ? LIMIT 1',
+          [localPaymentId]
+        );
+        let parsedData: any = {};
+        try {
+          parsedData = paymentRow?.data ? JSON.parse(paymentRow.data) : {};
+        } catch {
+          parsedData = {};
+        }
+
+        await db.update(
+          'payments',
+          localPaymentId,
+          {
+            ...(serverPaymentId ? { server_id: serverPaymentId } : {}),
+            ...(receiptCode ? { receipt_code: String(receiptCode) } : {}),
+            synced: 1,
+            data: JSON.stringify({
+              ...parsedData,
+              ...(serverPaymentId ? { id: serverPaymentId, serverId: serverPaymentId } : {}),
+              ...(receiptCode ? { receiptCode: String(receiptCode) } : {}),
+            }),
+          },
+          'local_id'
+        );
+      }
+      return;
+    }
+
     // Actualizar estado local después de sincronizar
     if (item.action === 'create') {
       const createdId =
@@ -1002,6 +1050,7 @@ class SyncService {
       'supplier': 'suppliers',
       'return': 'returns',
       'payment': 'payments',
+      'payment_batch': 'payments/batch',
       'purchase': 'purchases',
       'operating_expense': 'operating-expenses',
     };
@@ -1018,6 +1067,7 @@ class SyncService {
       'supplier': 'suppliers',
       'return': 'returns',
       'payment': 'payments',
+      'payment_batch': 'payments',
       'purchase': 'purchases',
       'operating_expense': 'operating_expenses',
     };
