@@ -494,7 +494,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
           </TouchableOpacity>
         ) : (
           <Text style={styles.cancelledNote}>
-            {item.batchItems && item.batchItems.length > 1 ? 'Cancelar por factura' : 'Cancelado'}
+            {item.batchItems && item.batchItems.length > 1 ? 'Recibo multi-factura' : 'Cancelado'}
           </Text>
         )}
       </View>

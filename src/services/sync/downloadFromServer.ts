@@ -929,6 +929,87 @@ export async function downloadFromServer(options: {
       );
     }
 
+    // Reaplicar pagos locales pendientes (create/cancel) para evitar que CxC "reaparezca"
+    // mientras la sincronización de recibos aún no termina.
+    const pendingPaymentRows = await db.query<any>(
+      `SELECT local_id, amount_cents, ar_id, server_id, synced, data
+       FROM payments
+       WHERE ar_id IS NOT NULL
+         AND (synced = 0 OR server_id IS NULL)`
+    );
+
+    const pendingAdjustmentByArLocalId = new Map<string, number>();
+    for (const paymentRow of pendingPaymentRows) {
+      const arLocalId = paymentRow?.ar_id ? String(paymentRow.ar_id) : '';
+      if (!arLocalId) continue;
+
+      let parsedPayment: any = null;
+      try {
+        parsedPayment = paymentRow?.data ? JSON.parse(paymentRow.data) : null;
+      } catch {
+        parsedPayment = null;
+      }
+
+      const amountCents = Number(parsedPayment?.amountCents || paymentRow?.amount_cents || 0);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) continue;
+
+      const cancelRequested =
+        parsedPayment?.cancel === true ||
+        String(parsedPayment?.status || '').toLowerCase() === 'cancelled' ||
+        Boolean(parsedPayment?.cancelledAt);
+      const delta = cancelRequested ? -amountCents : amountCents;
+      if (delta === 0) continue;
+
+      pendingAdjustmentByArLocalId.set(
+        arLocalId,
+        Number(pendingAdjustmentByArLocalId.get(arLocalId) || 0) + delta
+      );
+    }
+
+    for (const [arLocalId, pendingDeltaCents] of pendingAdjustmentByArLocalId.entries()) {
+      if (!pendingDeltaCents) continue;
+      const arRow = await db.queryFirst<any>(
+        `SELECT local_id, total_cents, paid_cents, balance_cents, status, data
+         FROM accounts_receivable
+         WHERE local_id = ?
+         LIMIT 1`,
+        [arLocalId]
+      );
+      if (!arRow?.local_id) continue;
+
+      let parsedAr: any = null;
+      try {
+        parsedAr = arRow?.data ? JSON.parse(arRow.data) : null;
+      } catch {
+        parsedAr = null;
+      }
+
+      const totalCents = Number(arRow.total_cents || parsedAr?.totalCents || 0);
+      const basePaidCents = Number(arRow.paid_cents || parsedAr?.paidCents || 0);
+      const nextPaidCents = Math.max(0, Math.min(totalCents, basePaidCents + pendingDeltaCents));
+      const nextBalanceCents = Math.max(0, totalCents - nextPaidCents);
+      const nextStatus = nextBalanceCents <= 0 ? 'PAGADO' : nextPaidCents > 0 ? 'PARCIAL' : 'PENDIENTE';
+
+      await db.update(
+        'accounts_receivable',
+        arLocalId,
+        {
+          paid_cents: nextPaidCents,
+          balance_cents: nextBalanceCents,
+          status: nextStatus,
+          synced: 0,
+          data: JSON.stringify({
+            ...(parsedAr || {}),
+            paidCents: nextPaidCents,
+            balanceCents: nextBalanceCents,
+            status: nextStatus,
+            localPendingPaymentDeltaCents: pendingDeltaCents,
+            localPendingPaymentAdjustedAt: Date.now(),
+          }),
+        }
+      );
+    }
+
     // Descargar recibos de pago (incluye cancelados para historial)
     const paymentsResponse = await axios.get(`${API_URL}/api/payments`, {
       headers,

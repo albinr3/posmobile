@@ -332,19 +332,37 @@ class SyncService {
       });
     }
     
-    const response = await axios({
-      method,
-      url,
-      data: requestData,
-      timeout: 25000,
-      headers: {
-        'Authorization': `Bearer ${clerkToken}`,
-        'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-        'X-SubUser-Token': subUserToken,
-        ...(accountId ? { 'X-Account-Id': accountId } : {}),
-        'Content-Type': 'application/json',
-      },
-    });
+    const requestHeaders = {
+      'Authorization': `Bearer ${clerkToken}`,
+      'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+      'X-SubUser-Token': subUserToken,
+      ...(accountId ? { 'X-Account-Id': accountId } : {}),
+      'Content-Type': 'application/json',
+    };
+
+    let response: any;
+    try {
+      response = await axios({
+        method,
+        url,
+        data: requestData,
+        timeout: 25000,
+        headers: requestHeaders,
+      });
+    } catch (error) {
+      if (item.action === 'create' && item.entity_type === 'payment_batch' && this.shouldFallbackBatchPayment(error)) {
+        if (SYNC_DEBUG) {
+          console.warn('[SyncService] payment_batch fallback -> POST /api/payments por factura', {
+            queueId: item.id,
+            status: axios.isAxiosError(error) ? error.response?.status : null,
+            message: summarizeError(error),
+          });
+        }
+        await this.syncPaymentBatchAsSingles(data, { clerkToken, subUserToken, accountId }, requestHeaders);
+        return;
+      }
+      throw error;
+    }
 
     if (item.action === 'create' && item.entity_type === 'payment_batch') {
       const responsePaymentIds = Array.isArray(response.data?.paymentIds)
@@ -669,6 +687,134 @@ class SyncService {
     authContext?: { clerkToken: string; subUserToken: string; accountId: string | null }
   ): Promise<any> {
     return prepareSyncRequestData(entityType, data, action, authContext);
+  }
+
+  private shouldFallbackBatchPayment(error: any): boolean {
+    if (!axios.isAxiosError(error)) return false;
+    const status = Number(error.response?.status || 0);
+    const message = String(
+      error.response?.data?.error ||
+      error.response?.data?.message ||
+      error.message ||
+      ''
+    ).toLowerCase();
+
+    if (status === 404 || status === 405 || status === 501) return true;
+    if (status === 401 || status === 403) {
+      return (
+        message.includes('no autenticado') ||
+        message.includes('unauthorized') ||
+        message.includes('not authenticated')
+      );
+    }
+    return false;
+  }
+
+  private async syncPaymentBatchAsSingles(
+    batchData: any,
+    authContext: { clerkToken: string; subUserToken: string; accountId: string | null },
+    headers: Record<string, string>
+  ): Promise<void> {
+    const localPaymentIds = Array.isArray(batchData?.localPaymentIds)
+      ? batchData.localPaymentIds.map((id: unknown) => String(id)).filter(Boolean)
+      : [];
+    if (!localPaymentIds.length) {
+      throw new Error('payment_batch sin localPaymentIds para fallback');
+    }
+
+    for (const localPaymentId of localPaymentIds) {
+      const paymentRow = await db.queryFirst<any>(
+        `SELECT local_id, server_id, receipt_code, amount_cents, ar_id, data
+         FROM payments
+         WHERE local_id = ?
+         LIMIT 1`,
+        [localPaymentId]
+      );
+      if (!paymentRow?.local_id) {
+        continue;
+      }
+      if (paymentRow.server_id) {
+        await db.update('payments', String(paymentRow.local_id), { synced: 1 }, 'local_id');
+        continue;
+      }
+
+      let parsedData: any = {};
+      try {
+        parsedData = paymentRow?.data ? JSON.parse(paymentRow.data) : {};
+      } catch {
+        parsedData = {};
+      }
+
+      const paymentPayload = {
+        ...parsedData,
+        arId: parsedData?.arId || paymentRow.ar_id || null,
+        amountCents: Number(parsedData?.amountCents || paymentRow.amount_cents || 0),
+        method: parsedData?.method || parsedData?.paymentMethod || batchData?.method || 'EFECTIVO',
+        paymentMethod: parsedData?.paymentMethod || parsedData?.method || batchData?.method || 'EFECTIVO',
+        transferBankName:
+          parsedData?.transferBankName ??
+          batchData?.transferBankName ??
+          null,
+        note: parsedData?.note ?? parsedData?.notes ?? batchData?.note ?? null,
+        notes: parsedData?.notes ?? parsedData?.note ?? batchData?.note ?? null,
+      };
+
+      const requestData = await this.prepareRequestData('payment', paymentPayload, 'create', authContext);
+      const singleResponse = await axios({
+        method: 'POST',
+        url: `${API_URL}/api/payments`,
+        data: requestData,
+        timeout: 25000,
+        headers,
+      });
+
+      const createdId =
+        singleResponse.data?.id ||
+        singleResponse.data?.data?.id ||
+        null;
+      if (!createdId) {
+        throw new Error(`Respuesta de create sin id para payment (fallback batch ${localPaymentId})`);
+      }
+
+      const resolvedReceiptCode =
+        parsedData?.receiptCode ||
+        paymentRow.receipt_code ||
+        batchData?.localReceiptCode ||
+        singleResponse.data?.receiptCode ||
+        singleResponse.data?.data?.receiptCode ||
+        null;
+      const resolvedReceiptNumber =
+        singleResponse.data?.receiptNumber ||
+        singleResponse.data?.data?.receiptNumber ||
+        parsedData?.receiptNumber ||
+        null;
+      const resolvedPaidAt =
+        singleResponse.data?.paidAt ||
+        singleResponse.data?.data?.paidAt ||
+        parsedData?.paidAt ||
+        parsedData?.createdAt ||
+        null;
+
+      await db.update(
+        'payments',
+        String(paymentRow.local_id),
+        {
+          server_id: String(createdId),
+          ...(resolvedReceiptCode ? { receipt_code: String(resolvedReceiptCode) } : {}),
+          synced: 1,
+          data: JSON.stringify({
+            ...parsedData,
+            ...paymentPayload,
+            id: String(createdId),
+            serverId: String(createdId),
+            ...(resolvedReceiptCode ? { receiptCode: String(resolvedReceiptCode) } : {}),
+            ...(resolvedReceiptNumber ? { receiptNumber: Number(resolvedReceiptNumber) } : {}),
+            ...(resolvedPaidAt ? { paidAt: resolvedPaidAt } : {}),
+          }),
+        },
+        'local_id'
+      );
+    }
   }
 
   private async handleSyncError(item: any, error: any): Promise<boolean> {
