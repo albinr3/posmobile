@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as RNText, Alert } from 'react-native';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Text as RNText, Alert, Pressable } from 'react-native';
 import { Text, Chip, Button, Searchbar, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
@@ -12,13 +12,18 @@ import { useSyncAuth } from '../../hooks/useSyncAuth';
 
 interface ARListScreenProps {
   navigation: any;
+  route?: {
+    params?: {
+      clearSelection?: boolean;
+    };
+  };
 }
 
 interface ARListItem extends AccountReceivable {
   invoiceCode?: string | null;
 }
 
-export function ARListScreen({ navigation }: ARListScreenProps) {
+export function ARListScreen({ navigation, route }: ARListScreenProps) {
   const [arItems, setARItems] = useState<ARListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -78,6 +83,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
 
   useFocusEffect(
     useCallback(() => {
+      if (route?.params?.clearSelection) {
+        setSelectedIds(new Set());
+        navigation.setParams?.({ clearSelection: undefined });
+      }
+
       if (isSyncingOnFocusRef.current) return;
       isSyncingOnFocusRef.current = true;
       let active = true;
@@ -111,7 +121,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
         active = false;
         isSyncingOnFocusRef.current = false;
       };
-    }, [loadARItems, syncARBestEffort])
+    }, [loadARItems, navigation, route?.params?.clearSelection, syncARBestEffort])
   );
 
   const onRefresh = async () => {
@@ -128,22 +138,29 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
 
   const isOverdue = (dueDate?: number) => !!dueDate && dueDate < Date.now();
 
+  const totalPending = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
+  const selectedItems = arItems.filter((item) => selectedIds.has(item.localId));
+  const selectedCustomerId = selectedItems.length > 0 ? selectedItems[0].customerId : null;
+  const selectedTotalPending = selectedItems.reduce((sum, item) => sum + item.balanceCents, 0);
   const filteredItems = arItems.filter((item) => {
     const q = searchQuery.toLowerCase().trim();
+    const customerIdText = String(item.customerId || '').toLowerCase();
     const matchesSearch =
       item.customerName.toLowerCase().includes(q) ||
-      (item.invoiceCode || '').toLowerCase().includes(q);
+      (item.invoiceCode || '').toLowerCase().includes(q) ||
+      customerIdText.includes(q);
     if (!matchesSearch) return false;
     if (filter === 'pending') return item.status === 'PENDIENTE';
     if (filter === 'partial') return item.status === 'PARCIAL';
     if (filter === 'overdue') return isOverdue(item.dueDate);
     return true;
   });
-
-  const totalPending = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
-  const selectedItems = arItems.filter((item) => selectedIds.has(item.localId));
-  const selectedCustomerId = selectedItems.length > 0 ? selectedItems[0].customerId : null;
-  const selectedTotalPending = selectedItems.reduce((sum, item) => sum + item.balanceCents, 0);
+  const prioritizedItems = selectedCustomerId
+    ? [
+        ...filteredItems.filter((item) => item.customerId === selectedCustomerId),
+        ...filteredItems.filter((item) => item.customerId !== selectedCustomerId),
+      ]
+    : filteredItems;
 
   const getStatusColor = (status: string, dueDate?: number) => {
     if (isOverdue(dueDate)) return ui.colors.danger;
@@ -180,7 +197,11 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
     const disableIndividualPay = selectedIds.size > 1 && isChecked;
 
     return (
-      <View style={styles.arCard}>
+      <Pressable
+        style={styles.arCard}
+        onLongPress={() => !disableSelect && toggleSelect(item)}
+        delayLongPress={280}
+      >
         <View style={styles.arHeader}>
           <View style={styles.customerWrap}>
             <TouchableOpacity
@@ -191,7 +212,14 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
             >
               <Icon source={isChecked ? 'check' : 'plus'} size={14} color={isChecked ? '#fff' : ui.colors.primary} />
             </TouchableOpacity>
-            <Text style={styles.customerName}>{item.customerName}</Text>
+            <View style={styles.customerTextRow}>
+              <Text style={styles.customerName} numberOfLines={1}>
+                {item.customerName}
+              </Text>
+              <Text style={styles.customerId} numberOfLines={1}>
+                ID: {item.customerId || '-'}
+              </Text>
+            </View>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: `${statusColor}20` }]}>
             <RNText style={[styles.statusBadgeText, { color: statusColor }]}>
@@ -229,7 +257,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
         >
           Registrar Pago
         </Button>
-      </View>
+      </Pressable>
     );
   };
 
@@ -318,7 +346,7 @@ export function ARListScreen({ navigation }: ARListScreenProps) {
       )}
 
       <FlatList
-        data={filteredItems}
+        data={prioritizedItems}
         renderItem={renderARItem}
         keyExtractor={(item) => item.localId}
         contentContainerStyle={styles.listContent}
@@ -401,7 +429,9 @@ const styles = StyleSheet.create({
   checkCircleDisabled: {
     opacity: 0.35,
   },
-  customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flex: 1, marginRight: 8 },
+  customerTextRow: { flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: 8, gap: 6 },
+  customerName: { fontSize: 16, color: ui.colors.text, fontWeight: '700', flexShrink: 1 },
+  customerId: { fontSize: 12, color: ui.colors.textMuted, fontWeight: '700' },
   statusBadge: {
     minHeight: 32,
     borderRadius: ui.radius.md,

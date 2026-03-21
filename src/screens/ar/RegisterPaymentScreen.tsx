@@ -248,7 +248,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       }
 
       Alert.alert('Éxito', `Pago de ${formatCurrency(appliedTotal)} registrado\nRecibo: ${receiptCode}${printNotice}`, [
-        { text: 'OK', onPress: () => navigation.goBack() }
+        { text: 'OK', onPress: () => navigation.navigate('ARList', { clearSelection: true }) }
       ]);
     } catch (error) {
       console.error('Error guardando pago:', error);
