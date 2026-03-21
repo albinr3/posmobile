@@ -299,6 +299,72 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     }
   };
 
+  const buildLocalArIdForSale = (saleLocalId: string) => `ar_${saleLocalId}`;
+
+  const upsertLocalArForCreditSale = async (params: {
+    saleLocalId: string;
+    invoiceCode: string;
+    createdAt: number;
+    customerId: string | null;
+    customerName: string | null;
+    customerVisualId: number | null;
+    totalCents: number;
+    dueDate: number | null;
+  }) => {
+    if (!params.customerId) return;
+    const arLocalId = buildLocalArIdForSale(params.saleLocalId);
+    const arPayload = {
+      localId: arLocalId,
+      saleLocalId: params.saleLocalId,
+      saleServerId: null,
+      customerId: params.customerId,
+      customerName: params.customerName || 'Cliente',
+      customerVisualId: params.customerVisualId ?? null,
+      invoiceCode: params.invoiceCode,
+      totalCents: params.totalCents,
+      paidCents: 0,
+      balanceCents: params.totalCents,
+      status: 'PENDIENTE',
+      dueDate: params.dueDate,
+      createdAt: params.createdAt,
+    };
+
+    const arRow = {
+      customer_id: params.customerId,
+      customer_visual_id: params.customerVisualId ?? null,
+      customer_name: params.customerName || 'Cliente',
+      total_cents: params.totalCents,
+      paid_cents: 0,
+      balance_cents: params.totalCents,
+      status: 'PENDIENTE',
+      due_date: params.dueDate,
+      synced: 0,
+      data: JSON.stringify(arPayload),
+    };
+
+    const exists = await db.queryFirst<{ local_id?: string }>(
+      'SELECT local_id FROM accounts_receivable WHERE local_id = ? LIMIT 1',
+      [arLocalId]
+    );
+    if (exists?.local_id) {
+      await db.update('accounts_receivable', arLocalId, arRow, 'local_id');
+      return;
+    }
+
+    await db.insert('accounts_receivable', {
+      local_id: arLocalId,
+      ...arRow,
+    });
+  };
+
+  const removeLocalArDraftForSale = async (saleLocalId: string) => {
+    const arLocalId = buildLocalArIdForSale(saleLocalId);
+    await db.runAsync(
+      'DELETE FROM accounts_receivable WHERE local_id = ? AND server_id IS NULL',
+      [arLocalId]
+    );
+  };
+
   const paymentMethods = [
     { label: 'Efectivo', value: 'EFECTIVO' },
     { label: 'Tarjeta', value: 'TARJETA' },
@@ -591,6 +657,21 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           data: JSON.stringify(updatedData),
         });
 
+        if (paymentMethod === 'CREDITO') {
+          await upsertLocalArForCreditSale({
+            saleLocalId: editingSaleLocalId,
+            invoiceCode: resolvedInvoiceCode,
+            createdAt,
+            customerId: selectedCustomerId,
+            customerName: selectedCustomerName || 'Cliente',
+            customerVisualId: selectedCustomerVisualId ?? null,
+            totalCents: documentTotals.totalCents,
+            dueDate: creditDueDate,
+          });
+        } else {
+          await removeLocalArDraftForSale(editingSaleLocalId);
+        }
+
         await queueSaleUpdateForEdit(editingSaleLocalId, {
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           customerId: selectedCustomerId,
@@ -644,6 +725,21 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           synced: 0,
           data: JSON.stringify(saleData),
         });
+
+        if (paymentMethod === 'CREDITO') {
+          await upsertLocalArForCreditSale({
+            saleLocalId: localId,
+            invoiceCode,
+            createdAt: now,
+            customerId: selectedCustomerId,
+            customerName: selectedCustomerName || 'Cliente',
+            customerVisualId: selectedCustomerVisualId ?? null,
+            totalCents: cartTotals.totalCents,
+            dueDate: creditDueDate,
+          });
+        } else {
+          await removeLocalArDraftForSale(localId);
+        }
 
         await syncService.queueOperation('sale', 'create', saleData, localId);
 

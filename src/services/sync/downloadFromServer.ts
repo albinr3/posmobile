@@ -848,10 +848,12 @@ export async function downloadFromServer(options: {
     const serverOpenArIds = new Set<string>();
 
     for (const ar of arItems) {
-      serverOpenArIds.add(String(ar.id));
-      const exists = await db.queryFirst(
-        'SELECT 1 FROM accounts_receivable WHERE server_id = ? LIMIT 1',
-        [ar.id]
+      const arServerId = String(ar.id || '');
+      if (!arServerId) continue;
+      serverOpenArIds.add(arServerId);
+      const existsByServer = await db.queryFirst<{ local_id?: string }>(
+        'SELECT local_id FROM accounts_receivable WHERE server_id = ? LIMIT 1',
+        [arServerId]
       );
 
       const totalCents = ar.totalCents || 0;
@@ -864,6 +866,24 @@ export async function downloadFromServer(options: {
         normalizeCustomerVisualId(ar.customer?.visualId) ??
         null;
       const dueDate = ar.dueDate ? new Date(ar.dueDate).getTime() : null;
+      const saleServerId = ar?.saleId ? String(ar.saleId) : ar?.sale?.id ? String(ar.sale.id) : null;
+      let matchedSaleLocalId: string | null = null;
+      let provisionalArLocalId: string | null = null;
+      if (!existsByServer?.local_id && saleServerId) {
+        const localSale = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM sales WHERE server_id = ? LIMIT 1',
+          [saleServerId]
+        );
+        matchedSaleLocalId = localSale?.local_id ? String(localSale.local_id) : null;
+        if (matchedSaleLocalId) {
+          const candidateLocalArId = `ar_${matchedSaleLocalId}`;
+          const localDraftAr = await db.queryFirst<{ local_id?: string }>(
+            'SELECT local_id FROM accounts_receivable WHERE local_id = ? AND server_id IS NULL LIMIT 1',
+            [candidateLocalArId]
+          );
+          provisionalArLocalId = localDraftAr?.local_id ? String(localDraftAr.local_id) : null;
+        }
+      }
 
       const arData = {
         customer_id: customerId,
@@ -875,15 +895,23 @@ export async function downloadFromServer(options: {
         status: ar.status || 'PENDIENTE',
         due_date: dueDate,
         synced: 1,
-        data: JSON.stringify(ar),
+        data: JSON.stringify({
+          ...ar,
+          saleLocalId: matchedSaleLocalId,
+        }),
       };
 
-      if (exists) {
-        await db.update('accounts_receivable', ar.id, arData, 'server_id');
+      if (existsByServer?.local_id) {
+        await db.update('accounts_receivable', arServerId, arData, 'server_id');
+      } else if (provisionalArLocalId) {
+        await db.update('accounts_receivable', provisionalArLocalId, {
+          server_id: arServerId,
+          ...arData,
+        });
       } else {
         await db.insert('accounts_receivable', {
-          local_id: `server_ar_${ar.id}`,
-          server_id: ar.id,
+          local_id: `server_ar_${arServerId}`,
+          server_id: arServerId,
           ...arData,
         });
       }

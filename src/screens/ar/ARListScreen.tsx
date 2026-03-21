@@ -203,10 +203,16 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
     const isChecked = selectedIds.has(item.localId);
     const disableSelect = selectedCustomerId !== null && selectedCustomerId !== item.customerId && !isChecked;
     const disableIndividualPay = selectedIds.size > 1 && isChecked;
+    const selectionModeActive = selectedIds.size > 0;
 
     return (
       <Pressable
         style={styles.arCard}
+        onPress={() => {
+          if (!selectionModeActive) return;
+          if (disableSelect) return;
+          toggleSelect(item);
+        }}
         onLongPress={() => !disableSelect && toggleSelect(item)}
         delayLongPress={280}
       >
