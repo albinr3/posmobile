@@ -290,14 +290,21 @@ class SyncService {
         );
       }
     }
-    
+    const requestHeaders = {
+      'Authorization': `Bearer ${clerkToken}`,
+      'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+      'X-SubUser-Token': subUserToken,
+      ...(accountId ? { 'X-Account-Id': accountId } : {}),
+      'Content-Type': 'application/json',
+    };
+
     // Preparar datos según el tipo de entidad
     const requestData = await this.prepareRequestData(item.entity_type, data, item.action, {
       clerkToken,
       subUserToken,
       accountId,
     });
-    
+
     const paymentCancelRequested =
       item.entity_type === 'payment' &&
       item.action === 'update' &&
@@ -331,14 +338,6 @@ class SyncService {
         saleCancel: requestData?.cancel,
       });
     }
-    
-    const requestHeaders = {
-      'Authorization': `Bearer ${clerkToken}`,
-      'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-      'X-SubUser-Token': subUserToken,
-      ...(accountId ? { 'X-Account-Id': accountId } : {}),
-      'Content-Type': 'application/json',
-    };
 
     let response: any;
     try {
