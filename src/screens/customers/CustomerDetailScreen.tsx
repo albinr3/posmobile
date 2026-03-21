@@ -3,6 +3,7 @@ import { View, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { Surface, Text, Chip } from 'react-native-paper';
 import { db } from '../../database/Database';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface CustomerDetailScreenProps {
   route: any;
@@ -56,7 +57,12 @@ export function CustomerDetailScreen({ route }: CustomerDetailScreenProps) {
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.content}>
         <Surface style={styles.card}>
-          <Text style={styles.name}>{customer.name}</Text>
+          <Text style={styles.name}>
+            {formatCustomerLabel(
+              customer.name,
+              normalizeCustomerVisualId(customer.visual_id) ?? parseCustomerVisualIdFromData(customer.data)
+            )}
+          </Text>
 
           <View style={styles.row}>
             <Text style={styles.label}>Telefono:</Text>

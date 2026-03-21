@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
+import { normalizeCustomerVisualId } from '../../utils/customerLabels';
 
 const DETAIL_FETCH_BATCH_SIZE = 8;
 const DOWNLOAD_TIMEOUT_MS = 30000;
@@ -203,6 +204,7 @@ export async function downloadFromServer(options: {
       );
       
       const customerData = {
+        visual_id: normalizeCustomerVisualId(customer.visualId ?? customer.id_visual),
         name: customer.name,
         phone: customer.phone || null,
         synced: 1,
@@ -371,6 +373,13 @@ export async function downloadFromServer(options: {
 
       const customerId = saleDetail?.customerId || sale?.customerId || localSale?.customerId || null;
       const customerName = saleDetail?.customerName || sale?.customerName || localSale?.customerName || null;
+      const customerVisualId =
+        normalizeCustomerVisualId(saleDetail?.customerVisualId) ??
+        normalizeCustomerVisualId(sale?.customerVisualId) ??
+        normalizeCustomerVisualId(saleDetail?.customer?.visualId) ??
+        normalizeCustomerVisualId(sale?.customer?.visualId) ??
+        normalizeCustomerVisualId(localSale?.customerVisualId) ??
+        null;
       const soldAtRaw = saleDetail?.soldAt || sale?.soldAt || localSale?.soldAt || localSale?.createdAt || null;
       const createdAt =
         soldAtRaw && !Number.isNaN(new Date(soldAtRaw).getTime())
@@ -409,6 +418,7 @@ export async function downloadFromServer(options: {
         invoiceCode: String(saleDetail?.invoiceCode || sale?.invoiceCode || localSale?.invoiceCode || '-'),
         soldAt: createdAt,
         customerId,
+        customerVisualId,
         customerName,
         paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || localSale?.paymentMethod || 'EFECTIVO'),
         transferBankName: saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null,
@@ -634,6 +644,13 @@ export async function downloadFromServer(options: {
 
       const customerId = quoteDetail?.customerId || quote?.customerId || localQuote?.customerId || null;
       const customerName = quoteDetail?.customerName || quote?.customerName || localQuote?.customerName || null;
+      const customerVisualId =
+        normalizeCustomerVisualId(quoteDetail?.customerVisualId) ??
+        normalizeCustomerVisualId(quote?.customerVisualId) ??
+        normalizeCustomerVisualId(quoteDetail?.customer?.visualId) ??
+        normalizeCustomerVisualId(quote?.customer?.visualId) ??
+        normalizeCustomerVisualId(localQuote?.customerVisualId) ??
+        null;
       const quotedAtRaw = quoteDetail?.quotedAt || quote?.quotedAt || localQuote?.createdAt || null;
       const createdAt =
         quotedAtRaw && !Number.isNaN(new Date(quotedAtRaw).getTime())
@@ -667,6 +684,7 @@ export async function downloadFromServer(options: {
         id: quoteId,
         quoteCode: String(quoteDetail?.quoteCode || quote?.quoteCode || localQuote?.quoteCode || '-'),
         customerId,
+        customerVisualId,
         customerName,
         items,
         subtotalCents: Number(quoteDetail?.subtotalCents || quote?.subtotalCents || localQuote?.subtotalCents || 0),
@@ -841,10 +859,15 @@ export async function downloadFromServer(options: {
       const paidCents = Math.max(0, totalCents - balanceCents);
       const customerName = ar.customer?.name || 'Cliente';
       const customerId = ar.customerId || ar.customer?.id || 'unknown';
+      const customerVisualId =
+        normalizeCustomerVisualId(ar.customerVisualId) ??
+        normalizeCustomerVisualId(ar.customer?.visualId) ??
+        null;
       const dueDate = ar.dueDate ? new Date(ar.dueDate).getTime() : null;
 
       const arData = {
         customer_id: customerId,
+        customer_visual_id: customerVisualId,
         customer_name: customerName,
         total_cents: totalCents,
         paid_cents: paidCents,
@@ -951,6 +974,10 @@ export async function downloadFromServer(options: {
         arId: arLocalId,
         arServerId,
         customerId: payment?.customer?.id ? String(payment.customer.id) : null,
+        customerVisualId:
+          normalizeCustomerVisualId(payment?.customerVisualId) ??
+          normalizeCustomerVisualId(payment?.customer?.visualId) ??
+          null,
         customerName: payment?.customer?.name ? String(payment.customer.name) : 'Cliente',
         amountCents: Number(payment?.amountCents || 0),
         method: String(payment?.method || 'EFECTIVO'),

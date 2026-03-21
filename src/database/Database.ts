@@ -314,6 +314,7 @@ class DatabaseService {
       CREATE TABLE IF NOT EXISTS customers (
         local_id TEXT PRIMARY KEY,
         server_id TEXT UNIQUE,
+        visual_id INTEGER,
         name TEXT NOT NULL,
         phone TEXT,
         synced INTEGER DEFAULT 0,
@@ -321,6 +322,15 @@ class DatabaseService {
         data TEXT NOT NULL
       );
     `);
+
+    // Migracion: agregar visual_id para clientes en bases existentes
+    const customerColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(customers);');
+    const hasCustomerVisualId = customerColumns.some((column) => column.name === 'visual_id');
+    if (!hasCustomerVisualId) {
+      await this.db.execAsync(`
+        ALTER TABLE customers ADD COLUMN visual_id INTEGER;
+      `);
+    }
 
     // Tabla de proveedores
     await this.db.execAsync(`
@@ -386,6 +396,7 @@ class DatabaseService {
         local_id TEXT PRIMARY KEY,
         server_id TEXT UNIQUE,
         customer_id TEXT NOT NULL,
+        customer_visual_id INTEGER,
         customer_name TEXT NOT NULL,
         total_cents INTEGER NOT NULL,
         paid_cents INTEGER DEFAULT 0,
@@ -397,6 +408,15 @@ class DatabaseService {
         data TEXT NOT NULL
       );
     `);
+
+    // Migracion: agregar customer_visual_id para CxC en bases existentes
+    const arColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(accounts_receivable);');
+    const hasArCustomerVisualId = arColumns.some((column) => column.name === 'customer_visual_id');
+    if (!hasArCustomerVisualId) {
+      await this.db.execAsync(`
+        ALTER TABLE accounts_receivable ADD COLUMN customer_visual_id INTEGER;
+      `);
+    }
 
     // Tabla de compras
     await this.db.execAsync(`
@@ -456,8 +476,10 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
       CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
       CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
+      CREATE INDEX IF NOT EXISTS idx_customers_visual_id ON customers(visual_id);
       CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);
       CREATE INDEX IF NOT EXISTS idx_categories_name ON categories(name);
+      CREATE INDEX IF NOT EXISTS idx_ar_customer_visual_id ON accounts_receivable(customer_visual_id);
       CREATE INDEX IF NOT EXISTS idx_purchases_purchased_at ON purchases(purchased_at);
       CREATE INDEX IF NOT EXISTS idx_operating_expenses_date ON operating_expenses(expense_date);
       CREATE INDEX IF NOT EXISTS idx_returns_returned_at ON returns(returned_at);

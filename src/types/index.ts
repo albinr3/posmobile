@@ -21,6 +21,7 @@ export interface Product {
 export interface Customer {
   localId: string;
   serverId?: string;
+  visualId?: number | null;
   name: string;
   phone?: string;
   email?: string;
@@ -88,6 +89,7 @@ export interface AccountReceivable {
   localId: string;
   serverId?: string;
   customerId: string;
+  customerVisualId?: number | null;
   customerName: string;
   totalCents: number;
   paidCents: number;

@@ -9,6 +9,7 @@ interface QuoteCartExtraState {
     items: SaleItem[];
     customerId: string | null;
     customerName: string | null;
+    customerVisualId?: number | null;
     editingQuoteLocalId: string;
     editingQuoteServerId: string | null;
     editingQuoteCode: string | null;
@@ -28,6 +29,7 @@ export const useQuoteCartStore = createCartStore<QuoteCartExtraState>((set) => (
       items: draft.items,
       customerId: draft.customerId,
       customerName: draft.customerName,
+      customerVisualId: draft.customerVisualId ?? null,
       editingQuoteLocalId: draft.editingQuoteLocalId,
       editingQuoteServerId: draft.editingQuoteServerId,
       editingQuoteCode: draft.editingQuoteCode,
@@ -47,6 +49,7 @@ export const useQuoteCartStore = createCartStore<QuoteCartExtraState>((set) => (
       items: [],
       customerId: null,
       customerName: null,
+      customerVisualId: null,
       editingQuoteLocalId: null,
       editingQuoteServerId: null,
       editingQuoteCode: null,
@@ -55,4 +58,3 @@ export const useQuoteCartStore = createCartStore<QuoteCartExtraState>((set) => (
 }));
 
 export type { QuoteCartState };
-

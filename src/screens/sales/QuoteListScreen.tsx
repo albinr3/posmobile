@@ -16,11 +16,13 @@ import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface QuoteListItem {
   localId: string;
   quoteCode: string;
   customerName: string | null;
+  customerVisualId?: number | null;
   status: string;
   totalCents: number;
   createdAt: number;
@@ -113,6 +115,22 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
 
   const loadQuotes = async () => {
     try {
+      const customerRows = await db.query<{ local_id: string; server_id?: string | null; visual_id?: number | null; data?: string | null }>(
+        'SELECT local_id, server_id, visual_id, data FROM customers'
+      );
+      const customerVisualIdByAnyId = new Map<string, number>();
+      for (const customer of customerRows) {
+        const visualId =
+          normalizeCustomerVisualId(customer.visual_id) ??
+          parseCustomerVisualIdFromData(customer.data) ??
+          null;
+        if (!visualId) continue;
+        const localId = String(customer.local_id || '').trim();
+        const serverId = String(customer.server_id || '').trim();
+        if (localId) customerVisualIdByAnyId.set(localId, visualId);
+        if (serverId) customerVisualIdByAnyId.set(serverId, visualId);
+      }
+
       const rows = await db.query<any>('SELECT * FROM quotes ORDER BY created_at DESC');
       const mapped: QuoteListItem[] = rows.map((row) => {
         const parsedData = (() => {
@@ -128,6 +146,11 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
           localId: String(row.local_id),
           quoteCode: String(row.quote_code || parsedData?.quoteCode || '-'),
           customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+          customerVisualId:
+            normalizeCustomerVisualId(parsedData?.customerVisualId) ??
+            parseCustomerVisualIdFromData(parsedData) ??
+            customerVisualIdByAnyId.get(String(row.customer_id || '').trim()) ??
+            null,
           status: normalizedStatus,
           totalCents: Number(row.total_cents || parsedData?.totalCents || 0),
           createdAt: Number(row.created_at || parsedData?.createdAt || Date.now()),
@@ -156,7 +179,11 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
       const matchesSearch =
         !query ||
         quote.quoteCode.toLowerCase().includes(query) ||
-        (quote.customerName || '').toLowerCase().includes(query);
+        customerMatchesQuery({
+          query,
+          name: quote.customerName,
+          visualId: quote.customerVisualId,
+        });
       if (!matchesSearch) return false;
       if (statusFilter === 'all') return true;
       return quote.status === statusFilter;
@@ -198,7 +225,10 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
     const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
     const createdAt = Number(row.created_at || parsedData?.createdAt || Date.now());
     const quoteCode = String(row.quote_code || parsedData?.quoteCode || quote.quoteCode || '-');
-    const customerName = parsedData?.customerName || quote.customerName || '(General) Cliente general';
+    const customerName = formatCustomerLabel(
+      parsedData?.customerName || quote.customerName || 'Cliente general',
+      normalizeCustomerVisualId(parsedData?.customerVisualId) ?? quote.customerVisualId
+    );
     const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
       ? parsedData.salePricesIncludeItbis
       : true;
@@ -290,7 +320,10 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
       const createdAt = Number(row.created_at || parsedData?.createdAt || Date.now());
       const quoteCode = String(row.quote_code || parsedData?.quoteCode || quote.quoteCode || '-');
-      const customerName = parsedData?.customerName || quote.customerName || '(General) Cliente general';
+      const customerName = formatCustomerLabel(
+        parsedData?.customerName || quote.customerName || 'Cliente general',
+        normalizeCustomerVisualId(parsedData?.customerVisualId) ?? quote.customerVisualId
+      );
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
@@ -395,7 +428,7 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
         </Chip>
       </View>
 
-      <Text style={styles.meta}>Cliente: {item.customerName || 'Cliente general'}</Text>
+      <Text style={styles.meta}>Cliente: {formatCustomerLabel(item.customerName || 'Cliente general', item.customerVisualId)}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
       <Text style={styles.meta}>Items: {item.itemsCount}</Text>
 

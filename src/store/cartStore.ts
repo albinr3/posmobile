@@ -14,6 +14,7 @@ interface CartExtraState {
     items: SaleItem[];
     customerId: string | null;
     customerName: string | null;
+    customerVisualId?: number | null;
     paymentMethod: string;
     transferBankName?: string | null;
     paymentSplits?: SalePaymentSplit[];
@@ -44,11 +45,12 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     set({ paymentSplits: splits });
   },
 
-  loadInvoiceForEdit: ({ items, customerId, customerName, paymentMethod, transferBankName, paymentSplits, saleLocalId, invoiceCode }) => {
+  loadInvoiceForEdit: ({ items, customerId, customerName, customerVisualId, paymentMethod, transferBankName, paymentSplits, saleLocalId, invoiceCode }) => {
     set({
       items,
       customerId,
       customerName,
+      customerVisualId: customerVisualId ?? null,
       paymentMethod: paymentMethod || 'EFECTIVO',
       transferBankName: transferBankName || null,
       paymentSplits: Array.isArray(paymentSplits) ? paymentSplits : [],
@@ -69,6 +71,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       items: [],
       customerId: null,
       customerName: null,
+      customerVisualId: null,
       paymentMethod: 'EFECTIVO',
       transferBankName: null,
       paymentSplits: [],
@@ -79,4 +82,3 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
 }));
 
 export type { CartState };
-

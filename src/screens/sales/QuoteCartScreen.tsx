@@ -17,6 +17,7 @@ import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -24,6 +25,7 @@ interface QuoteCartScreenProps {
     params?: {
       customerId?: string | null;
       customerName?: string | null;
+      customerVisualId?: number | null;
     };
   };
 }
@@ -44,6 +46,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     removeItem,
     customerId,
     customerName,
+    customerVisualId,
     clear,
     setCustomer,
     editingQuoteLocalId,
@@ -63,11 +66,16 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     useCallback(() => {
       const routeCustomerId = route?.params?.customerId;
       const routeCustomerName = route?.params?.customerName;
+      const routeCustomerVisualId = route?.params?.customerVisualId;
 
-      if (typeof routeCustomerId !== 'undefined' || typeof routeCustomerName !== 'undefined') {
-        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null);
+      if (
+        typeof routeCustomerId !== 'undefined' ||
+        typeof routeCustomerName !== 'undefined' ||
+        typeof routeCustomerVisualId !== 'undefined'
+      ) {
+        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
       }
-    }, [route?.params?.customerId, route?.params?.customerName, setCustomer])
+    }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer])
   );
 
   useFocusEffect(
@@ -245,12 +253,24 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       const isEditing = !!editingQuoteLocalId;
       const localId = editingQuoteLocalId || generateLocalId();
       const localQuoteCode = editingQuoteCode || `LOCAL-${Date.now()}`;
+      let resolvedCustomerVisualId = customerVisualId ?? null;
+      if (!resolvedCustomerVisualId && customerId) {
+        const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
+          'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [customerId, customerId]
+        );
+        resolvedCustomerVisualId =
+          normalizeCustomerVisualId(customerRow?.visual_id) ??
+          parseCustomerVisualIdFromData(customerRow?.data) ??
+          null;
+      }
 
       const quoteData = {
         localId,
         id: editingQuoteServerId || undefined,
         quoteCode: localQuoteCode,
         customerId: customerId ?? null,
+        customerVisualId: resolvedCustomerVisualId,
         customerName: customerName ?? null,
         items,
         subtotalCents: quoteTotals.subtotalCents,
@@ -333,7 +353,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       const printResult = await printQuoteTicketDirect({
         quoteCode: localQuoteCode,
         createdAt: quoteData.createdAt,
-        customerName: quoteData.customerName || '(General) Cliente general',
+        customerName: formatCustomerLabel(quoteData.customerName || 'Cliente general', quoteData.customerVisualId),
         totalCents: quoteData.totalCents,
         salePricesIncludeItbis: quoteData.salePricesIncludeItbis,
         items: quoteData.items.map((item: any) => ({
@@ -459,7 +479,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Cliente:</Text>
             <Button mode="text" onPress={() => navigation.navigate('SelectQuoteCustomer')}>
-              {customerName || '(General) Cliente general'}
+              {formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}
             </Button>
           </View>
 

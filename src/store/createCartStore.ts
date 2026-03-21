@@ -13,11 +13,12 @@ export interface BaseCartState {
   items: SaleItem[];
   customerId: string | null;
   customerName: string | null;
+  customerVisualId: number | null;
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (lineId: string) => void;
   updateQuantity: (lineId: string, quantity: number) => void;
   updatePrice: (lineId: string, priceCents: number) => void;
-  setCustomer: (customerId: string | null, customerName: string | null) => void;
+  setCustomer: (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => void;
   clear: () => void;
   getTotal: () => number;
   getItemCount: () => number;
@@ -36,6 +37,7 @@ function createBaseCartSlice<TState extends BaseCartState>(
     items: [],
     customerId: null,
     customerName: null,
+    customerVisualId: null,
 
     addItem: (product: Product, quantity: number = 1) => {
       set((state) => {
@@ -147,8 +149,8 @@ function createBaseCartSlice<TState extends BaseCartState>(
       }) as Partial<TState>);
     },
 
-    setCustomer: (customerId: string | null, customerName: string | null) => {
-      set({ customerId, customerName } as Partial<TState>);
+    setCustomer: (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => {
+      set({ customerId, customerName, customerVisualId: customerVisualId ?? null } as Partial<TState>);
     },
 
     clear: () => {
@@ -156,6 +158,7 @@ function createBaseCartSlice<TState extends BaseCartState>(
         items: [] as SaleItem[],
         customerId: null,
         customerName: null,
+        customerVisualId: null,
       } as Partial<TState>);
     },
 

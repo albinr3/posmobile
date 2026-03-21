@@ -7,6 +7,7 @@ import { db } from '../../database/Database';
 import { useCartStore } from '../../store/cartStore';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { ui } from '../../theme/ui';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface SelectCustomerScreenProps {
   navigation: any;
@@ -20,8 +21,10 @@ interface SelectCustomerScreenProps {
 interface CustomerRow {
   local_id: string;
   server_id?: string | null;
+  visual_id?: number | null;
   name: string;
   phone?: string;
+  data?: string | null;
 }
 
 export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreenProps) {
@@ -41,7 +44,7 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
   const loadCustomers = async () => {
     try {
       const result = await db.query<CustomerRow>(
-        'SELECT local_id, server_id, name, phone FROM customers ORDER BY name'
+        'SELECT local_id, server_id, visual_id, name, phone, data FROM customers ORDER BY name'
       );
       setCustomers(result);
     } catch (error) {
@@ -52,16 +55,23 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
   };
 
   const filteredCustomers = customers.filter((customer) => {
-    const byName = customer.name.toLowerCase().includes(searchQuery.toLowerCase());
-    const byPhone = customer.phone?.includes(searchQuery) ?? false;
-    return byName || byPhone;
+    const visualId =
+      normalizeCustomerVisualId(customer.visual_id) ??
+      parseCustomerVisualIdFromData(customer.data) ??
+      null;
+    return customerMatchesQuery({
+      query: searchQuery,
+      name: customer.name,
+      phone: customer.phone || null,
+      visualId,
+    });
   });
 
-  const handleSelectCustomer = (customerId: string | null, customerName: string | null) => {
+  const handleSelectCustomer = (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => {
     if (mode === 'QUOTE') {
-      setQuoteCustomer(customerId, customerName);
+      setQuoteCustomer(customerId, customerName, customerVisualId ?? null);
     } else {
-      setSaleCustomer(customerId, customerName);
+      setSaleCustomer(customerId, customerName, customerVisualId ?? null);
     }
     navigation.goBack();
   };
@@ -84,10 +94,25 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
         renderItem={({ item }) => (
           <Surface style={styles.card}>
             <View style={styles.info}>
-              <Text style={styles.name}>{item.name}</Text>
+              <Text style={styles.name}>
+                {formatCustomerLabel(
+                  item.name,
+                  normalizeCustomerVisualId(item.visual_id) ?? parseCustomerVisualIdFromData(item.data)
+                )}
+              </Text>
               {item.phone ? <Text style={styles.phone}>{item.phone}</Text> : null}
             </View>
-            <Button mode="text" textColor={ui.colors.primary} onPress={() => handleSelectCustomer(item.local_id, item.name)}>
+            <Button
+              mode="text"
+              textColor={ui.colors.primary}
+              onPress={() =>
+                handleSelectCustomer(
+                  item.local_id,
+                  item.name,
+                  normalizeCustomerVisualId(item.visual_id) ?? parseCustomerVisualIdFromData(item.data)
+                )
+              }
+            >
               Elegir
             </Button>
           </Surface>

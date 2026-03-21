@@ -12,6 +12,7 @@ import { Product } from '../../types';
 import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductKind, inferProductUnit } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface QuoteScreenProps {
   navigation: any;
@@ -47,6 +48,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
     getItemCount,
     customerId,
     customerName,
+    customerVisualId,
     items,
     loadDraft,
     clearEditing,
@@ -153,6 +155,10 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
         items: mappedItems.filter(Boolean),
         customerId: parsedData?.customerId ? String(parsedData.customerId) : null,
         customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+        customerVisualId:
+          normalizeCustomerVisualId(parsedData?.customerVisualId) ??
+          parseCustomerVisualIdFromData(parsedData) ??
+          null,
         editingQuoteLocalId: String(quoteRow.local_id),
         editingQuoteServerId: quoteRow.server_id ? String(quoteRow.server_id) : null,
         editingQuoteCode: String(quoteRow.quote_code || parsedData?.quoteCode || ''),
@@ -364,7 +370,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
               navigation.navigate('SelectQuoteCustomer');
             }}
           >
-            <Text style={styles.selectLikeText}>{customerName || '(General) Cliente general'}</Text>
+            <Text style={styles.selectLikeText}>{formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}</Text>
             <Icon source="chevron-right" size={18} color="#6B7280" />
           </TouchableOpacity>
         </View>
@@ -450,7 +456,7 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
           onPress={() => {
             internalNavigationRef.current = true;
-            navigation.navigate('QuoteCart', { customerId, customerName });
+            navigation.navigate('QuoteCart', { customerId, customerName, customerVisualId });
           }}
           disabled={getItemCount() === 0}
         >

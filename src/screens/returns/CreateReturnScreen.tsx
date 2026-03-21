@@ -12,6 +12,7 @@ import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { syncService } from '../../services/sync/SyncService';
 import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface CreateReturnScreenProps {
   navigation: any;
@@ -86,6 +87,7 @@ interface ReturnDraftItem {
 interface CustomerOption {
   localId: string;
   serverId: string | null;
+  visualId?: number | null;
   name: string;
   phone?: string | null;
 }
@@ -216,12 +218,13 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const isReturnBlocked = selectedSale ? !selectedSale.returnPolicy.canCreateReturn : false;
   const exceedsCreditLimit = maxReturnCents !== null && totalCents > maxReturnCents;
   const filteredCustomers = useMemo(() => {
-    const q = customerQuery.trim().toLowerCase();
-    if (!q) return customers;
-    return customers.filter(
-      (customer) =>
-        customer.name.toLowerCase().includes(q) ||
-        (customer.phone || '').toLowerCase().includes(q)
+    return customers.filter((customer) =>
+      customerMatchesQuery({
+        query: customerQuery,
+        name: customer.name,
+        phone: customer.phone || null,
+        visualId: customer.visualId,
+      })
     );
   }, [customerQuery, customers]);
 
@@ -556,14 +559,15 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     const loadCustomers = async () => {
       try {
         setLoadingCustomers(true);
-        const rows = await db.query<{ local_id: string; server_id: string; name: string; phone?: string | null }>(
-          'SELECT local_id, server_id, name, phone FROM customers ORDER BY name'
+        const rows = await db.query<{ local_id: string; server_id: string; visual_id?: number | null; name: string; phone?: string | null; data?: string | null }>(
+          'SELECT local_id, server_id, visual_id, name, phone, data FROM customers ORDER BY name'
         );
         if (!mounted) return;
         setCustomers(
           rows.map((row) => ({
             localId: row.local_id,
             serverId: row.server_id,
+            visualId: normalizeCustomerVisualId(row.visual_id) ?? parseCustomerVisualIdFromData(row.data) ?? null,
             name: row.name,
             phone: row.phone || null,
           }))
@@ -1280,7 +1284,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
               {filteredCustomers.map((customer) => (
                 <Surface key={customer.localId} style={styles.saleCard}>
                   <View style={{ flex: 1 }}>
-                    <Text style={styles.saleCode}>{customer.name}</Text>
+                    <Text style={styles.saleCode}>{formatCustomerLabel(customer.name, customer.visualId)}</Text>
                     {customer.phone ? <Text style={styles.saleMeta}>{customer.phone}</Text> : null}
                   </View>
                   <Button
@@ -1308,7 +1312,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           <Surface style={styles.summaryCard}>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Cliente:</Text>
-              <Text style={styles.summaryValue}>{selectedCustomer.name}</Text>
+              <Text style={styles.summaryValue}>{formatCustomerLabel(selectedCustomer.name, selectedCustomer.visualId)}</Text>
             </View>
             <Button
               mode="text"

@@ -21,6 +21,7 @@ import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterServi
 import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface CartScreenProps {
   navigation: any;
@@ -28,6 +29,7 @@ interface CartScreenProps {
     params?: {
       customerId?: string | null;
       customerName?: string | null;
+      customerVisualId?: number | null;
       editSaleLocalId?: string | null;
     };
   };
@@ -43,6 +45,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     removeItem,
     customerId,
     customerName,
+    customerVisualId,
     paymentMethod,
     setPaymentMethod,
     transferBankName,
@@ -249,11 +252,16 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     useCallback(() => {
       const routeCustomerId = route?.params?.customerId;
       const routeCustomerName = route?.params?.customerName;
+      const routeCustomerVisualId = route?.params?.customerVisualId;
 
-      if (typeof routeCustomerId !== 'undefined' || typeof routeCustomerName !== 'undefined') {
-        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null);
+      if (
+        typeof routeCustomerId !== 'undefined' ||
+        typeof routeCustomerName !== 'undefined' ||
+        typeof routeCustomerVisualId !== 'undefined'
+      ) {
+        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
       }
-    }, [route?.params?.customerId, route?.params?.customerName, setCustomer])
+    }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer])
   );
 
   const resolveLocalProductId = async (rawProductId: string): Promise<string | null> => {
@@ -352,10 +360,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     let creditDueDate: number | null = null;
     let selectedCustomerId = customerId;
     let selectedCustomerName = customerName;
+    let selectedCustomerVisualId = customerVisualId;
 
     if (!selectedCustomerId) {
-      const defaultCustomer = await db.queryFirst<{ local_id: string; name: string }>(
-        `SELECT local_id, name
+      const defaultCustomer = await db.queryFirst<{ local_id: string; name: string; visual_id?: number | null; data?: string | null }>(
+        `SELECT local_id, name, visual_id, data
          FROM customers
          WHERE LOWER(TRIM(name)) = 'cliente general'
          ORDER BY CASE WHEN server_id IS NOT NULL THEN 0 ELSE 1 END, rowid ASC
@@ -370,7 +379,25 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
       selectedCustomerId = String(defaultCustomer.local_id);
       selectedCustomerName = String(defaultCustomer.name || 'Cliente general');
-      setCustomer(selectedCustomerId, selectedCustomerName);
+      selectedCustomerVisualId =
+        normalizeCustomerVisualId(defaultCustomer.visual_id) ??
+        parseCustomerVisualIdFromData(defaultCustomer.data) ??
+        null;
+      setCustomer(selectedCustomerId, selectedCustomerName, selectedCustomerVisualId);
+    }
+
+    if (selectedCustomerId && !selectedCustomerVisualId) {
+      const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
+        'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+        [selectedCustomerId, selectedCustomerId]
+      );
+      selectedCustomerVisualId =
+        normalizeCustomerVisualId(customerRow?.visual_id) ??
+        parseCustomerVisualIdFromData(customerRow?.data) ??
+        null;
+      if (selectedCustomerVisualId) {
+        setCustomer(selectedCustomerId, selectedCustomerName ?? null, selectedCustomerVisualId);
+      }
     }
 
     if (paymentMethod === 'CREDITO') {
@@ -443,6 +470,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
       const basePayload = {
         customerId: selectedCustomerId,
+        customerVisualId: selectedCustomerVisualId ?? null,
         customerName: selectedCustomerName,
         items: items.map((item) => ({
           productId: item.productId,
@@ -566,6 +594,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         await queueSaleUpdateForEdit(editingSaleLocalId, {
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           customerId: selectedCustomerId,
+          customerVisualId: selectedCustomerVisualId ?? null,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
@@ -590,6 +619,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           localId,
           invoiceCode,
           customerId: selectedCustomerId,
+          customerVisualId: selectedCustomerVisualId ?? null,
           customerName: selectedCustomerName,
           items,
           subtotalCents: cartTotals.subtotalCents,
@@ -631,7 +661,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       const saleTicketPayload = {
         invoiceCode: resolvedInvoiceCode,
         createdAt,
-        customerName: selectedCustomerName,
+        customerName: formatCustomerLabel(selectedCustomerName || 'Cliente general', selectedCustomerVisualId),
         paymentMethod,
         transferBankName,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
@@ -782,7 +812,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Cliente:</Text>
               <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
-                {customerName || '(General) Cliente general'}
+                {formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}
               </Button>
             </View>
 

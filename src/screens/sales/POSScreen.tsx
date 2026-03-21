@@ -15,6 +15,7 @@ import { formatProductQty, inferProductUnit, inferProductKind } from '../../util
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface POSScreenProps {
   navigation: any;
@@ -68,6 +69,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     getItemCount,
     customerId,
     customerName,
+    customerVisualId,
     setPaymentMethod,
     setTransferBankName,
     setPaymentSplits,
@@ -213,10 +215,25 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         }
 
         const resolvedPaymentMethod = String(parsedData?.paymentMethod || 'EFECTIVO').toUpperCase();
+        let resolvedCustomerVisualId =
+          normalizeCustomerVisualId(parsedData?.customerVisualId) ??
+          parseCustomerVisualIdFromData(parsedData) ??
+          null;
+        if (!resolvedCustomerVisualId && sale.customer_id) {
+          const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
+            'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [sale.customer_id, sale.customer_id]
+          );
+          resolvedCustomerVisualId =
+            normalizeCustomerVisualId(customerRow?.visual_id) ??
+            parseCustomerVisualIdFromData(customerRow?.data) ??
+            null;
+        }
         loadInvoiceForEdit({
           items: resolvedItems,
           customerId: sale.customer_id ? String(sale.customer_id) : null,
           customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+          customerVisualId: resolvedCustomerVisualId,
           paymentMethod:
             resolvedPaymentMethod === 'CREDITO' ||
             resolvedPaymentMethod === 'TARJETA' ||
@@ -479,7 +496,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
               navigation.navigate('SelectCustomer');
             }}
           >
-            <Text style={styles.selectLikeText}>{customerName || '(General) Cliente general'}</Text>
+            <Text style={styles.selectLikeText}>{formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}</Text>
             <Icon source="chevron-right" size={18} color="#6B7280" />
           </TouchableOpacity>
 
@@ -610,7 +627,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
           onPress={() => {
             internalNavigationRef.current = true;
-            navigation.navigate('Cart', { customerId, customerName, editSaleLocalId: editingSaleLocalId });
+            navigation.navigate('Cart', { customerId, customerName, customerVisualId, editSaleLocalId: editingSaleLocalId });
           }}
           disabled={getItemCount() === 0}
         >

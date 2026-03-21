@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { TextInput, Button, Text, Switch, Menu, Icon, Divider } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -9,6 +9,7 @@ import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { normalizeCustomerVisualId } from '../../utils/customerLabels';
 
 interface AddCustomerScreenProps {
   navigation: any;
@@ -60,12 +61,32 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
   const [creditEnabled, setCreditEnabled] = useState(false);
   const [creditDays, setCreditDays] = useState('');
   const [notes, setNotes] = useState('');
+  const [visualId, setVisualId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
   const [localId, setLocalId] = useState<string>('');
   const [serverId, setServerId] = useState<string | null>(null);
   const [provinceMenuVisible, setProvinceMenuVisible] = useState(false);
   const { getToken } = useAuth();
+
+  const resolveNextVisualId = useCallback(async (preferGenericOne: boolean): Promise<number> => {
+    const rows = await db.query<{ visual_id?: number | null }>('SELECT visual_id FROM customers');
+    let maxVisualId = 0;
+    let hasVisualOne = false;
+
+    for (const row of rows) {
+      const normalized = normalizeCustomerVisualId(row?.visual_id);
+      if (!normalized) continue;
+      if (normalized > maxVisualId) maxVisualId = normalized;
+      if (normalized === 1) hasVisualOne = true;
+    }
+
+    if (!hasVisualOne) {
+      if (preferGenericOne) return 1;
+      return Math.max(2, maxVisualId + 1);
+    }
+    return Math.max(1, maxVisualId + 1);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -91,6 +112,11 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           if (!isActive) return;
           setLocalId(String(row.local_id));
           setServerId(row.server_id ? String(row.server_id) : null);
+          setVisualId(
+            normalizeCustomerVisualId(row.visual_id) ??
+              normalizeCustomerVisualId(parsed?.visualId) ??
+              null
+          );
           setName(String(row.name || parsed?.name || ''));
           setPhone(String(row.phone || parsed?.phone || ''));
           setEmail(String(parsed?.email || ''));
@@ -115,6 +141,25 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
     }, [customerId, isEditMode, navigation])
   );
 
+  useEffect(() => {
+    if (isEditMode) return;
+    let active = true;
+    const hydrateVisualId = async () => {
+      try {
+        const normalizedName = String(name || '').trim().toLowerCase();
+        const preferGenericOne = normalizedName === 'cliente general';
+        const nextVisualId = await resolveNextVisualId(preferGenericOne);
+        if (active) setVisualId(nextVisualId);
+      } catch {
+        if (active) setVisualId(null);
+      }
+    };
+    void hydrateVisualId();
+    return () => {
+      active = false;
+    };
+  }, [isEditMode, name, resolveNextVisualId]);
+
   const handleSave = async () => {
     if (!name.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
@@ -124,11 +169,15 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
     setLoading(true);
     try {
       const resolvedLocalId = isEditMode ? localId || customerId : generateLocalId();
+      const normalizedName = String(name || '').trim().toLowerCase();
+      const preferGenericOne = normalizedName === 'cliente general';
+      const resolvedVisualId = visualId ?? (await resolveNextVisualId(preferGenericOne));
       const creditDaysValue = creditDays ? parseInt(creditDays, 10) : 0;
 
       const customerData = {
         id: serverId || undefined,
         localId: resolvedLocalId,
+        visualId: resolvedVisualId,
         name: name.trim(),
         phone: phone.trim() || null,
         email: email.trim() || null,
@@ -145,6 +194,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           'customers',
           resolvedLocalId,
           {
+            visual_id: resolvedVisualId,
             name: customerData.name,
             phone: customerData.phone || '',
             synced: 0,
@@ -155,6 +205,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
       } else {
         await db.insert('customers', {
           local_id: resolvedLocalId,
+          visual_id: resolvedVisualId,
           name: customerData.name,
           phone: customerData.phone || '',
           synced: 0,
@@ -204,6 +255,15 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Informacion Personal</Text>
+          <TextInput
+            label="ID"
+            value={visualId ? String(visualId) : loadingCustomer ? 'Cargando...' : 'Se asigna automaticamente'}
+            mode="outlined"
+            style={styles.input}
+            editable={false}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.border}
+          />
           <TextInput label="Nombre del Cliente*" value={name} onChangeText={setName} mode="outlined" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
           <TextInput label="Telefono" value={phone} onChangeText={setPhone} mode="outlined" keyboardType="phone-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
           <TextInput label="Email" value={email} onChangeText={setEmail} mode="outlined" keyboardType="email-address" autoCapitalize="none" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />

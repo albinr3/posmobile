@@ -18,11 +18,13 @@ import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { hasConnectedPrinter, printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface InvoiceListItem {
   localId: string;
   invoiceCode: string;
   customerName: string | null;
+  customerVisualId?: number | null;
   paymentMethod: string | null;
   transferBankName?: string | null;
   paymentSplits?: Array<{ method: string; amountCents: number; transferBankName?: string | null }>;
@@ -146,6 +148,22 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const loadInvoices = async () => {
     try {
+      const customerRows = await db.query<{ local_id: string; server_id?: string | null; visual_id?: number | null; data?: string | null }>(
+        'SELECT local_id, server_id, visual_id, data FROM customers'
+      );
+      const customerVisualIdByAnyId = new Map<string, number>();
+      for (const customer of customerRows) {
+        const visualId =
+          normalizeCustomerVisualId(customer.visual_id) ??
+          parseCustomerVisualIdFromData(customer.data) ??
+          null;
+        if (!visualId) continue;
+        const localId = String(customer.local_id || '').trim();
+        const serverId = String(customer.server_id || '').trim();
+        if (localId) customerVisualIdByAnyId.set(localId, visualId);
+        if (serverId) customerVisualIdByAnyId.set(serverId, visualId);
+      }
+
       const rows = await db.query<any>('SELECT * FROM sales ORDER BY created_at DESC');
       const mapped: InvoiceListItem[] = rows.map((row) => {
         const parsedData = (() => {
@@ -161,6 +179,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           localId: String(row.local_id),
           invoiceCode: String(row.invoice_code || parsedData?.invoiceCode || '-'),
           customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+          customerVisualId:
+            normalizeCustomerVisualId(parsedData?.customerVisualId) ??
+            parseCustomerVisualIdFromData(parsedData) ??
+            customerVisualIdByAnyId.get(String(row.customer_id || '').trim()) ??
+            null,
           paymentMethod: parsedData?.paymentMethod ? String(parsedData.paymentMethod) : null,
           transferBankName: parsedData?.transferBankName ? String(parsedData.transferBankName) : null,
           paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : [],
@@ -199,10 +222,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const filteredInvoices = invoices.filter((invoice) => {
     const q = searchQuery.toLowerCase().trim();
-    const matchesSearch =
-      !q ||
-      invoice.invoiceCode.toLowerCase().includes(q) ||
-      (invoice.customerName || '').toLowerCase().includes(q);
+    const matchesSearch = !q || invoice.invoiceCode.toLowerCase().includes(q) || customerMatchesQuery({
+      query: q,
+      name: invoice.customerName,
+      visualId: invoice.customerVisualId,
+    });
     if (!matchesSearch) return false;
     if (statusFilter === 'all') return true;
     return invoice.status === statusFilter;
@@ -280,7 +304,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
-      const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
+      const customerName = formatCustomerLabel(
+        parsedData?.customerName || invoice.customerName || 'Cliente general',
+        normalizeCustomerVisualId(parsedData?.customerVisualId) ?? invoice.customerVisualId
+      );
       const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
         ? 'CREDITO'
         : String(parsedData?.paymentMethod || invoice.paymentMethod || '').toUpperCase() === 'CREDITO'
@@ -639,7 +666,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         </Chip>
       </View>
 
-      <Text style={styles.meta}>Cliente: {item.customerName || 'Cliente general'}</Text>
+      <Text style={styles.meta}>Cliente: {formatCustomerLabel(item.customerName || 'Cliente general', item.customerVisualId)}</Text>
       <Text style={styles.meta}>Método de pago: {getInvoicePaymentSummary(item)}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
 

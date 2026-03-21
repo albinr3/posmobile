@@ -9,6 +9,7 @@ import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { db } from '../../database/Database';
 import { Customer } from '../../types';
 import { ui } from '../../theme/ui';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface CustomerListScreenProps {
   navigation: any;
@@ -33,6 +34,10 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
       const mapped = result.map((row) => ({
         localId: row.local_id,
         serverId: row.server_id,
+        visualId:
+          normalizeCustomerVisualId(row.visual_id) ??
+          parseCustomerVisualIdFromData(row.data) ??
+          null,
         name: row.name,
         phone: row.phone,
         address: (() => {
@@ -98,7 +103,13 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
   };
 
   const filteredCustomers = customers.filter(
-    (customer) => customer.name.toLowerCase().includes(searchQuery.toLowerCase()) || (customer.phone && customer.phone.includes(searchQuery))
+    (customer) =>
+      customerMatchesQuery({
+        query: searchQuery,
+        name: customer.name,
+        phone: customer.phone || null,
+        visualId: customer.visualId,
+      })
   );
 
   const renderCustomer = ({ item }: { item: Customer }) => (
@@ -106,7 +117,7 @@ export function CustomerListScreen({ navigation }: CustomerListScreenProps) {
       <View style={styles.customerInfo}>
         <Avatar.Text size={42} label={item.name.substring(0, 2).toUpperCase()} style={styles.avatar} labelStyle={styles.avatarLabel} />
         <View style={styles.customerDetails}>
-          <Text style={styles.customerName}>{item.name}</Text>
+          <Text style={styles.customerName}>{formatCustomerLabel(item.name, item.visualId)}</Text>
           <Text style={styles.customerPhone}>{item.address || 'Sin direccion'}</Text>
           {!item.synced ? (
             <Chip compact style={styles.pendingChip} textStyle={styles.pendingChipText}>

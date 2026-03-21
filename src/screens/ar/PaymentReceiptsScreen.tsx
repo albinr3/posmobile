@@ -13,6 +13,7 @@ import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -27,6 +28,7 @@ interface PaymentReceiptItem {
   paymentMethod: string;
   transferBankName?: string | null;
   customerName: string;
+  customerVisualId?: number | null;
   invoiceCode?: string | null;
   reference?: string | null;
   notes?: string | null;
@@ -56,13 +58,18 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
 
   const loadLocalReceipts = useCallback(async () => {
-    const arRows = await db.query<any>('SELECT local_id, balance_cents, data FROM accounts_receivable');
+    const arRows = await db.query<any>('SELECT local_id, balance_cents, customer_visual_id, data FROM accounts_receivable');
     const invoiceCodeByArLocalId = new Map<string, string>();
     const balanceByArLocalId = new Map<string, number>();
+    const customerVisualByArLocalId = new Map<string, number | null>();
     for (const arRow of arRows) {
       const arLocalId = arRow?.local_id ? String(arRow.local_id) : '';
       if (!arLocalId) continue;
       balanceByArLocalId.set(arLocalId, Number(arRow.balance_cents || 0));
+      customerVisualByArLocalId.set(
+        arLocalId,
+        normalizeCustomerVisualId(arRow.customer_visual_id) ?? parseCustomerVisualIdFromData(arRow.data) ?? null
+      );
       try {
         const arParsed = arRow?.data ? JSON.parse(arRow.data) : null;
         const invoiceCode = String(arParsed?.sale?.invoiceCode || arParsed?.invoiceCode || '').trim();
@@ -89,6 +96,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       const arLocalId = row.ar_id ? String(row.ar_id) : '';
       const fallbackInvoiceCode = arLocalId ? invoiceCodeByArLocalId.get(arLocalId) || null : null;
       const fallbackBalanceAfterCents = arLocalId ? balanceByArLocalId.get(arLocalId) ?? null : null;
+      const fallbackCustomerVisualId = arLocalId ? customerVisualByArLocalId.get(arLocalId) ?? null : null;
       return {
         id: String(row.server_id || row.local_id),
         localId: String(row.local_id),
@@ -98,6 +106,10 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         paymentMethod: String(parsed?.method || parsed?.paymentMethod || 'EFECTIVO'),
         transferBankName: parsed?.transferBankName ? String(parsed.transferBankName) : null,
         customerName: String(parsed?.customerName || 'Cliente'),
+        customerVisualId:
+          normalizeCustomerVisualId(parsed?.customerVisualId) ??
+          parseCustomerVisualIdFromData(parsed) ??
+          fallbackCustomerVisualId,
         invoiceCode: parsed?.invoiceCode ? String(parsed.invoiceCode) : fallbackInvoiceCode,
         reference: parsed?.reference ? String(parsed.reference) : null,
         notes: parsed?.note ? String(parsed.note) : parsed?.notes ? String(parsed.notes) : null,
@@ -139,6 +151,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         receiptCode: item.receiptCode,
         amountCents: item.amountCents,
         customerName: item.customerName,
+        customerVisualId: item.customerVisualId ?? null,
         status: 'cancelled',
         cancel: true,
         cancelledAt,
@@ -234,7 +247,11 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       if (q) {
         const matchesQuery =
           item.receiptCode.toLowerCase().includes(q) ||
-          (item.customerName || '').toLowerCase().includes(q) ||
+          customerMatchesQuery({
+            query: q,
+            name: item.customerName,
+            visualId: item.customerVisualId,
+          }) ||
           (item.invoiceCode || '').toLowerCase().includes(q);
         if (!matchesQuery) return false;
       }
@@ -284,7 +301,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       const printResult = await printPaymentReceiptDirect({
         receiptCode: item.receiptCode,
         createdAt: item.createdAt,
-        customerName: item.customerName,
+        customerName: formatCustomerLabel(item.customerName, item.customerVisualId),
         invoiceCode: item.invoiceCode || null,
         paymentMethod: item.paymentMethod,
         transferBankName: item.transferBankName || null,
@@ -345,7 +362,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
             ${cancelledTag}
             <div class="divider"></div>
             <div class="row"><span class="label">Recibo</span><span class="value">${escapeHtml(item.receiptCode)}</span></div>
-            <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(item.customerName || 'Cliente')}</span></div>
+            <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(formatCustomerLabel(item.customerName || 'Cliente', item.customerVisualId))}</span></div>
             <div class="row"><span class="label">Factura</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
             <div class="row"><span class="label">Fecha</span><span class="value">${escapeHtml(formatDateTime(item.createdAt))}</span></div>
             <div class="row"><span class="label">Método</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
@@ -446,7 +463,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
           </View>
         ) : null}
       </View>
-      <Text style={styles.meta}>Cliente: {item.customerName}</Text>
+      <Text style={styles.meta}>Cliente: {formatCustomerLabel(item.customerName, item.customerVisualId)}</Text>
       <Text style={styles.meta}>Factura: {item.invoiceCode || '-'}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
       <Text style={styles.meta}>Método: {formatPaymentWithBank(item.paymentMethod, item.transferBankName)}</Text>

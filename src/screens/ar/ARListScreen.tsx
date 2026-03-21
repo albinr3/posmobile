@@ -9,6 +9,7 @@ import { AccountReceivable } from '../../types';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
+import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface ARListScreenProps {
   navigation: any;
@@ -56,6 +57,10 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
         localId: row.local_id,
         serverId: row.server_id,
         customerId: row.customer_id,
+        customerVisualId:
+          normalizeCustomerVisualId(row.customer_visual_id) ??
+          parseCustomerVisualIdFromData(row.data) ??
+          null,
         customerName: row.customer_name,
         totalCents: row.total_cents,
         paidCents: row.paid_cents,
@@ -144,11 +149,14 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
   const selectedTotalPending = selectedItems.reduce((sum, item) => sum + item.balanceCents, 0);
   const filteredItems = arItems.filter((item) => {
     const q = searchQuery.toLowerCase().trim();
-    const customerIdText = String(item.customerId || '').toLowerCase();
     const matchesSearch =
-      item.customerName.toLowerCase().includes(q) ||
+      customerMatchesQuery({
+        query: q,
+        name: item.customerName,
+        visualId: item.customerVisualId,
+      }) ||
       (item.invoiceCode || '').toLowerCase().includes(q) ||
-      customerIdText.includes(q);
+      String(item.customerId || '').toLowerCase().includes(q);
     if (!matchesSearch) return false;
     if (filter === 'pending') return item.status === 'PENDIENTE';
     if (filter === 'partial') return item.status === 'PARCIAL';
@@ -214,10 +222,7 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
             </TouchableOpacity>
             <View style={styles.customerTextRow}>
               <Text style={styles.customerName} numberOfLines={1}>
-                {item.customerName}
-              </Text>
-              <Text style={styles.customerId} numberOfLines={1}>
-                ID: {item.customerId || '-'}
+                {formatCustomerLabel(item.customerName, item.customerVisualId)}
               </Text>
             </View>
           </View>
@@ -271,7 +276,7 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
 
         <View style={styles.searchWrap}>
           <Searchbar
-            placeholder="Buscar cliente o factura..."
+            placeholder="Buscar cliente, ID o factura..."
             placeholderTextColor="#B8B2C8"
             value={searchQuery}
             onChangeText={setSearchQuery}

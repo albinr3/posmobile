@@ -10,6 +10,7 @@ import { AccountReceivable } from '../../types';
 import { ui } from '../../theme/ui';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface RegisterPaymentScreenProps {
   navigation: any;
@@ -57,6 +58,10 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           localId: row.local_id,
           serverId: row.server_id,
           customerId: row.customer_id,
+          customerVisualId:
+            normalizeCustomerVisualId(row.customer_visual_id) ??
+            parseCustomerVisualIdFromData(row.data) ??
+            null,
           customerName: row.customer_name,
           totalCents: row.total_cents,
           paidCents: row.paid_cents,
@@ -147,6 +152,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           arId: item.localId,
           arServerId: item.serverId,
           customerId: item.customerId,
+          customerVisualId: item.customerVisualId ?? null,
           customerName: item.customerName,
           invoiceCode,
           amountCents: appliedCents,
@@ -202,6 +208,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           arId: item.localId,
           arServerId: item.serverId,
           customerId: item.customerId,
+          customerVisualId: item.customerVisualId ?? null,
           customerName: item.customerName,
           invoiceCode: getInvoiceCode(item),
           amountCents: appliedTotal,
@@ -222,7 +229,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           const printResult = await printPaymentReceiptDirect({
             receiptCode,
             createdAt: now,
-            customerName: firstItem?.customerName || 'Cliente',
+            customerName: formatCustomerLabel(firstItem?.customerName || 'Cliente', firstItem?.customerVisualId),
             invoiceCode: isBatch ? `${createdLocalPaymentIds.length} facturas` : firstInvoiceCode,
             paymentMethod,
             transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
@@ -273,7 +280,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 }]}>
         <Surface style={styles.summaryCard}>
           <Text style={styles.customerName}>
-            {firstItem.customerName}
+            {formatCustomerLabel(firstItem.customerName, firstItem.customerVisualId)}
             {isBatch ? ` (${arItems.length} facturas)` : ''}
           </Text>
           <Divider style={styles.divider} />
