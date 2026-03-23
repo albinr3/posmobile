@@ -120,10 +120,10 @@ class SyncService {
         });
       }
 
-      // Deduplicación: evitar encolar la misma operación si ya existe una pendiente
+      // Deduplicación: evitar encolar la misma operación si ya existe una pendiente o en vuelo
       const existing = await db.queryFirst<any>(
         `SELECT id FROM sync_queue
-         WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status = 'pending'
+         WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status IN ('pending', 'syncing')
          LIMIT 1`,
         [entityType, localId, action]
       );
@@ -212,6 +212,13 @@ class SyncService {
        WHERE status = 'error' AND entity_type = 'return' AND action = 'create'`
     );
 
+    // Limpiar items huerfanos que quedaron en 'syncing' (app se cerró durante sync)
+    await db.runAsync(
+      `UPDATE sync_queue
+       SET status = 'pending'
+       WHERE status = 'syncing'`
+    );
+
     const pending = await db.query<any>(
       'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
       ['pending']
@@ -229,6 +236,10 @@ class SyncService {
             retryCount: item.retry_count,
           });
         }
+
+        // Marcar como 'syncing' ANTES de enviar al backend para evitar doble envío
+        await db.update('sync_queue', item.id, { status: 'syncing' }, 'id');
+
         await this.syncItem(item);
         
         // Marcar como sincronizado
@@ -237,6 +248,8 @@ class SyncService {
           synced_at: Date.now(),
         }, 'id');
       } catch (error) {
+        // Revertir a pending/error para que el handleSyncError decida
+        await db.update('sync_queue', item.id, { status: 'pending' }, 'id');
         const stopProcessing = await this.handleSyncError(item, error);
         if (stopProcessing) {
           if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() stopProcessing=true, cortando ciclo');

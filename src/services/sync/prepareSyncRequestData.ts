@@ -19,6 +19,7 @@ export async function prepareSyncRequestData(
       });
       const resolvedUnit = inferredKind === 'MEASURED' ? inferredUnit : 'UNIDAD';
       return {
+        localId: data.localId || null,
         name: data.name,
         sku: data.sku || null,
         reference: data.reference || null,
