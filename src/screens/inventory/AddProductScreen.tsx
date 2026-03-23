@@ -61,6 +61,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const nextIdLoadedRef = useRef(false);
   const catalogsLoadedRef = useRef(false);
+  const savingRef = useRef(false);
   const [recipeItems, setRecipeItems] = useState<{ id: string; ingredientId: string; qty: string }[]>([]);
   const [availableIngredients, setAvailableIngredients] = useState<any[]>([]);
   const [ingredientPickerVisible, setIngredientPickerVisible] = useState(false);
@@ -298,6 +299,9 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   };
 
   const handleSave = async () => {
+    // Guard síncrono contra double-tap (el estado React no es lo suficientemente rápido)
+    if (savingRef.current) return;
+
     if (!name.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
       return;
@@ -311,6 +315,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       return;
     }
 
+    savingRef.current = true;
     setLoading(true);
     try {
       const localId = generateLocalId();
@@ -358,6 +363,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       Alert.alert('Error', 'No se pudo guardar el producto');
     } finally {
       setLoading(false);
+      savingRef.current = false;
     }
   };
 

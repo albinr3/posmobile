@@ -55,6 +55,7 @@ export interface SaleItem {
   productId: string;
   productName: string;
   sku?: string;
+  reference?: string | null;
   quantity: number;
   priceCents: number;
   totalCents: number;

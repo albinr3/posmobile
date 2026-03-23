@@ -816,8 +816,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       <Surface style={styles.itemCard}>
         <View style={styles.itemInfo}>
           <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
-          {item.sku ? (
-            <Text style={styles.itemReference}>Ref: {item.sku}</Text>
+          {item.reference ? (
+            <Text style={styles.itemReference}>Ref: {item.reference}</Text>
           ) : null}
           <View style={styles.priceRow}>
             <Text style={styles.itemPrice}>{formatCurrency(item.priceCents)} c/u</Text>

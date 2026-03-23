@@ -74,6 +74,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   const [catalogsLoading, setCatalogsLoading] = useState(false);
   const hasPendingImageSelectionRef = useRef(false);
   const hydratedProductIdRef = useRef<string | null>(null);
+  const savingRef = useRef(false);
 
   const [recipeItems, setRecipeItems] = useState<{ id: string; ingredientId: string; qty: string }[]>([]);
   const [availableIngredients, setAvailableIngredients] = useState<any[]>([]);
@@ -268,6 +269,9 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
   };
 
   const handleSave = async () => {
+    // Guard síncrono contra double-tap
+    if (savingRef.current) return;
+
     if (!name.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
       return;
@@ -281,6 +285,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       return;
     }
 
+    savingRef.current = true;
     setLoading(true);
     try {
       const costCents = Math.round(parseFloat(cost) * 100);
@@ -353,6 +358,7 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       Alert.alert('Error', 'No se pudo actualizar el producto');
     } finally {
       setLoading(false);
+      savingRef.current = false;
     }
   };
 

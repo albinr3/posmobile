@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image, ScrollView } from 'react-native';
+import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image, ScrollView, LayoutAnimation } from 'react-native';
 import { Text, Icon, Searchbar, Menu, IconButton, Modal, Portal, Button, Chip } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -52,6 +52,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
+  const [saleOptionsExpanded, setSaleOptionsExpanded] = useState(false);
   const insets = useSafeAreaInsets();
   const hydratedEditSaleRef = useRef<string | null>(null);
   const internalNavigationRef = useRef(false);
@@ -488,59 +489,89 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             <Text style={styles.saleTitle}>{editingSaleLocalId ? `Editando ${editingInvoiceCode || 'factura'}` : 'Venta'}</Text>
           </View>
 
-          <Text style={styles.label}>Cliente</Text>
           <TouchableOpacity
-            style={styles.selectLike}
+            style={styles.collapsibleHeader}
+            activeOpacity={0.7}
             onPress={() => {
-              internalNavigationRef.current = true;
-              navigation.navigate('SelectCustomer');
+              LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+              setSaleOptionsExpanded(!saleOptionsExpanded);
             }}
           >
-            <Text style={styles.selectLikeText}>{formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}</Text>
-            <Icon source="chevron-right" size={18} color="#6B7280" />
+            <View style={styles.collapsibleHeaderContent}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.collapsibleHeaderLabel} numberOfLines={1}>
+                  {formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}
+                  {'  \u2022  '}
+                  {saleType === 'CREDITO' ? 'Crédito' : 'Contado'}
+                  {'  \u2022  '}
+                  {saleType === 'CREDITO' ? 'Crédito' : (PAYMENT_OPTIONS.find((m) => m.value === paymentMethod)?.label || 'Efectivo')}
+                </Text>
+              </View>
+              <Icon
+                source={saleOptionsExpanded ? 'chevron-up' : 'chevron-down'}
+                size={20}
+                color="#6B7280"
+              />
+            </View>
           </TouchableOpacity>
 
-          <Text style={styles.label}>Tipo de venta</Text>
-          <View style={styles.typeToggle}>
-            <TouchableOpacity style={[styles.typeBtn, saleType === 'CONTADO' && styles.typeBtnOn]} onPress={() => setSaleType('CONTADO')}>
-              <Text style={[styles.typeBtnText, saleType === 'CONTADO' && styles.typeBtnTextOn]}>Contado</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.typeBtn, saleType === 'CREDITO' && styles.typeBtnOn]} onPress={() => setSaleType('CREDITO')}>
-              <Text style={[styles.typeBtnText, saleType === 'CREDITO' && styles.typeBtnTextOn]}>Crédito</Text>
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.label}>Método de pago</Text>
-          <Menu
-            visible={paymentMenuVisible}
-            onDismiss={() => setPaymentMenuVisible(false)}
-            anchor={
+          {saleOptionsExpanded && (
+            <View>
+              <Text style={styles.label}>Cliente</Text>
               <TouchableOpacity
-                style={[styles.selectLike, saleType === 'CREDITO' && styles.selectDisabled]}
+                style={styles.selectLike}
                 onPress={() => {
-                  if (saleType !== 'CREDITO') setPaymentMenuVisible(true);
+                  internalNavigationRef.current = true;
+                  navigation.navigate('SelectCustomer');
                 }}
               >
-                <Text style={[styles.selectLikeText, saleType === 'CREDITO' && styles.selectDisabledText]}>
-                  {saleType === 'CREDITO' ? 'Crédito' : PAYMENT_OPTIONS.find((m) => m.value === paymentMethod)?.label || 'Efectivo'}
-                </Text>
-                <Icon source="chevron-down" size={18} color="#6B7280" />
+                <Text style={styles.selectLikeText}>{formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}</Text>
+                <Icon source="chevron-right" size={18} color="#6B7280" />
               </TouchableOpacity>
-            }
-          >
-            {PAYMENT_OPTIONS.map((option) => (
-              <Menu.Item
-                key={option.value}
-                title={option.label}
-                onPress={() => {
-                  setPaymentMethod(option.value);
-                  if (option.value !== 'TRANSFERENCIA') setTransferBankName(null);
-                  if (option.value !== 'DIVIDIR_PAGO') setPaymentSplits([]);
-                  setPaymentMenuVisible(false);
-                }}
-              />
-            ))}
-          </Menu>
+
+              <Text style={styles.label}>Tipo de venta</Text>
+              <View style={styles.typeToggle}>
+                <TouchableOpacity style={[styles.typeBtn, saleType === 'CONTADO' && styles.typeBtnOn]} onPress={() => setSaleType('CONTADO')}>
+                  <Text style={[styles.typeBtnText, saleType === 'CONTADO' && styles.typeBtnTextOn]}>Contado</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.typeBtn, saleType === 'CREDITO' && styles.typeBtnOn]} onPress={() => setSaleType('CREDITO')}>
+                  <Text style={[styles.typeBtnText, saleType === 'CREDITO' && styles.typeBtnTextOn]}>Crédito</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.label}>Método de pago</Text>
+              <Menu
+                visible={paymentMenuVisible}
+                onDismiss={() => setPaymentMenuVisible(false)}
+                anchor={
+                  <TouchableOpacity
+                    style={[styles.selectLike, saleType === 'CREDITO' && styles.selectDisabled]}
+                    onPress={() => {
+                      if (saleType !== 'CREDITO') setPaymentMenuVisible(true);
+                    }}
+                  >
+                    <Text style={[styles.selectLikeText, saleType === 'CREDITO' && styles.selectDisabledText]}>
+                      {saleType === 'CREDITO' ? 'Crédito' : PAYMENT_OPTIONS.find((m) => m.value === paymentMethod)?.label || 'Efectivo'}
+                    </Text>
+                    <Icon source="chevron-down" size={18} color="#6B7280" />
+                  </TouchableOpacity>
+                }
+              >
+                {PAYMENT_OPTIONS.map((option) => (
+                  <Menu.Item
+                    key={option.value}
+                    title={option.label}
+                    onPress={() => {
+                      setPaymentMethod(option.value);
+                      if (option.value !== 'TRANSFERENCIA') setTransferBankName(null);
+                      if (option.value !== 'DIVIDIR_PAGO') setPaymentSplits([]);
+                      setPaymentMenuVisible(false);
+                    }}
+                  />
+                ))}
+              </Menu>
+            </View>
+          )}
         </View>
 
         <View style={styles.searchWrap}>
@@ -878,6 +909,27 @@ const styles = StyleSheet.create({
   },
   saleHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 },
   saleTitle: { fontSize: 20, color: '#111827', fontWeight: '700' },
+  collapsibleHeader: {
+    paddingVertical: 8,
+    paddingHorizontal: 2,
+    marginTop: 4,
+  },
+  collapsibleHeaderContent: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'space-between' as const,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  collapsibleHeaderLabel: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    color: '#374151',
+  },
   viewToggle: {
     alignSelf: 'flex-end',
     flexDirection: 'row',

@@ -119,6 +119,26 @@ class SyncService {
           dataKeys: data ? Object.keys(data) : [],
         });
       }
+
+      // Deduplicación: evitar encolar la misma operación si ya existe una pendiente
+      const existing = await db.queryFirst<any>(
+        `SELECT id FROM sync_queue
+         WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status = 'pending'
+         LIMIT 1`,
+        [entityType, localId, action]
+      );
+      if (existing) {
+        if (SYNC_DEBUG) {
+          console.log('[SyncService] queueOperation() duplicado detectado, omitiendo', {
+            entityType,
+            action,
+            localId,
+            existingQueueId: existing.id,
+          });
+        }
+        return;
+      }
+
       await db.insert('sync_queue', {
         entity_type: entityType,
         entity_local_id: localId,
