@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -58,6 +58,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     clearEditContext,
   } = useCartStore();
   const [loading, setLoading] = useState(false);
+  const completingSaleRef = useRef(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [transferBankMenuVisible, setTransferBankMenuVisible] = useState(false);
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
@@ -422,7 +423,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const splitDifferenceCents = cartTotals.totalCents - totalSplitCents;
 
   const handleCompleteSale = async () => {
-    if (items.length === 0) return;
+    if (completingSaleRef.current) return;
+    completingSaleRef.current = true;
+    setLoading(true);
+    try {
+      if (items.length === 0) return;
     let creditDueDate: number | null = null;
     let selectedCustomerId = customerId;
     let selectedCustomerName = customerName;
@@ -526,8 +531,6 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
     }
 
-    setLoading(true);
-    try {
       let localId = generateLocalId();
       let invoiceCode = generateInvoiceCode();
       const now = Date.now();
@@ -804,6 +807,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       Alert.alert('Error', 'No se pudo completar la venta');
     } finally {
       setLoading(false);
+      completingSaleRef.current = false;
     }
   };
 

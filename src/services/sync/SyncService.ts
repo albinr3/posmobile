@@ -166,33 +166,32 @@ class SyncService {
 
   private async processQueue() {
     if (this.isSyncing) return;
-    const { isOnline } = useSyncStore.getState();
-    if (!isOnline) {
-      useSyncStore.getState().setSyncBlockedReason(null);
-      return;
-    }
-
-    const now = Date.now();
-    if (now < this.backendAuthCooldownUntil) {
-      if (SYNC_DEBUG) console.log('[SyncService] processQueue() en cooldown', { msRemaining: this.backendAuthCooldownUntil - now });
-      return;
-    }
-
-    const authStatus = await this.getAuthStatus();
-    if (SYNC_DEBUG) console.log('[SyncService] processQueue() authStatus', authStatus);
-    const authReady = authStatus.ready;
-    if (!authReady) {
-      useSyncStore.getState().setSyncBlockedReason(authStatus.reason);
-      if (authStatus.reason) {
-        this.logAuthWait(authStatus.reason);
-      }
-      return;
-    }
-    useSyncStore.getState().setSyncBlockedReason(null);
-
     this.isSyncing = true;
-
     try {
+      const { isOnline } = useSyncStore.getState();
+      if (!isOnline) {
+        useSyncStore.getState().setSyncBlockedReason(null);
+        return;
+      }
+
+      const now = Date.now();
+      if (now < this.backendAuthCooldownUntil) {
+        if (SYNC_DEBUG) console.log('[SyncService] processQueue() en cooldown', { msRemaining: this.backendAuthCooldownUntil - now });
+        return;
+      }
+
+      const authStatus = await this.getAuthStatus();
+      if (SYNC_DEBUG) console.log('[SyncService] processQueue() authStatus', authStatus);
+      const authReady = authStatus.ready;
+      if (!authReady) {
+        useSyncStore.getState().setSyncBlockedReason(authStatus.reason);
+        if (authStatus.reason) {
+          this.logAuthWait(authStatus.reason);
+        }
+        return;
+      }
+      useSyncStore.getState().setSyncBlockedReason(null);
+
       await this.processQueueInternal();
     } finally {
       this.isSyncing = false;
