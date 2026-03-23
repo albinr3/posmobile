@@ -166,6 +166,8 @@ class SyncService {
 
   private async processQueue() {
     if (this.isSyncing) return;
+    // IMPORTANTE: este lock debe activarse antes de cualquier await para evitar
+    // workers paralelos que puedan enviar operaciones create duplicadas.
     this.isSyncing = true;
     try {
       const { isOnline } = useSyncStore.getState();

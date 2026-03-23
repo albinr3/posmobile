@@ -22,3 +22,9 @@ NO compatibles con OTA (requieren build nativo):
 - Cambios en plugins de Expo.
 - Cambios en `android/` o `ios/`.
 - Upgrade de Expo SDK / React Native.
+
+## Nota de Incidencia: Duplicados al crear productos
+- Síntoma observado: productos creados 2-3 veces en backend en algunos casos.
+- Causa raíz detectada: reentrada concurrente de `processQueue()` en `src/services/sync/SyncService.ts` (el lock `isSyncing` se tomaba tarde, después de `await`), permitiendo envíos paralelos del mismo `create`.
+- Medida aplicada: tomar `isSyncing = true` al inicio de `processQueue()` antes de validaciones async.
+- Regla para evitar reincidencia: no mover el lock por debajo de ningún `await` dentro de `processQueue()`.
