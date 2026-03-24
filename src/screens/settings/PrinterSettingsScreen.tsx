@@ -878,7 +878,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
               contentStyle={styles.companyInputContent}
               outlineStyle={styles.companyInputOutline}
             />
-            <Text style={styles.companyDetailLabel}>Direccion</Text>
+            <Text style={styles.companyDetailLabel}>Direccion local</Text>
             <TextInput
               mode="outlined"
               dense
