@@ -11,6 +11,7 @@ import { Text, Icon, ActivityIndicator } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
 import { AppTopHeader } from '../components/AppTopHeader';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useAuthStore } from '../store/authStore';
 import { getBillingOverviewWithOptions } from '../services/billing/billingService';
 import { syncService } from '../services/sync/SyncService';
@@ -91,14 +92,70 @@ const DRAWER_ENTRIES = [
   { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
 ];
 
+function withScreenBoundary<TProps extends object>(
+  Component: React.ComponentType<TProps>,
+  boundaryName: string
+) {
+  const Wrapped = (props: TProps) => (
+    <ErrorBoundary boundaryName={boundaryName}>
+      <Component {...props} />
+    </ErrorBoundary>
+  );
+  Wrapped.displayName = `WithScreenBoundary(${boundaryName})`;
+  return Wrapped;
+}
+
+const POSScreenWithBoundary = withScreenBoundary(POSScreen, 'POSScreen');
+const QuoteScreenWithBoundary = withScreenBoundary(QuoteScreen, 'QuoteScreen');
+const QuoteListScreenWithBoundary = withScreenBoundary(QuoteListScreen, 'QuoteListScreen');
+const CartScreenWithBoundary = withScreenBoundary(CartScreen, 'CartScreen');
+const QuoteCartScreenWithBoundary = withScreenBoundary(QuoteCartScreen, 'QuoteCartScreen');
+const ReceiptScreenWithBoundary = withScreenBoundary(ReceiptScreen, 'ReceiptScreen');
+const BarcodeScannerScreenWithBoundary = withScreenBoundary(BarcodeScannerScreen, 'BarcodeScannerScreen');
+const SelectCustomerScreenWithBoundary = withScreenBoundary(SelectCustomerScreen, 'SelectCustomerScreen');
+const ProductListScreenWithBoundary = withScreenBoundary(ProductListScreen, 'ProductListScreen');
+const AddProductScreenWithBoundary = withScreenBoundary(AddProductScreen, 'AddProductScreen');
+const ProductDetailScreenWithBoundary = withScreenBoundary(ProductDetailScreen, 'ProductDetailScreen');
+const ProductEditScreenWithBoundary = withScreenBoundary(ProductEditScreen, 'ProductEditScreen');
+const CategoryListScreenWithBoundary = withScreenBoundary(CategoryListScreen, 'CategoryListScreen');
+const AddCategoryScreenWithBoundary = withScreenBoundary(AddCategoryScreen, 'AddCategoryScreen');
+const SupplierListScreenWithBoundary = withScreenBoundary(SupplierListScreen, 'SupplierListScreen');
+const AddSupplierScreenWithBoundary = withScreenBoundary(AddSupplierScreen, 'AddSupplierScreen');
+const PurchaseListScreenWithBoundary = withScreenBoundary(PurchaseListScreen, 'PurchaseListScreen');
+const AddPurchaseScreenWithBoundary = withScreenBoundary(AddPurchaseScreen, 'AddPurchaseScreen');
+const OperatingExpensesScreenWithBoundary = withScreenBoundary(OperatingExpensesScreen, 'OperatingExpensesScreen');
+const AddOperatingExpenseScreenWithBoundary = withScreenBoundary(AddOperatingExpenseScreen, 'AddOperatingExpenseScreen');
+const CustomerListScreenWithBoundary = withScreenBoundary(CustomerListScreen, 'CustomerListScreen');
+const AddCustomerScreenWithBoundary = withScreenBoundary(AddCustomerScreen, 'AddCustomerScreen');
+const CustomerDetailScreenWithBoundary = withScreenBoundary(CustomerDetailScreen, 'CustomerDetailScreen');
+const ARListScreenWithBoundary = withScreenBoundary(ARListScreen, 'ARListScreen');
+const RegisterPaymentScreenWithBoundary = withScreenBoundary(RegisterPaymentScreen, 'RegisterPaymentScreen');
+const PaymentReceiptsScreenWithBoundary = withScreenBoundary(PaymentReceiptsScreen, 'PaymentReceiptsScreen');
+const PrinterSettingsScreenWithBoundary = withScreenBoundary(PrinterSettingsScreen, 'PrinterSettingsScreen');
+const PrinterDevicesScreenWithBoundary = withScreenBoundary(PrinterDevicesScreen, 'PrinterDevicesScreen');
+const CreateReturnScreenWithBoundary = withScreenBoundary(CreateReturnScreen, 'CreateReturnScreen');
+const ReturnReceiptScreenWithBoundary = withScreenBoundary(ReturnReceiptScreen, 'ReturnReceiptScreen');
+const InvoiceListScreenWithBoundary = withScreenBoundary(InvoiceListScreen, 'InvoiceListScreen');
+const BillingPlansScreenWithBoundary = withScreenBoundary(BillingPlansScreen, 'BillingPlansScreen');
+const DashboardScreenWithBoundary = withScreenBoundary(DashboardScreen, 'DashboardScreen');
+const DailyCloseScreenWithBoundary = withScreenBoundary(DailyCloseScreen, 'DailyCloseScreen');
+const ReportsMenuScreenWithBoundary = withScreenBoundary(ReportsMenuScreen, 'ReportsMenuScreen');
+const SalesReportScreenWithBoundary = withScreenBoundary(SalesReportScreen, 'SalesReportScreen');
+const AccountsReceivableReportScreenWithBoundary = withScreenBoundary(AccountsReceivableReportScreen, 'AccountsReceivableReportScreen');
+const ReceiptsReportScreenWithBoundary = withScreenBoundary(ReceiptsReportScreen, 'ReceiptsReportScreen');
+const ProfitReportScreenWithBoundary = withScreenBoundary(ProfitReportScreen, 'ProfitReportScreen');
+const InventoryReportScreenWithBoundary = withScreenBoundary(InventoryReportScreen, 'InventoryReportScreen');
+const OperatingExpensesReportScreenWithBoundary = withScreenBoundary(OperatingExpensesReportScreen, 'OperatingExpensesReportScreen');
+const PlaceholderScreenWithBoundary = withScreenBoundary(PlaceholderScreen, 'FeaturePlaceholder');
+
 function SalesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="POSMain" component={POSScreen} />
-      <Stack.Screen name="Cart" component={CartScreen} />
-      <Stack.Screen name="SelectCustomer" component={SelectCustomerScreen} />
-      <Stack.Screen name="Receipt" component={ReceiptScreen} options={{ headerLeft: () => null }} />
-      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="POSMain" component={POSScreenWithBoundary} />
+      <Stack.Screen name="Cart" component={CartScreenWithBoundary} />
+      <Stack.Screen name="SelectCustomer" component={SelectCustomerScreenWithBoundary} />
+      <Stack.Screen name="Receipt" component={ReceiptScreenWithBoundary} options={{ headerLeft: () => null }} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -106,10 +163,10 @@ function SalesStack() {
 function QuotesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="QuoteMain" component={QuoteScreen} />
-      <Stack.Screen name="QuoteCart" component={QuoteCartScreen} />
-      <Stack.Screen name="SelectQuoteCustomer" component={SelectCustomerScreen} initialParams={{ mode: 'QUOTE' }} />
-      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="QuoteMain" component={QuoteScreenWithBoundary} />
+      <Stack.Screen name="QuoteCart" component={QuoteCartScreenWithBoundary} />
+      <Stack.Screen name="SelectQuoteCustomer" component={SelectCustomerScreenWithBoundary} initialParams={{ mode: 'QUOTE' }} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -117,7 +174,7 @@ function QuotesStack() {
 function QuoteListStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="QuoteListMain" component={QuoteListScreen} />
+      <Stack.Screen name="QuoteListMain" component={QuoteListScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -125,13 +182,13 @@ function QuoteListStack() {
 function InventoryStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="ProductList" component={ProductListScreen} />
-      <Stack.Screen name="AddProduct" component={AddProductScreen} />
-      <Stack.Screen name="ProductEdit" component={ProductEditScreen} />
-      <Stack.Screen name="ProductDetail" component={ProductDetailScreen} />
-      <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
-      <Stack.Screen name="AddSupplier" component={AddSupplierScreen} />
-      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="ProductList" component={ProductListScreenWithBoundary} />
+      <Stack.Screen name="AddProduct" component={AddProductScreenWithBoundary} />
+      <Stack.Screen name="ProductEdit" component={ProductEditScreenWithBoundary} />
+      <Stack.Screen name="ProductDetail" component={ProductDetailScreenWithBoundary} />
+      <Stack.Screen name="AddCategory" component={AddCategoryScreenWithBoundary} />
+      <Stack.Screen name="AddSupplier" component={AddSupplierScreenWithBoundary} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -139,8 +196,8 @@ function InventoryStack() {
 function CategoriesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="CategoryList" component={CategoryListScreen} />
-      <Stack.Screen name="AddCategory" component={AddCategoryScreen} />
+      <Stack.Screen name="CategoryList" component={CategoryListScreenWithBoundary} />
+      <Stack.Screen name="AddCategory" component={AddCategoryScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -148,8 +205,8 @@ function CategoriesStack() {
 function SuppliersStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="SupplierList" component={SupplierListScreen} />
-      <Stack.Screen name="AddSupplier" component={AddSupplierScreen} />
+      <Stack.Screen name="SupplierList" component={SupplierListScreenWithBoundary} />
+      <Stack.Screen name="AddSupplier" component={AddSupplierScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -157,9 +214,9 @@ function SuppliersStack() {
 function PurchasesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="PurchaseList" component={PurchaseListScreen} />
-      <Stack.Screen name="AddPurchase" component={AddPurchaseScreen} />
-      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="PurchaseList" component={PurchaseListScreenWithBoundary} />
+      <Stack.Screen name="AddPurchase" component={AddPurchaseScreenWithBoundary} />
+      <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }
@@ -167,9 +224,9 @@ function PurchasesStack() {
 function CustomersStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="CustomerList" component={CustomerListScreen} />
-      <Stack.Screen name="AddCustomer" component={AddCustomerScreen} />
-      <Stack.Screen name="CustomerDetail" component={CustomerDetailScreen} />
+      <Stack.Screen name="CustomerList" component={CustomerListScreenWithBoundary} />
+      <Stack.Screen name="AddCustomer" component={AddCustomerScreenWithBoundary} />
+      <Stack.Screen name="CustomerDetail" component={CustomerDetailScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -177,8 +234,8 @@ function CustomersStack() {
 function ARStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="ARList" component={ARListScreen} />
-      <Stack.Screen name="RegisterPayment" component={RegisterPaymentScreen} />
+      <Stack.Screen name="ARList" component={ARListScreenWithBoundary} />
+      <Stack.Screen name="RegisterPayment" component={RegisterPaymentScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -186,7 +243,7 @@ function ARStack() {
 function PaymentReceiptsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="PaymentReceipts" component={PaymentReceiptsScreen} />
+      <Stack.Screen name="PaymentReceipts" component={PaymentReceiptsScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -194,8 +251,8 @@ function PaymentReceiptsStack() {
 function SettingsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="PrinterSettings" component={PrinterSettingsScreen} />
-      <Stack.Screen name="Printers" component={PrinterDevicesScreen} />
+      <Stack.Screen name="PrinterSettings" component={PrinterSettingsScreenWithBoundary} />
+      <Stack.Screen name="Printers" component={PrinterDevicesScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -203,8 +260,8 @@ function SettingsStack() {
 function ReturnsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="CreateReturn" component={CreateReturnScreen} />
-      <Stack.Screen name="ReturnReceipt" component={ReturnReceiptScreen} />
+      <Stack.Screen name="CreateReturn" component={CreateReturnScreenWithBoundary} />
+      <Stack.Screen name="ReturnReceipt" component={ReturnReceiptScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -212,7 +269,7 @@ function ReturnsStack() {
 function BillingStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="InvoiceList" component={InvoiceListScreen} />
+      <Stack.Screen name="InvoiceList" component={InvoiceListScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -220,7 +277,7 @@ function BillingStack() {
 function BillingPlansStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="BillingPlans" component={BillingPlansScreen} />
+      <Stack.Screen name="BillingPlans" component={BillingPlansScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -228,8 +285,8 @@ function BillingPlansStack() {
 function OperatingExpensesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="OperatingExpenses" component={OperatingExpensesScreen} />
-      <Stack.Screen name="AddOperatingExpense" component={AddOperatingExpenseScreen} />
+      <Stack.Screen name="OperatingExpenses" component={OperatingExpensesScreenWithBoundary} />
+      <Stack.Screen name="AddOperatingExpense" component={AddOperatingExpenseScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -237,8 +294,8 @@ function OperatingExpensesStack() {
 function DashboardStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="DashboardMain" component={DashboardScreen} />
-      <Stack.Screen name="DailyClose" component={DailyCloseScreen} />
+      <Stack.Screen name="DashboardMain" component={DashboardScreenWithBoundary} />
+      <Stack.Screen name="DailyClose" component={DailyCloseScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -246,13 +303,13 @@ function DashboardStack() {
 function ReportsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
-      <Stack.Screen name="ReportsMenuMain" component={ReportsMenuScreen} />
-      <Stack.Screen name="SalesReport" component={SalesReportScreen} />
-      <Stack.Screen name="AccountsReceivableReport" component={AccountsReceivableReportScreen} />
-      <Stack.Screen name="ReceiptsReport" component={ReceiptsReportScreen} />
-      <Stack.Screen name="ProfitReport" component={ProfitReportScreen} />
-      <Stack.Screen name="InventoryReport" component={InventoryReportScreen} />
-      <Stack.Screen name="OperatingExpensesReport" component={OperatingExpensesReportScreen} />
+      <Stack.Screen name="ReportsMenuMain" component={ReportsMenuScreenWithBoundary} />
+      <Stack.Screen name="SalesReport" component={SalesReportScreenWithBoundary} />
+      <Stack.Screen name="AccountsReceivableReport" component={AccountsReceivableReportScreenWithBoundary} />
+      <Stack.Screen name="ReceiptsReport" component={ReceiptsReportScreenWithBoundary} />
+      <Stack.Screen name="ProfitReport" component={ProfitReportScreenWithBoundary} />
+      <Stack.Screen name="InventoryReport" component={InventoryReportScreenWithBoundary} />
+      <Stack.Screen name="OperatingExpensesReport" component={OperatingExpensesReportScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -719,7 +776,7 @@ export function MainNavigator() {
           <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
           <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
           <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
-          <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreen} options={{ title: 'Próximamente' }} />
+          <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreenWithBoundary} options={{ title: 'Próximamente' }} />
         </>
       ) : null}
     </Drawer.Navigator>

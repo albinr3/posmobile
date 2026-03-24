@@ -9,7 +9,33 @@ import { prepareSyncRequestData } from './prepareSyncRequestData';
 import { downloadFromServer } from './downloadFromServer';
 import { capturePhase0SyncBaselineSnapshot } from './syncBaseline';
 
+function parseJwtExpiryMs(token: string | null | undefined): number | null {
+  try {
+    const raw = String(token || '');
+    if (!raw) return null;
+    const parts = raw.split('.');
+    if (parts.length < 2) return null;
+    const payloadBase64Url = parts[1];
+    const payloadBase64 = payloadBase64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const paddedPayload = payloadBase64.padEnd(payloadBase64.length + ((4 - (payloadBase64.length % 4)) % 4), '=');
+    if (typeof globalThis.atob !== 'function') return null;
+    const payloadJson = globalThis.atob(paddedPayload);
+    const payload = JSON.parse(payloadJson) as { exp?: unknown };
+    const expSeconds = Number(payload?.exp);
+    if (!Number.isFinite(expSeconds) || expSeconds <= 0) return null;
+    return expSeconds * 1000;
+  } catch {
+    return null;
+  }
+}
+
 class SyncService {
+  private static readonly SYNCING_STALE_MS = 10 * 60 * 1000;
+  private static readonly MAX_RETRY_COUNT = 5;
+  private static readonly RETRY_BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+  private static readonly PURGE_SYNCED_OLDER_THAN_MS = 7 * 24 * 60 * 60 * 1000;
+  private static readonly SUBUSER_REFRESH_WINDOW_MS = 5 * 60 * 1000;
+
   private isSyncing = false;
   private isInitialized = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
@@ -19,6 +45,7 @@ class SyncService {
   private backendAuthCooldownUntil = 0;
   private lastAuthWaitLogAt = 0;
   private lastFullSyncAttemptAt = 0;
+  private subUserRefreshInFlight: Promise<boolean> | null = null;
 
   // Método para establecer la función que obtiene el token de Clerk
   setTokenGetter(fn: () => Promise<string | null>) {
@@ -73,6 +100,13 @@ class SyncService {
     useSyncStore.getState().setIsSyncing(true);
 
     try {
+      const refreshed = await this.ensureSubUserSessionFresh();
+      if (!refreshed.ready) {
+        useSyncStore.getState().setSyncBlockedReason(refreshed.reason);
+        return;
+      }
+      useSyncStore.getState().setSyncBlockedReason(null);
+
       // 1. Descargar datos del servidor
       await this.downloadFromServer(authToken);
       
@@ -112,6 +146,88 @@ class SyncService {
 
   async capturePhase0Baseline(label: string = 'manual') {
     return capturePhase0SyncBaselineSnapshot(label);
+  }
+
+  private async ensureSubUserSessionFresh(): Promise<{ ready: boolean; reason: string | null }> {
+    try {
+      const { useAuthStore } = await import('../../store/authStore');
+      const state = useAuthStore.getState();
+      const currentToken = this.getSubUserTokenFn ? await this.getSubUserTokenFn() : state.subUserToken;
+
+      if (!currentToken) {
+        return {
+          ready: false,
+          reason: 'Sync pausado: falta autenticacion de subusuario. Selecciona el usuario de caja.',
+        };
+      }
+
+      const expiryMs = parseJwtExpiryMs(currentToken);
+      if (!expiryMs) {
+        return { ready: true, reason: null };
+      }
+
+      const msUntilExpiry = expiryMs - Date.now();
+      if (msUntilExpiry > SyncService.SUBUSER_REFRESH_WINDOW_MS) {
+        return { ready: true, reason: null };
+      }
+
+      if (!this.getTokenFn) {
+        return {
+          ready: false,
+          reason: 'Sync pausado: no hay sesion principal activa. Inicia sesion para continuar.',
+        };
+      }
+
+      if (!this.subUserRefreshInFlight) {
+        this.subUserRefreshInFlight = (async () => {
+          const clerkToken = await this.getTokenFn!();
+          if (!clerkToken) throw new Error('Sin token de Clerk para refrescar subusuario');
+
+          const accountId = state.accountId;
+          const headers = {
+            Authorization: `Bearer ${clerkToken}`,
+            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+            'X-SubUser-Token': currentToken,
+            ...(accountId ? { 'X-Account-Id': accountId } : {}),
+          };
+
+          const response = await axios.post(`${API_URL}/api/auth/subuser/refresh`, {}, {
+            headers,
+            timeout: 20000,
+          });
+
+          const refreshedToken: string | null =
+            response.data?.token ||
+            response.data?.data?.token ||
+            null;
+          if (!refreshedToken) {
+            throw new Error('Refresh de subusuario sin token en respuesta');
+          }
+
+          const nextSubUser = response.data?.user || state.subUser || null;
+          await state.setSubUser(nextSubUser, refreshedToken, accountId || null);
+          return true;
+        })()
+          .finally(() => {
+            this.subUserRefreshInFlight = null;
+          });
+      }
+
+      await this.subUserRefreshInFlight;
+      return { ready: true, reason: null };
+    } catch (error) {
+      console.error('[SyncService] refresh subusuario falló:', summarizeError(error));
+      try {
+        const { useAuthStore } = await import('../../store/authStore');
+        await useAuthStore.getState().setSubUser(null, null, null);
+      } catch {
+        // ignore
+      }
+      return {
+        ready: false,
+        reason: 'Sync pausado: no se pudo renovar la sesion del subusuario. Debes volver a iniciar sesion del usuario de caja.',
+      };
+    }
   }
 
   async queueOperation(entityType: string, action: string, data: any, localId: string) {
@@ -187,6 +303,13 @@ class SyncService {
         return;
       }
 
+      const refreshed = await this.ensureSubUserSessionFresh();
+      if (!refreshed.ready) {
+        useSyncStore.getState().setSyncBlockedReason(refreshed.reason);
+        if (refreshed.reason) this.logAuthWait(refreshed.reason);
+        return;
+      }
+
       const authStatus = await this.getAuthStatus();
       if (SYNC_DEBUG) console.log('[SyncService] processQueue() authStatus', authStatus);
       const authReady = authStatus.ready;
@@ -211,23 +334,43 @@ class SyncService {
    * Called by processQueue (with guard) and uploadPendingChanges (already inside fullSync).
    */
   private async processQueueInternal() {
-    // Reintentar devoluciones que quedaron en error por mapeo temporal de item ids
-    await db.runAsync(
-      `UPDATE sync_queue
-       SET status = 'pending', retry_count = 0
-       WHERE status = 'error' AND entity_type = 'return' AND action = 'create'`
-    );
+    const now = Date.now();
 
-    // Limpiar items huerfanos que quedaron en 'syncing' (app se cerró durante sync)
+    // Recuperar solo syncing stale (evita reset masivo agresivo).
     await db.runAsync(
       `UPDATE sync_queue
        SET status = 'pending'
-       WHERE status = 'syncing'`
+       WHERE status = 'syncing'
+         AND (
+           (sync_started_at IS NOT NULL AND sync_started_at <= ?)
+           OR (sync_started_at IS NULL AND created_at <= ?)
+         )`,
+      [now - SyncService.SYNCING_STALE_MS, now - SyncService.SYNCING_STALE_MS]
+    );
+
+    // Limpieza periódica de synced antiguos.
+    await db.runAsync(
+      `DELETE FROM sync_queue
+       WHERE status = 'synced'
+         AND synced_at IS NOT NULL
+         AND synced_at <= ?`,
+      [now - SyncService.PURGE_SYNCED_OLDER_THAN_MS]
     );
 
     const pending = await db.query<any>(
-      'SELECT * FROM sync_queue WHERE status = ? ORDER BY created_at',
-      ['pending']
+      `SELECT *
+       FROM sync_queue
+       WHERE status = 'pending'
+         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+       ORDER BY
+         CASE
+           WHEN entity_type = 'product' AND action = 'create' THEN 0
+           WHEN entity_type = 'product' THEN 1
+           WHEN entity_type = 'customer' AND action = 'create' THEN 2
+           ELSE 3
+         END ASC,
+         created_at ASC`,
+      [now]
     );
     if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() pending items', { count: pending.length });
 
@@ -244,7 +387,10 @@ class SyncService {
         }
 
         // Marcar como 'syncing' ANTES de enviar al backend para evitar doble envío
-        await db.update('sync_queue', item.id, { status: 'syncing' }, 'id');
+        await db.update('sync_queue', item.id, {
+          status: 'syncing',
+          sync_started_at: Date.now(),
+        }, 'id');
 
         await this.syncItem(item);
         
@@ -252,10 +398,15 @@ class SyncService {
         await db.update('sync_queue', item.id, {
           status: 'synced',
           synced_at: Date.now(),
+          next_attempt_at: null,
+          last_error_code: null,
         }, 'id');
       } catch (error) {
-        // Revertir a pending/error para que el handleSyncError decida
-        await db.update('sync_queue', item.id, { status: 'pending' }, 'id');
+        // Revertir a pending para que handleSyncError decida reintento/backoff o error final.
+        await db.update('sync_queue', item.id, {
+          status: 'pending',
+          sync_started_at: null,
+        }, 'id');
         const stopProcessing = await this.handleSyncError(item, error);
         if (stopProcessing) {
           if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() stopProcessing=true, cortando ciclo');
@@ -855,6 +1006,21 @@ class SyncService {
     }
   }
 
+  private deriveErrorCode(error: any): string {
+    if (axios.isAxiosError(error)) {
+      const status = Number(error.response?.status || 0);
+      if (status > 0) return `HTTP_${status}`;
+      return `AXIOS_${String(error.code || 'ERROR')}`;
+    }
+    const rawName = String(error?.name || 'ERROR').toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    return rawName || 'ERROR';
+  }
+
+  private computeNextAttemptAt(retryCount: number): number {
+    const idx = Math.min(Math.max(retryCount - 1, 0), SyncService.RETRY_BACKOFF_MS.length - 1);
+    return Date.now() + SyncService.RETRY_BACKOFF_MS[idx];
+  }
+
   private async handleSyncError(item: any, error: any): Promise<boolean> {
     const errorSummary = summarizeError(error);
     if (SYNC_DEBUG) {
@@ -943,10 +1109,16 @@ class SyncService {
         'Sync pausado: backend rechazo autenticacion. Debes volver a seleccionar usuario para continuar.'
       );
       if (item.entity_type === 'customer') {
+        const errorCode = this.deriveErrorCode(error);
         await db.update(
           'sync_queue',
           item.id,
-          { status: 'error', retry_count: item.retry_count + 1 },
+          {
+            status: 'error',
+            retry_count: item.retry_count + 1,
+            next_attempt_at: null,
+            last_error_code: errorCode,
+          },
           'id'
         );
         console.warn(
@@ -1000,10 +1172,16 @@ class SyncService {
     const localBusinessError =
       typeof error?.message === 'string' && error.message.includes('Producto inactivo en carrito');
     if (backendBusinessError || localBusinessError) {
+      const errorCode = this.deriveErrorCode(error);
       await db.update(
         'sync_queue',
         item.id,
-        { status: 'error', retry_count: item.retry_count + 1 },
+        {
+          status: 'error',
+          retry_count: item.retry_count + 1,
+          next_attempt_at: null,
+          last_error_code: errorCode,
+        },
         'id'
       );
       console.warn(`Sync detenido por validacion de negocio (${item.entity_type} #${item.id}).`);
@@ -1011,15 +1189,22 @@ class SyncService {
     }
 
     const retryCount = item.retry_count + 1;
-    
-    if (retryCount >= 5) {
+    const errorCode = this.deriveErrorCode(error);
+    const nextAttemptAt = this.computeNextAttemptAt(retryCount);
+
+    if (retryCount >= SyncService.MAX_RETRY_COUNT) {
       await db.update('sync_queue', item.id, {
         status: 'error',
         retry_count: retryCount,
+        next_attempt_at: null,
+        last_error_code: errorCode,
       }, 'id');
     } else {
       await db.update('sync_queue', item.id, {
+        status: 'pending',
         retry_count: retryCount,
+        next_attempt_at: nextAttemptAt,
+        last_error_code: errorCode,
       }, 'id');
     }
     
@@ -1050,7 +1235,13 @@ class SyncService {
       await db.update(
         'sync_queue',
         item.id,
-        { status: 'synced', synced_at: now, retry_count: item.retry_count + 1 },
+        {
+          status: 'synced',
+          synced_at: now,
+          retry_count: item.retry_count + 1,
+          next_attempt_at: null,
+          last_error_code: null,
+        },
         'id'
       );
       return;
@@ -1143,7 +1334,13 @@ class SyncService {
     await db.update(
       'sync_queue',
       item.id,
-      { status: 'synced', synced_at: now, retry_count: item.retry_count + 1 },
+      {
+        status: 'synced',
+        synced_at: now,
+        retry_count: item.retry_count + 1,
+        next_attempt_at: null,
+        last_error_code: null,
+      },
       'id'
     );
     console.warn(

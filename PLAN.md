@@ -9,11 +9,11 @@ Fases
 Fase	Duración	Entregable	Criterio de salida
 0. Línea base ✅ LISTA	0.5 día	Snapshot de estado actual, métricas de sync, dataset grande de prueba	Se puede medir “antes/después” sin ambigüedad
 1. Backend paginación ✅ LISTA	1 día	sales/quotes/purchases/payments/returns/operating-expenses/customers/categories/suppliers con paginación opcional y respuesta compatible	Cliente viejo sigue funcionando y cliente nuevo puede paginar todo
-2. Descarga móvil robusta	1 día	downloadFromServer paginado + manejo de error por entidad (no abortar sync completo)	Si falla 1 entidad, el resto termina y queda registro de fallo
-3. Reconciliación de inactivos	1 día	Marcar localmente como inactivos registros que ya no vienen del servidor (sin borrar histórico)	Productos/clientes/categorías/proveedores “fantasma” dejan de aparecer
-4. Cola de sync endurecida	1 día	Quitar reset incondicional de errores, retry con backoff, recuperación solo de syncing stale, limpieza de synced antiguos	No hay loops infinitos ni reenvíos duplicados por recuperación agresiva
-5. POS y carrito	1 día	Política acordada: permitir venta offline de producto no sincronizado; long press elimina solo una línea (no todas las variantes); menos recargas por focus	Venta offline fluye y long press no borra variantes por accidente
-6. Auth + hardening final	1 día	Refresh automático de subusuario + guardas de hard reset one-shot + boundaries por pantalla	Expiración de token no rompe en silencio y fallos de pantalla no tumban toda la app
+2. Descarga móvil robusta ✅ LISTA	1 día	downloadFromServer paginado + manejo de error por entidad (no abortar sync completo)	Si falla 1 entidad, el resto termina y queda registro de fallo
+3. Reconciliación de inactivos ✅ LISTA	1 día	Marcar localmente como inactivos registros que ya no vienen del servidor (sin borrar histórico)	Productos/clientes/categorías/proveedores “fantasma” dejan de aparecer
+4. Cola de sync endurecida ✅ LISTA	1 día	Quitar reset incondicional de errores, retry con backoff, recuperación solo de syncing stale, limpieza de synced antiguos	No hay loops infinitos ni reenvíos duplicados por recuperación agresiva
+5. POS y carrito ✅ LISTA	1 día	Política acordada: permitir venta offline de producto no sincronizado; long press elimina solo una línea (no todas las variantes); menos recargas por focus	Venta offline fluye y long press no borra variantes por accidente
+6. Auth + hardening final ✅ LISTA	1 día	Refresh automático de subusuario + guardas de hard reset one-shot + boundaries por pantalla	Expiración de token no rompe en silencio y fallos de pantalla no tumban toda la app
 Pruebas mínimas por fase
 Dataset grande: confirmar que no hay truncado.
 Falla parcial de API: sync continúa en otras entidades.

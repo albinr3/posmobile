@@ -16,6 +16,7 @@ export interface BaseCartState {
   customerVisualId: number | null;
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (lineId: string) => void;
+  removeOneLineByProductId: (productId: string) => void;
   updateQuantity: (lineId: string, quantity: number) => void;
   updatePrice: (lineId: string, priceCents: number) => void;
   setCustomer: (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => void;
@@ -111,6 +112,16 @@ function createBaseCartSlice<TState extends BaseCartState>(
       set((state) => ({
         items: state.items.filter((item) => item.lineId !== lineId),
       }) as Partial<TState>);
+    },
+
+    removeOneLineByProductId: (productId: string) => {
+      set((state) => {
+        const idx = state.items.map((item) => item.productId).lastIndexOf(productId);
+        if (idx < 0) return {} as Partial<TState>;
+        const nextItems = [...state.items];
+        nextItems.splice(idx, 1);
+        return { items: nextItems } as Partial<TState>;
+      });
     },
 
     updateQuantity: (lineId: string, quantity: number) => {

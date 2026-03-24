@@ -56,6 +56,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const insets = useSafeAreaInsets();
   const hydratedEditSaleRef = useRef<string | null>(null);
   const internalNavigationRef = useRef(false);
+  const lastCatalogLoadAtRef = useRef(0);
+  const productsCountRef = useRef(0);
 
   // Recipe modifier state
   const [recipeDialogLineId, setRecipeDialogLineId] = useState<string | null>(null);
@@ -65,7 +67,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   const {
     addItem,
-    removeItem,
+    removeOneLineByProductId,
     getTotal,
     getItemCount,
     customerId,
@@ -117,10 +119,18 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     });
   }, [viewMode]);
 
+  useEffect(() => {
+    productsCountRef.current = products.length;
+  }, [products.length]);
+
   useFocusEffect(
     useCallback(() => {
-      setLoading(true);
-      loadProducts();
+      const now = Date.now();
+      const shouldReload = productsCountRef.current === 0 || now - lastCatalogLoadAtRef.current > 15_000;
+      if (shouldReload) {
+        setLoading(true);
+        loadProducts();
+      }
     }, [])
   );
 
@@ -259,7 +269,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     loadInvoiceToCart();
   }, [route?.params?.editSaleLocalId, route?.params?.editNonce, loadInvoiceForEdit, navigation]);
 
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
       const result = await db.query<any>('SELECT * FROM products WHERE is_available_for_sale = 1 ORDER BY name');
       const mapped = result.map((row) => {
@@ -289,12 +299,13 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         };
       });
       setProducts(mapped);
+      lastCatalogLoadAtRef.current = Date.now();
     } catch (error) {
       console.error('Error cargando productos:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   const getProductImage = (item: POSProduct) => {
     const fromParsed = Array.isArray(item.parsedData?.imageUrls) ? item.parsedData.imageUrls[0] : null;
@@ -303,7 +314,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   };
 
   const filteredProducts = useMemo(() => {
-    const activeProducts = products.filter((product) => product.synced && !!product.serverId && product.isActive);
+    const activeProducts = products.filter((product) => product.isActive);
 
     if (scanExactSkuQuery) {
       const exactSkuMatches = activeProducts.filter(
@@ -346,8 +357,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   }, [items]);
 
   const handleProductPress = (product: any) => {
-    if (!product.synced || !product.serverId || !product.isActive) {
-      Alert.alert('Producto no disponible', 'Este producto no esta activo o no ha sido sincronizado.');
+    if (!product.isActive) {
+      Alert.alert('Producto no disponible', 'Este producto no esta activo.');
       return;
     }
     if (product.productKind !== 'RECIPE' && product.stock <= 0) {
@@ -400,9 +411,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             onPress={() => handleProductPress(item)}
             onLongPress={() => {
               if (selectedQty > 0) {
-                useCartStore.setState({
-                  items: useCartStore.getState().items.filter(i => i.productId !== item.localId),
-                });
+                removeOneLineByProductId(item.localId);
               }
             }}
             delayLongPress={1000}
@@ -438,9 +447,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         onPress={() => handleProductPress(item)}
         onLongPress={() => {
           if (selectedQty > 0) {
-            useCartStore.setState({
-              items: useCartStore.getState().items.filter(i => i.productId !== item.localId),
-            });
+            removeOneLineByProductId(item.localId);
           }
         }}
         delayLongPress={1000}

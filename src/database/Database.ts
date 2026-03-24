@@ -233,10 +233,33 @@ class DatabaseService {
         data TEXT NOT NULL,
         status TEXT DEFAULT 'pending',
         retry_count INTEGER DEFAULT 0,
+        sync_started_at INTEGER,
+        next_attempt_at INTEGER,
+        last_error_code TEXT,
         created_at INTEGER NOT NULL,
         synced_at INTEGER
       );
     `);
+
+    const syncQueueColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(sync_queue);');
+    const hasSyncStartedAt = syncQueueColumns.some((column) => column.name === 'sync_started_at');
+    if (!hasSyncStartedAt) {
+      await this.db.execAsync(`
+        ALTER TABLE sync_queue ADD COLUMN sync_started_at INTEGER;
+      `);
+    }
+    const hasNextAttemptAt = syncQueueColumns.some((column) => column.name === 'next_attempt_at');
+    if (!hasNextAttemptAt) {
+      await this.db.execAsync(`
+        ALTER TABLE sync_queue ADD COLUMN next_attempt_at INTEGER;
+      `);
+    }
+    const hasLastErrorCode = syncQueueColumns.some((column) => column.name === 'last_error_code');
+    if (!hasLastErrorCode) {
+      await this.db.execAsync(`
+        ALTER TABLE sync_queue ADD COLUMN last_error_code TEXT;
+      `);
+    }
 
     // Metadatos de sincronización
     await this.db.execAsync(`
@@ -475,6 +498,7 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_quotes_synced ON quotes(synced);
       CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
       CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status);
+      CREATE INDEX IF NOT EXISTS idx_sync_queue_next_attempt ON sync_queue(status, next_attempt_at);
       CREATE INDEX IF NOT EXISTS idx_customers_phone ON customers(phone);
       CREATE INDEX IF NOT EXISTS idx_customers_visual_id ON customers(visual_id);
       CREATE INDEX IF NOT EXISTS idx_suppliers_name ON suppliers(name);

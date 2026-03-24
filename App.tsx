@@ -42,6 +42,7 @@ const theme = {
 const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY;
 const LOCAL_DB_WIPED_ONCE_KEY = 'movopos_local_db_wiped_once_v2';
 const LOCAL_HARD_RESET_ONCE_KEY = 'movopos_local_hard_reset_once_v1';
+const LOCAL_HARD_RESET_STATE_KEY = 'movopos_local_hard_reset_state_v2';
 const APP_AUTH_DEBUG = false;
 const OFFLINE_SESSION_EXPIRED_TITLE = 'Sesion expirada';
 const OFFLINE_SESSION_EXPIRED_MESSAGE = `Debes conectarte a internet al menos una vez cada ${OFFLINE_SESSION_MAX_DAYS} dias para continuar usando MOVOPos.`;
@@ -293,8 +294,14 @@ function RootApp() {
     try {
       if (APP_AUTH_DEBUG) console.log('[App] initializeApp() start');
       // Hard reset local one-shot: borra SQLite + session storage para iniciar en cero.
-      const hardResetDone = await SecureStore.getItemAsync(LOCAL_HARD_RESET_ONCE_KEY);
-      if (hardResetDone !== '1') {
+      const hardResetState = await SecureStore.getItemAsync(LOCAL_HARD_RESET_STATE_KEY);
+      const hardResetAlreadyStarted = hardResetState === 'started' || hardResetState === 'done';
+      if (hardResetState === 'started') {
+        // Si un arranque previo se interrumpió antes de marcar done, no repetir wipe destructivo.
+        await SecureStore.setItemAsync(LOCAL_HARD_RESET_STATE_KEY, 'done');
+      }
+      if (!hardResetAlreadyStarted) {
+        await SecureStore.setItemAsync(LOCAL_HARD_RESET_STATE_KEY, 'started');
         try {
           await syncService.destroy();
           await db.destroy();
@@ -342,6 +349,7 @@ function RootApp() {
         }
 
         await SecureStore.setItemAsync(LOCAL_HARD_RESET_ONCE_KEY, '1');
+        await SecureStore.setItemAsync(LOCAL_HARD_RESET_STATE_KEY, 'done');
       }
 
       // Inicializar base de datos

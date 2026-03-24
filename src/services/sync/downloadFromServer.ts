@@ -5,6 +5,7 @@ import { normalizeCustomerVisualId } from '../../utils/customerLabels';
 
 const DETAIL_FETCH_BATCH_SIZE = 8;
 const DOWNLOAD_TIMEOUT_MS = 30000;
+const PAGED_TAKE = 200;
 
 function chunkArray<T>(items: T[], chunkSize: number): T[][] {
   if (chunkSize <= 0) return [items];
@@ -73,12 +74,140 @@ async function fetchDetailsInBatches<T>(
   return details;
 }
 
+function extractListPayload(payload: any): any[] {
+  if (Array.isArray(payload?.data)) return payload.data;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function extractNextSkip(payload: any): number | null {
+  const raw = payload?.nextSkip;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function extractNextCursor(payload: any): string | null {
+  const raw = payload?.nextCursor;
+  if (raw === null || raw === undefined || raw === '') return null;
+  return String(raw);
+}
+
+async function setSyncMetadataValue(key: string, value: string): Promise<void> {
+  await db.runAsync(
+    `INSERT OR REPLACE INTO sync_metadata (key, value, updated_at) VALUES (?, ?, ?)`,
+    [key, value, Date.now()]
+  );
+}
+
+async function fetchAllWithSkip(endpoint: string, headers: Record<string, string>, take: number = PAGED_TAKE): Promise<any[]> {
+  const rows: any[] = [];
+  let skip = 0;
+  while (true) {
+    const response = await axios.get(`${API_URL}/api/${endpoint}`, {
+      headers,
+      params: { skip, take },
+      timeout: DOWNLOAD_TIMEOUT_MS,
+    });
+    const payload = response.data;
+    const batch = extractListPayload(payload);
+    rows.push(...batch);
+    if (SYNC_DEBUG) {
+      console.log('[SyncService] fetchAllWithSkip page', {
+        endpoint,
+        skip,
+        take,
+        count: batch.length,
+        nextSkip: extractNextSkip(payload),
+      });
+    }
+    const nextSkip = extractNextSkip(payload);
+    if (nextSkip === null) {
+      if (batch.length < take) break;
+      skip += take;
+    } else {
+      if (nextSkip <= skip) break;
+      skip = nextSkip;
+    }
+  }
+  return rows;
+}
+
+async function fetchAllWithCursor(endpoint: string, headers: Record<string, string>, take: number = PAGED_TAKE): Promise<any[]> {
+  const rows: any[] = [];
+  let cursor: string | null = null;
+  while (true) {
+    const response = await axios.get(`${API_URL}/api/${endpoint}`, {
+      headers,
+      params: cursor ? { cursor, take } : { take },
+      timeout: DOWNLOAD_TIMEOUT_MS,
+    });
+    const payload = response.data;
+    const batch = extractListPayload(payload);
+    rows.push(...batch);
+    const nextCursor = extractNextCursor(payload);
+    if (SYNC_DEBUG) {
+      console.log('[SyncService] fetchAllWithCursor page', {
+        endpoint,
+        cursor,
+        take,
+        count: batch.length,
+        nextCursor,
+      });
+    }
+    if (!nextCursor) {
+      if (batch.length < take) break;
+      break;
+    }
+    if (nextCursor === cursor) break;
+    cursor = nextCursor;
+  }
+  return rows;
+}
+
+async function markMissingServerRowsAsInactive(table: 'products' | 'customers' | 'categories' | 'suppliers', serverIds: Set<string>) {
+  const placeholders = Array.from(serverIds);
+  if (placeholders.length === 0) {
+    await db.runAsync(
+      `UPDATE ${table}
+       SET is_available_for_sale = 0
+       WHERE server_id IS NOT NULL AND COALESCE(is_available_for_sale, 1) != 0`
+    );
+    return;
+  }
+
+  const inClause = placeholders.map(() => '?').join(', ');
+  await db.runAsync(
+    `UPDATE ${table}
+     SET is_available_for_sale = 0
+     WHERE server_id IS NOT NULL
+       AND server_id NOT IN (${inClause})
+       AND COALESCE(is_available_for_sale, 1) != 0`,
+    placeholders
+  );
+}
+
 export async function downloadFromServer(options: {
   authToken: string;
   getTokenFn: (() => Promise<string | null>) | null;
   getSubUserTokenFn: (() => Promise<string | null>) | null;
 }): Promise<void> {
   const { authToken, getTokenFn, getSubUserTokenFn } = options;
+  const failedEntities: Array<{ entity: string; error: string }> = [];
+  const successfulEntities: string[] = [];
+
+  const runEntityTask = async (entity: string, task: () => Promise<void>) => {
+    try {
+      await task();
+      successfulEntities.push(entity);
+    } catch (error) {
+      const summary = String(summarizeError(error));
+      failedEntities.push({ entity, error: summary });
+      console.error(`[SyncService] downloadFromServer() fallo en entidad ${entity}:`, summary);
+    }
+  };
+
   try {
     // Obtener token de Clerk
     let clerkToken = authToken;
@@ -144,93 +273,100 @@ export async function downloadFromServer(options: {
     }
 
     // Descargar productos
-    const productsResponse = await axios.get(`${API_URL}/api/products`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    
-    if (SYNC_DEBUG) {
-      console.log('✅ [SyncService] Productos descargados:', productsResponse.data?.data?.length || productsResponse.data?.length || 0);
-    }
-    
-    const products = productsResponse.data?.data || productsResponse.data || [];
-    
-    for (const product of products) {
-      const exists = await db.queryFirst(
-        'SELECT 1 FROM products WHERE server_id = ? LIMIT 1',
-        [product.id]
-      );
-      
-      const productData = {
-        name: product.name,
-        sku: product.sku,
-        cost_cents: product.costCents || Math.round((product.cost || 0) * 100),
-        price_cents: product.priceCents || Math.round((product.price || 0) * 100),
-        stock: product.stock || 0,
-        is_available_for_sale: typeof product.isAvailableForSale === 'boolean' ? (product.isAvailableForSale ? 1 : 0) : 1,
-        synced: 1,
-        data: JSON.stringify(product),
-      };
-      
-      if (exists) {
-        await db.update('products', product.id, productData, 'server_id');
-      } else {
-        await db.insert('products', {
-          local_id: `server_${product.id}`,
-          server_id: product.id,
-          ...productData,
-        });
+    await runEntityTask('products', async () => {
+      const productsResponse = await axios.get(`${API_URL}/api/products`, {
+        headers,
+        timeout: DOWNLOAD_TIMEOUT_MS,
+      });
+
+      if (SYNC_DEBUG) {
+        console.log('✅ [SyncService] Productos descargados:', productsResponse.data?.data?.length || productsResponse.data?.length || 0);
       }
-    }
+
+      const products = productsResponse.data?.data || productsResponse.data || [];
+      const serverProductIds = new Set<string>();
+
+      for (const product of products) {
+        const productId = String(product?.id || '').trim();
+        if (!productId) continue;
+        serverProductIds.add(productId);
+
+        const exists = await db.queryFirst(
+          'SELECT 1 FROM products WHERE server_id = ? LIMIT 1',
+          [product.id]
+        );
+
+        const productData = {
+          name: product.name,
+          sku: product.sku,
+          cost_cents: product.costCents || Math.round((product.cost || 0) * 100),
+          price_cents: product.priceCents || Math.round((product.price || 0) * 100),
+          stock: product.stock || 0,
+          is_available_for_sale: typeof product.isAvailableForSale === 'boolean' ? (product.isAvailableForSale ? 1 : 0) : 1,
+          synced: 1,
+          data: JSON.stringify(product),
+        };
+
+        if (exists) {
+          await db.update('products', product.id, productData, 'server_id');
+        } else {
+          await db.insert('products', {
+            local_id: `server_${product.id}`,
+            server_id: product.id,
+            ...productData,
+          });
+        }
+      }
+
+      await markMissingServerRowsAsInactive('products', serverProductIds);
+    });
 
     // Descargar clientes
-    const customersResponse = await axios.get(`${API_URL}/api/customers`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    if (SYNC_DEBUG) {
-      console.log('[SyncService] downloadFromServer() customers status', {
-        status: customersResponse.status,
-        count: (customersResponse.data?.data || customersResponse.data || []).length,
-      });
-    }
-    
-    const customers = customersResponse.data?.data || customersResponse.data || [];
-    
-    for (const customer of customers) {
-      const exists = await db.queryFirst(
-        'SELECT 1 FROM customers WHERE server_id = ? LIMIT 1',
-        [customer.id]
-      );
-      
-      const customerData = {
-        visual_id: normalizeCustomerVisualId(customer.visualId ?? customer.id_visual),
-        name: customer.name,
-        phone: customer.phone || null,
-        synced: 1,
-        data: JSON.stringify(customer),
-      };
-      
-      if (exists) {
-        await db.update('customers', customer.id, customerData, 'server_id');
-      } else {
-        await db.insert('customers', {
-          local_id: `server_${customer.id}`,
-          server_id: customer.id,
-          ...customerData,
-        });
+    await runEntityTask('customers', async () => {
+      const customers = await fetchAllWithCursor('customers', headers);
+      const serverCustomerIds = new Set<string>();
+
+      for (const customer of customers) {
+        const customerId = String(customer?.id || '').trim();
+        if (!customerId) continue;
+        serverCustomerIds.add(customerId);
+
+        const exists = await db.queryFirst(
+          'SELECT 1 FROM customers WHERE server_id = ? LIMIT 1',
+          [customer.id]
+        );
+
+        const customerData = {
+          visual_id: normalizeCustomerVisualId(customer.visualId ?? customer.id_visual),
+          name: customer.name,
+          phone: customer.phone || null,
+          is_available_for_sale: 1,
+          synced: 1,
+          data: JSON.stringify(customer),
+        };
+
+        if (exists) {
+          await db.update('customers', customer.id, customerData, 'server_id');
+        } else {
+          await db.insert('customers', {
+            local_id: `server_${customer.id}`,
+            server_id: customer.id,
+            ...customerData,
+          });
+        }
       }
-    }
+
+      await markMissingServerRowsAsInactive('customers', serverCustomerIds);
+    });
 
     // Descargar proveedores
-    const suppliersResponse = await axios.get(`${API_URL}/api/suppliers`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    const suppliers = suppliersResponse.data?.data || suppliersResponse.data || [];
-    for (const supplier of suppliers) {
+    await runEntityTask('suppliers', async () => {
+      const suppliers = await fetchAllWithCursor('suppliers', headers);
+      const serverSupplierIds = new Set<string>();
+      for (const supplier of suppliers) {
       const supplierId = String(supplier?.id || '');
       if (!supplierId) continue;
+      serverSupplierIds.add(supplierId);
 
       const supplierData = {
         id: supplierId,
@@ -254,6 +390,7 @@ export async function downloadFromServer(options: {
         discount_percent_bp: supplierData.discountPercentBp,
         charges_itbis: supplierData.chargesItbis ? 1 : 0,
         itbis_rate_bp: supplierData.itbisRateBp,
+        is_available_for_sale: 1,
         synced: 1,
         data: JSON.stringify(supplierData),
       };
@@ -271,17 +408,19 @@ export async function downloadFromServer(options: {
           ...supplierRow,
         });
       }
-    }
+      }
+
+      await markMissingServerRowsAsInactive('suppliers', serverSupplierIds);
+    });
 
     // Descargar categorias
-    const categoriesResponse = await axios.get(`${API_URL}/api/categories`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    const categories = categoriesResponse.data?.data || categoriesResponse.data || [];
-    for (const category of categories) {
+    await runEntityTask('categories', async () => {
+      const categories = await fetchAllWithCursor('categories', headers);
+      const serverCategoryIds = new Set<string>();
+      for (const category of categories) {
       const categoryServerId = String(category?.id || '');
       if (!categoryServerId) continue;
+      serverCategoryIds.add(categoryServerId);
 
       const categoryData = {
         id: categoryServerId,
@@ -296,6 +435,7 @@ export async function downloadFromServer(options: {
       const categoryRow = {
         name: categoryData.name,
         description: categoryData.description,
+        is_available_for_sale: 1,
         synced: 1,
         data: JSON.stringify(categoryData),
       };
@@ -313,58 +453,51 @@ export async function downloadFromServer(options: {
           ...categoryRow,
         });
       }
-    }
+      }
+
+      await markMissingServerRowsAsInactive('categories', serverCategoryIds);
+    });
 
     // Descargar ventas/facturas
-    const salesResponse = await axios.get(`${API_URL}/api/sales`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    if (SYNC_DEBUG) {
-      console.log('[SyncService] downloadFromServer() sales status', {
-        status: salesResponse.status,
-        count: (salesResponse.data?.data || salesResponse.data || []).length,
-      });
-    }
-
-    const sales = salesResponse.data?.data || salesResponse.data || [];
-    const salesById = new Map<string, any>();
-    for (const sale of sales) {
-      const saleId = String(sale?.id || '').trim();
-      if (saleId) salesById.set(saleId, sale);
-    }
-    const saleIds: string[] = sales
-      .map((sale: any) => String(sale?.id || '').trim())
-      .filter((id: string): id is string => Boolean(id));
-    const localSalesByServerId = await loadLocalDataByServerId('sales', saleIds);
-
-    const saleIdsMissingItems = saleIds.filter((saleId) => {
-      const saleSummary = salesById.get(saleId);
-      const summaryHasItems = Array.isArray(saleSummary?.items) && saleSummary.items.length > 0;
-      const localSale = localSalesByServerId.get(saleId);
-      const localHasItems = Array.isArray(localSale?.items) && localSale.items.length > 0;
-      return !summaryHasItems && !localHasItems;
-    });
-
-    const saleDetailsById = await fetchDetailsInBatches<any>(saleIdsMissingItems, async (saleId) => {
-      try {
-        const detailResponse = await axios.get(`${API_URL}/api/sales/${saleId}`, {
-          headers,
-          timeout: DOWNLOAD_TIMEOUT_MS,
-        });
-        return detailResponse.data || null;
-      } catch (error) {
-        if (SYNC_DEBUG) {
-          console.warn('[SyncService] No se pudo descargar detalle de factura', {
-            saleId,
-            error: summarizeError(error),
-          });
-        }
-        return null;
+    await runEntityTask('sales', async () => {
+      const sales = await fetchAllWithSkip('sales', headers);
+      const salesById = new Map<string, any>();
+      for (const sale of sales) {
+        const saleId = String(sale?.id || '').trim();
+        if (saleId) salesById.set(saleId, sale);
       }
-    });
+      const saleIds: string[] = sales
+        .map((sale: any) => String(sale?.id || '').trim())
+        .filter((id: string): id is string => Boolean(id));
+      const localSalesByServerId = await loadLocalDataByServerId('sales', saleIds);
 
-    for (const sale of sales) {
+      const saleIdsMissingItems = saleIds.filter((saleId) => {
+        const saleSummary = salesById.get(saleId);
+        const summaryHasItems = Array.isArray(saleSummary?.items) && saleSummary.items.length > 0;
+        const localSale = localSalesByServerId.get(saleId);
+        const localHasItems = Array.isArray(localSale?.items) && localSale.items.length > 0;
+        return !summaryHasItems && !localHasItems;
+      });
+
+      const saleDetailsById = await fetchDetailsInBatches<any>(saleIdsMissingItems, async (saleId) => {
+        try {
+          const detailResponse = await axios.get(`${API_URL}/api/sales/${saleId}`, {
+            headers,
+            timeout: DOWNLOAD_TIMEOUT_MS,
+          });
+          return detailResponse.data || null;
+        } catch (error) {
+          if (SYNC_DEBUG) {
+            console.warn('[SyncService] No se pudo descargar detalle de factura', {
+              saleId,
+              error: summarizeError(error),
+            });
+          }
+          return null;
+        }
+      });
+
+      for (const sale of sales) {
       const saleId = String(sale?.id || '').trim();
       if (!saleId) continue;
 
@@ -466,15 +599,13 @@ export async function downloadFromServer(options: {
           ...saleRow,
         });
       }
-    }
+      }
+    });
 
     // Descargar devoluciones
-    const returnsResponse = await axios.get(`${API_URL}/api/returns`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    const returnsRows = returnsResponse.data?.data || returnsResponse.data || [];
-    for (const ret of returnsRows) {
+    await runEntityTask('returns', async () => {
+      const returnsRows = await fetchAllWithSkip('returns', headers);
+      for (const ret of returnsRows) {
       const returnServerId = String(ret?.id || '');
       if (!returnServerId) continue;
 
@@ -584,58 +715,49 @@ export async function downloadFromServer(options: {
           }),
         });
       }
-    }
-
-    // Descargar cotizaciones
-    const quotesResponse = await axios.get(`${API_URL}/api/quotes`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    if (SYNC_DEBUG) {
-      console.log('[SyncService] downloadFromServer() quotes status', {
-        status: quotesResponse.status,
-        count: (quotesResponse.data?.data || quotesResponse.data || []).length,
-      });
-    }
-
-    const quotes = quotesResponse.data?.data || quotesResponse.data || [];
-    const quotesById = new Map<string, any>();
-    for (const quote of quotes) {
-      const quoteId = String(quote?.id || '').trim();
-      if (quoteId) quotesById.set(quoteId, quote);
-    }
-    const quoteIds: string[] = quotes
-      .map((quote: any) => String(quote?.id || '').trim())
-      .filter((id: string): id is string => Boolean(id));
-    const localQuotesByServerId = await loadLocalDataByServerId('quotes', quoteIds);
-
-    const quoteIdsMissingItems = quoteIds.filter((quoteId) => {
-      const quoteSummary = quotesById.get(quoteId);
-      const summaryHasItems = Array.isArray(quoteSummary?.items) && quoteSummary.items.length > 0;
-      const localQuote = localQuotesByServerId.get(quoteId);
-      const localHasItems = Array.isArray(localQuote?.items) && localQuote.items.length > 0;
-      return !summaryHasItems && !localHasItems;
-    });
-
-    const quoteDetailsById = await fetchDetailsInBatches<any>(quoteIdsMissingItems, async (quoteId) => {
-      try {
-        const detailResponse = await axios.get(`${API_URL}/api/quotes/${quoteId}`, {
-          headers,
-          timeout: DOWNLOAD_TIMEOUT_MS,
-        });
-        return detailResponse.data || null;
-      } catch (error) {
-        if (SYNC_DEBUG) {
-          console.warn('[SyncService] No se pudo descargar detalle de cotizacion', {
-            quoteId,
-            error: summarizeError(error),
-          });
-        }
-        return null;
       }
     });
 
-    for (const quote of quotes) {
+    // Descargar cotizaciones
+    await runEntityTask('quotes', async () => {
+      const quotes = await fetchAllWithSkip('quotes', headers);
+      const quotesById = new Map<string, any>();
+      for (const quote of quotes) {
+        const quoteId = String(quote?.id || '').trim();
+        if (quoteId) quotesById.set(quoteId, quote);
+      }
+      const quoteIds: string[] = quotes
+        .map((quote: any) => String(quote?.id || '').trim())
+        .filter((id: string): id is string => Boolean(id));
+      const localQuotesByServerId = await loadLocalDataByServerId('quotes', quoteIds);
+
+      const quoteIdsMissingItems = quoteIds.filter((quoteId) => {
+        const quoteSummary = quotesById.get(quoteId);
+        const summaryHasItems = Array.isArray(quoteSummary?.items) && quoteSummary.items.length > 0;
+        const localQuote = localQuotesByServerId.get(quoteId);
+        const localHasItems = Array.isArray(localQuote?.items) && localQuote.items.length > 0;
+        return !summaryHasItems && !localHasItems;
+      });
+
+      const quoteDetailsById = await fetchDetailsInBatches<any>(quoteIdsMissingItems, async (quoteId) => {
+        try {
+          const detailResponse = await axios.get(`${API_URL}/api/quotes/${quoteId}`, {
+            headers,
+            timeout: DOWNLOAD_TIMEOUT_MS,
+          });
+          return detailResponse.data || null;
+        } catch (error) {
+          if (SYNC_DEBUG) {
+            console.warn('[SyncService] No se pudo descargar detalle de cotizacion', {
+              quoteId,
+              error: summarizeError(error),
+            });
+          }
+          return null;
+        }
+      });
+
+      for (const quote of quotes) {
       const quoteId = String(quote?.id || '').trim();
       if (!quoteId) continue;
 
@@ -720,26 +842,24 @@ export async function downloadFromServer(options: {
           ...quoteRow,
         });
       }
-    }
+      }
+    });
 
     // Descargar compras
-    const purchaseProductRows = await db.query<{ local_id: string; server_id?: string }>(
-      'SELECT local_id, server_id FROM products WHERE server_id IS NOT NULL'
-    );
-    const localProductByServerId = new Map<string, string>();
-    for (const row of purchaseProductRows) {
-      if (row.server_id) {
-        localProductByServerId.set(String(row.server_id), String(row.local_id));
+    await runEntityTask('purchases', async () => {
+      const purchaseProductRows = await db.query<{ local_id: string; server_id?: string }>(
+        'SELECT local_id, server_id FROM products WHERE server_id IS NOT NULL'
+      );
+      const localProductByServerId = new Map<string, string>();
+      for (const row of purchaseProductRows) {
+        if (row.server_id) {
+          localProductByServerId.set(String(row.server_id), String(row.local_id));
+        }
       }
-    }
 
-    const purchasesResponse = await axios.get(`${API_URL}/api/purchases`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    const purchases = purchasesResponse.data?.data || purchasesResponse.data || [];
+      const purchases = await fetchAllWithSkip('purchases', headers);
 
-    for (const purchase of purchases) {
+      for (const purchase of purchases) {
       const purchaseId = String(purchase?.id || '');
       if (!purchaseId) continue;
 
@@ -812,42 +932,44 @@ export async function downloadFromServer(options: {
           ...purchaseRow,
         });
       }
-    }
+      }
+    });
 
     // Descargar cuentas por cobrar (paginado para evitar truncar por take default del backend)
-    const arItems: any[] = [];
-    const arTake = 200;
-    let arSkip = 0;
-    while (true) {
-      const arResponse = await axios.get(`${API_URL}/api/accounts-receivable`, {
-        headers,
-        params: { skip: arSkip, take: arTake },
-        timeout: DOWNLOAD_TIMEOUT_MS,
-      });
-      const batch = arResponse.data?.data || arResponse.data || [];
+    await runEntityTask('accounts_receivable', async () => {
+      const arItems: any[] = [];
+      const arTake = 200;
+      let arSkip = 0;
+      while (true) {
+        const arResponse = await axios.get(`${API_URL}/api/accounts-receivable`, {
+          headers,
+          params: { skip: arSkip, take: arTake },
+          timeout: DOWNLOAD_TIMEOUT_MS,
+        });
+        const batch = arResponse.data?.data || arResponse.data || [];
+        if (SYNC_DEBUG) {
+          console.log('[SyncService] downloadFromServer() AR page status', {
+            status: arResponse.status,
+            skip: arSkip,
+            take: arTake,
+            count: batch.length,
+          });
+        }
+        arItems.push(...batch);
+        if (!Array.isArray(batch) || batch.length < arTake) {
+          break;
+        }
+        arSkip += arTake;
+      }
+
       if (SYNC_DEBUG) {
-        console.log('[SyncService] downloadFromServer() AR page status', {
-          status: arResponse.status,
-          skip: arSkip,
-          take: arTake,
-          count: batch.length,
+        console.log('[SyncService] downloadFromServer() AR total', {
+          count: arItems.length,
         });
       }
-      arItems.push(...batch);
-      if (!Array.isArray(batch) || batch.length < arTake) {
-        break;
-      }
-      arSkip += arTake;
-    }
+      const serverOpenArIds = new Set<string>();
 
-    if (SYNC_DEBUG) {
-      console.log('[SyncService] downloadFromServer() AR total', {
-        count: arItems.length,
-      });
-    }
-    const serverOpenArIds = new Set<string>();
-
-    for (const ar of arItems) {
+      for (const ar of arItems) {
       const arServerId = String(ar.id || '');
       if (!arServerId) continue;
       serverOpenArIds.add(arServerId);
@@ -915,18 +1037,18 @@ export async function downloadFromServer(options: {
           ...arData,
         });
       }
-    }
+      }
 
-    // Cerrar AR locales que estaban abiertas pero ya no existen en la lista de AR abiertas del servidor.
-    // Esto cubre casos de facturas canceladas/pagadas fuera del móvil.
-    const localOpenAr = await db.query<any>(
-      `SELECT local_id, server_id, total_cents, data
-       FROM accounts_receivable
-       WHERE server_id IS NOT NULL
-         AND status IN ('PENDIENTE', 'PARCIAL')`
-    );
+      // Cerrar AR locales que estaban abiertas pero ya no existen en la lista de AR abiertas del servidor.
+      // Esto cubre casos de facturas canceladas/pagadas fuera del móvil.
+      const localOpenAr = await db.query<any>(
+        `SELECT local_id, server_id, total_cents, data
+         FROM accounts_receivable
+         WHERE server_id IS NOT NULL
+           AND status IN ('PENDIENTE', 'PARCIAL')`
+      );
 
-    for (const localAr of localOpenAr) {
+      for (const localAr of localOpenAr) {
       const serverId = String(localAr.server_id || '');
       if (!serverId || serverOpenArIds.has(serverId)) continue;
 
@@ -955,19 +1077,19 @@ export async function downloadFromServer(options: {
           }),
         }
       );
-    }
+      }
 
-    // Reaplicar pagos locales pendientes (create/cancel) para evitar que CxC "reaparezca"
-    // mientras la sincronización de recibos aún no termina.
-    const pendingPaymentRows = await db.query<any>(
-      `SELECT local_id, amount_cents, ar_id, server_id, synced, data
-       FROM payments
-       WHERE ar_id IS NOT NULL
-         AND (synced = 0 OR server_id IS NULL)`
-    );
+      // Reaplicar pagos locales pendientes (create/cancel) para evitar que CxC "reaparezca"
+      // mientras la sincronización de recibos aún no termina.
+      const pendingPaymentRows = await db.query<any>(
+        `SELECT local_id, amount_cents, ar_id, server_id, synced, data
+         FROM payments
+         WHERE ar_id IS NOT NULL
+           AND (synced = 0 OR server_id IS NULL)`
+      );
 
-    const pendingAdjustmentByArLocalId = new Map<string, number>();
-    for (const paymentRow of pendingPaymentRows) {
+      const pendingAdjustmentByArLocalId = new Map<string, number>();
+      for (const paymentRow of pendingPaymentRows) {
       const arLocalId = paymentRow?.ar_id ? String(paymentRow.ar_id) : '';
       if (!arLocalId) continue;
 
@@ -992,9 +1114,9 @@ export async function downloadFromServer(options: {
         arLocalId,
         Number(pendingAdjustmentByArLocalId.get(arLocalId) || 0) + delta
       );
-    }
+      }
 
-    for (const [arLocalId, pendingDeltaCents] of pendingAdjustmentByArLocalId.entries()) {
+      for (const [arLocalId, pendingDeltaCents] of pendingAdjustmentByArLocalId.entries()) {
       if (!pendingDeltaCents) continue;
       const arRow = await db.queryFirst<any>(
         `SELECT local_id, total_cents, paid_cents, balance_cents, status, data
@@ -1036,23 +1158,13 @@ export async function downloadFromServer(options: {
           }),
         }
       );
-    }
+      }
+    });
 
     // Descargar recibos de pago (incluye cancelados para historial)
-    const paymentsResponse = await axios.get(`${API_URL}/api/payments`, {
-      headers,
-      params: { take: 500 },
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    if (SYNC_DEBUG) {
-      console.log('[SyncService] downloadFromServer() payments status', {
-        status: paymentsResponse.status,
-        count: (paymentsResponse.data?.data || paymentsResponse.data || []).length,
-      });
-    }
-
-    const payments = paymentsResponse.data?.data || paymentsResponse.data || [];
-    for (const payment of payments) {
+    await runEntityTask('payments', async () => {
+      const payments = await fetchAllWithSkip('payments', headers);
+      for (const payment of payments) {
       const serverPaymentId = String(payment?.id || '');
       if (!serverPaymentId) continue;
 
@@ -1134,15 +1246,13 @@ export async function downloadFromServer(options: {
         server_id: serverPaymentId,
         ...paymentRow,
       });
-    }
+      }
+    });
 
     // Descargar gastos operativos
-    const operatingExpensesResponse = await axios.get(`${API_URL}/api/operating-expenses`, {
-      headers,
-      timeout: DOWNLOAD_TIMEOUT_MS,
-    });
-    const operatingExpenses = operatingExpensesResponse.data?.data || operatingExpensesResponse.data || [];
-    for (const expense of operatingExpenses) {
+    await runEntityTask('operating_expenses', async () => {
+      const operatingExpenses = await fetchAllWithSkip('operating-expenses', headers);
+      for (const expense of operatingExpenses) {
       const expenseId = String(expense?.id || '');
       if (!expenseId) continue;
       const expenseDateMs =
@@ -1189,6 +1299,16 @@ export async function downloadFromServer(options: {
           ...expenseRow,
         });
       }
+      }
+    });
+
+    const status = failedEntities.length > 0 ? 'partial' : 'success';
+    await setSyncMetadataValue('last_download_status', status);
+    await setSyncMetadataValue('failed_entities', JSON.stringify(failedEntities));
+    await setSyncMetadataValue('last_download_attempt_at', String(Date.now()));
+    await setSyncMetadataValue('last_download_successful_entities', JSON.stringify(successfulEntities));
+    if (failedEntities.length === 0) {
+      await setSyncMetadataValue('last_successful_download_at', String(Date.now()));
     }
   } catch (error: any) {
     console.error('❌ [SyncService] Error descargando datos del servidor:', error);
@@ -1196,6 +1316,12 @@ export async function downloadFromServer(options: {
       console.error('❌ [SyncService] Status:', error.response.status);
       console.error('❌ [SyncService] Data:', error.response.data);
     }
+    await setSyncMetadataValue('last_download_status', 'error');
+    await setSyncMetadataValue('failed_entities', JSON.stringify([
+      ...failedEntities,
+      { entity: 'downloadFromServer', error: summarizeError(error) },
+    ]));
+    await setSyncMetadataValue('last_download_attempt_at', String(Date.now()));
     throw error;
   }
 }

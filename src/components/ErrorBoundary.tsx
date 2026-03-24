@@ -4,6 +4,7 @@ import { reportError } from '../services/error/errorReporter';
 
 type ErrorBoundaryProps = {
   children: React.ReactNode;
+  boundaryName?: string;
 };
 
 type ErrorBoundaryState = {
@@ -33,7 +34,10 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     void reportError(error, {
       code: 'UNHANDLED_ERROR',
       severity: 'CRITICAL',
-      metadata: { componentStack: errorInfo?.componentStack },
+      metadata: {
+        componentStack: errorInfo?.componentStack,
+        boundaryName: this.props.boundaryName || null,
+      },
       isFatal: true,
     });
   }
@@ -53,6 +57,9 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     return (
       <View style={styles.container}>
         <Text style={styles.title}>Algo salio mal</Text>
+        {this.props.boundaryName ? (
+          <Text style={styles.boundaryName}>{this.props.boundaryName}</Text>
+        ) : null}
         <Text style={styles.message}>
           {this.state.errorMessage || 'La aplicacion encontro un error inesperado.'}
         </Text>
@@ -77,6 +84,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#111',
     marginBottom: 8,
+  },
+  boundaryName: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginBottom: 8,
+    textAlign: 'center',
   },
   message: {
     fontSize: 14,
