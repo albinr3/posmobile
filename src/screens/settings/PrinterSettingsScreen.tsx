@@ -102,6 +102,7 @@ async function cacheCompanySettingsSnapshot(data: CompanySettingsData): Promise<
 }
 
 export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps) {
+  const SHOW_LOCAL_DB_RESET_BUTTON = false;
   const { getToken } = useAuth();
   const { isOnline } = useSyncStore();
   const { setBiometricEnabled, subUserToken, accountId } = useAuthStore();
@@ -1025,24 +1026,26 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
 
         <Divider style={styles.divider} />
 
-        <Surface style={styles.dangerSection}>
-          <Text style={styles.dangerTitle}>Datos Locales</Text>
-          <Text style={styles.dangerDescription}>
-            Borra toda la base de datos local de este celular y vuelve a empezar desde cero con lo que llegue de la API.
-          </Text>
-          <Button
-            mode="contained"
-            buttonColor="#B91C1C"
-            textColor="#fff"
-            icon="database-remove"
-            loading={resettingData}
-            disabled={resettingData}
-            onPress={handleResetLocalData}
-            style={styles.dangerButton}
-          >
-            {resettingData ? 'Reiniciando...' : 'Borrar base local'}
-          </Button>
-        </Surface>
+        {SHOW_LOCAL_DB_RESET_BUTTON ? (
+          <Surface style={styles.dangerSection}>
+            <Text style={styles.dangerTitle}>Datos Locales</Text>
+            <Text style={styles.dangerDescription}>
+              Borra toda la base de datos local de este celular y vuelve a empezar desde cero con lo que llegue de la API.
+            </Text>
+            <Button
+              mode="contained"
+              buttonColor="#B91C1C"
+              textColor="#fff"
+              icon="database-remove"
+              loading={resettingData}
+              disabled={resettingData}
+              onPress={handleResetLocalData}
+              style={styles.dangerButton}
+            >
+              {resettingData ? 'Reiniciando...' : 'Borrar base local'}
+            </Button>
+          </Surface>
+        ) : null}
       </ScrollView>
     </SafeAreaView>
   );
