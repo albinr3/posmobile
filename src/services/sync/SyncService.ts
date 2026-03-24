@@ -7,6 +7,7 @@ import { reportError } from '../error/errorReporter';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
 import { prepareSyncRequestData } from './prepareSyncRequestData';
 import { downloadFromServer } from './downloadFromServer';
+import { capturePhase0SyncBaselineSnapshot } from './syncBaseline';
 
 class SyncService {
   private isSyncing = false;
@@ -107,6 +108,10 @@ class SyncService {
     } catch (error) {
       console.error('Error en sincronización incremental:', error);
     }
+  }
+
+  async capturePhase0Baseline(label: string = 'manual') {
+    return capturePhase0SyncBaselineSnapshot(label);
   }
 
   async queueOperation(entityType: string, action: string, data: any, localId: string) {
