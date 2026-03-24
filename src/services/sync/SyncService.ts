@@ -1169,9 +1169,21 @@ class SyncService {
       (error.response.data.error.includes('producto inválido') ||
         error.response.data.error.includes('producto invalido') ||
         error.response.data.error.includes('inactivo'));
+    const duplicateSkuConflict =
+      item?.entity_type === 'product' &&
+      item?.action === 'create' &&
+      axios.isAxiosError(error) &&
+      backendStatus === 409 &&
+      backendErrorMessage.includes('sku') &&
+      (
+        backendErrorMessage.includes('ya existe') ||
+        backendErrorMessage.includes('ya está en uso') ||
+        backendErrorMessage.includes('ya esta en uso') ||
+        backendErrorMessage.includes('duplicate')
+      );
     const localBusinessError =
       typeof error?.message === 'string' && error.message.includes('Producto inactivo en carrito');
-    if (backendBusinessError || localBusinessError) {
+    if (backendBusinessError || localBusinessError || duplicateSkuConflict) {
       const errorCode = this.deriveErrorCode(error);
       await db.update(
         'sync_queue',
@@ -1184,7 +1196,11 @@ class SyncService {
         },
         'id'
       );
-      console.warn(`Sync detenido por validacion de negocio (${item.entity_type} #${item.id}).`);
+      if (duplicateSkuConflict) {
+        console.warn(`Sync detenido por SKU duplicado (${item.entity_type} #${item.id}).`);
+      } else {
+        console.warn(`Sync detenido por validacion de negocio (${item.entity_type} #${item.id}).`);
+      }
       return false;
     }
 

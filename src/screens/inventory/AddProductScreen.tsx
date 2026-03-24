@@ -24,6 +24,11 @@ interface OptionItem {
   internalId?: string | null;
 }
 
+type DuplicateSkuInfo = {
+  sku: string;
+  productName: string;
+};
+
 const CREATE_PRODUCT_KIND_OPTIONS: Array<{ value: MobileProductKind; label: string }> = [
   { value: 'BASIC', label: 'Básico' },
   { value: 'MEASURED', label: 'Con medida' },
@@ -70,6 +75,111 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
   const activeUnit = productKind === 'MEASURED' ? unit : 'UNIDAD';
   const stockStep = unitAllowsDecimals(activeUnit) ? 0.5 : 1;
+
+  const findDuplicateSkuLocally = useCallback(async (rawSku: string): Promise<DuplicateSkuInfo | null> => {
+    const normalizedSku = String(rawSku || '').trim();
+    if (!normalizedSku) return null;
+    const existing = await db.queryFirst<{ name?: string; sku?: string }>(
+      `SELECT name, sku
+       FROM products
+       WHERE sku IS NOT NULL
+         AND TRIM(sku) <> ''
+         AND LOWER(TRIM(sku)) = LOWER(?)
+       LIMIT 1`,
+      [normalizedSku]
+    );
+    if (!existing?.name) return null;
+    return {
+      sku: existing.sku ? String(existing.sku).trim() : normalizedSku,
+      productName: String(existing.name).trim(),
+    };
+  }, []);
+
+  const findDuplicateSkuInApi = useCallback(async (rawSku: string): Promise<DuplicateSkuInfo | null> => {
+    const normalizedSku = String(rawSku || '').trim();
+    if (!normalizedSku || !subUserToken) return null;
+    const clerkToken = await getToken();
+    if (!clerkToken) return null;
+
+    const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+    try {
+      const response = await axios.get(`${API_URL}/api/products`, {
+        params: { query: normalizedSku, take: 25 },
+        headers: {
+          Authorization: `Bearer ${clerkToken}`,
+          'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+          'X-SubUser-Token': subUserToken,
+          ...(accountId ? { 'X-Account-Id': accountId } : {}),
+        },
+        timeout: 10000,
+      });
+      const list = Array.isArray(response.data?.data)
+        ? response.data.data
+        : Array.isArray(response.data)
+          ? response.data
+          : [];
+      const match = list.find((item: any) => String(item?.sku || '').trim().toLowerCase() === normalizedSku.toLowerCase());
+      if (!match) return null;
+      return {
+        sku: String(match?.sku || normalizedSku).trim(),
+        productName: String(match?.name || '').trim(),
+      };
+    } catch (error) {
+      console.warn('No se pudo validar SKU duplicado contra API:', error);
+      return null;
+    }
+  }, [accountId, getToken, subUserToken]);
+
+  const parseDuplicateSkuFromApiError = useCallback((error: unknown): DuplicateSkuInfo | null => {
+    if (!axios.isAxiosError(error)) return null;
+    const status = Number(error.response?.status || 0);
+    if (status !== 409 && status !== 400 && status !== 422 && status !== 500) return null;
+
+    const responseData = error.response?.data || {};
+    const message = String(
+      responseData?.error ||
+      responseData?.message ||
+      error.message ||
+      ''
+    );
+    const lowered = message.toLowerCase();
+    const skuMentioned = lowered.includes('sku');
+    const duplicateMentioned = lowered.includes('duplic') || lowered.includes('ya existe') || lowered.includes('ya está en uso');
+    if (!skuMentioned || !duplicateMentioned) return null;
+
+    const existingProduct =
+      responseData?.existingProduct ||
+      responseData?.data?.existingProduct ||
+      null;
+    const apiSku = String(
+      existingProduct?.sku ||
+      responseData?.sku ||
+      ''
+    ).trim();
+    const apiName = String(
+      existingProduct?.name ||
+      responseData?.existingProductName ||
+      ''
+    ).trim();
+
+    const extractedSku = (() => {
+      if (apiSku) return apiSku;
+      const quotedMatch = message.match(/SKU\s*"([^"]+)"/i) || message.match(/SKU\s*'([^']+)'/i);
+      return quotedMatch?.[1] ? String(quotedMatch[1]).trim() : String(sku || '').trim();
+    })();
+
+    const extractedName = (() => {
+      if (apiName) return apiName;
+      const namedProductMatch = message.match(/\(([^)]+)\)/);
+      if (namedProductMatch?.[1]) return String(namedProductMatch[1]).trim();
+      return '';
+    })();
+
+    return {
+      sku: extractedSku || String(sku || '').trim(),
+      productName: extractedName,
+    };
+  }, [sku]);
 
   const resolveNextIdFromResponse = (payload: any): string | null => {
     const source = payload?.data ?? payload;
@@ -318,6 +428,34 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
     savingRef.current = true;
     setLoading(true);
     try {
+      const normalizedSku = sku.trim();
+      if (normalizedSku) {
+        const localDuplicate = await findDuplicateSkuLocally(normalizedSku);
+        if (localDuplicate) {
+          Alert.alert(
+            'SKU duplicado',
+            `El SKU "${localDuplicate.sku}" ya existe y pertenece al producto "${localDuplicate.productName}".`
+          );
+          return;
+        }
+
+        const apiDuplicate = await findDuplicateSkuInApi(normalizedSku);
+        if (apiDuplicate) {
+          if (apiDuplicate.productName) {
+            Alert.alert(
+              'SKU duplicado',
+              `El SKU "${apiDuplicate.sku}" ya existe y pertenece al producto "${apiDuplicate.productName}".`
+            );
+          } else {
+            Alert.alert(
+              'SKU duplicado',
+              `El SKU "${apiDuplicate.sku}" ya existe. Usa otro código o déjalo vacío.`
+            );
+          }
+          return;
+        }
+      }
+
       const localId = generateLocalId();
       const costCents = Math.round(parseFloat(cost) * 100);
       const priceCents = Math.round(parseFloat(price) * 100);
@@ -360,7 +498,22 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       Alert.alert('Éxito', 'Producto guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {
       console.error('Error guardando producto:', error);
-      Alert.alert('Error', 'No se pudo guardar el producto');
+      const duplicateFromApi = parseDuplicateSkuFromApiError(error);
+      if (duplicateFromApi) {
+        if (duplicateFromApi.productName) {
+          Alert.alert(
+            'SKU duplicado',
+            `El SKU "${duplicateFromApi.sku}" ya existe y pertenece al producto "${duplicateFromApi.productName}".`
+          );
+        } else {
+          Alert.alert(
+            'SKU duplicado',
+            `El SKU "${duplicateFromApi.sku}" ya existe. Usa otro código o déjalo vacío.`
+          );
+        }
+      } else {
+        Alert.alert('Error', 'No se pudo guardar el producto');
+      }
     } finally {
       setLoading(false);
       savingRef.current = false;

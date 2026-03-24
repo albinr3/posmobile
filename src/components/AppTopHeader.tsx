@@ -17,6 +17,7 @@ type BillingStateResponse = {
   provider?: string;
   daysRemaining?: number | null;
   trialDaysRemaining: number | null;
+  graceDaysRemaining?: number | null;
 };
 
 type BillingStateCacheEntry = {
@@ -282,14 +283,26 @@ export function AppTopHeader() {
 
     if (billingState.isTrialing) {
       const days = Number(billingState.trialDaysRemaining ?? 0);
-      if (days <= 0) return { message: 'Tu prueba vence hoy.', actionLabel: 'Elegir plan' };
-      if (days === 1) return { message: 'Te queda 1 día de prueba.', actionLabel: 'Elegir plan' };
-      return { message: `Te quedan ${days} días de prueba.`, actionLabel: 'Elegir plan' };
+      if (days <= 0) return { message: 'Tu prueba vence hoy.', actionLabel: 'Elegir plan', backgroundColor: '#F59E0B' };
+      if (days === 1) return { message: 'Te queda 1 día de prueba.', actionLabel: 'Elegir plan', backgroundColor: '#F59E0B' };
+      return { message: `Te quedan ${days} días de prueba.`, actionLabel: 'Elegir plan', backgroundColor: '#F59E0B' };
     }
 
     const status = String(billingState.status || '').toUpperCase();
     const provider = String(billingState.provider || '').toUpperCase();
     const daysRemaining = Number(billingState.daysRemaining ?? NaN);
+
+    if (status === 'GRACE') {
+      const graceDays = Number(billingState.graceDaysRemaining ?? billingState.daysRemaining ?? 0);
+      if (graceDays <= 0) {
+        return { message: 'Tu período de gracia termina hoy antes del bloqueo.', actionLabel: 'Pagar ahora', backgroundColor: '#f97316' };
+      }
+      if (graceDays === 1) {
+        return { message: 'Te queda 1 día de gracia antes del bloqueo.', actionLabel: 'Pagar ahora', backgroundColor: '#f97316' };
+      }
+      return { message: `Te quedan ${graceDays} días de gracia antes del bloqueo.`, actionLabel: 'Pagar ahora', backgroundColor: '#f97316' };
+    }
+
     const isManualDueActive =
       status === 'ACTIVE' &&
       provider === 'MANUAL' &&
@@ -297,9 +310,9 @@ export function AppTopHeader() {
       daysRemaining <= 2;
 
     if (isManualDueActive) {
-      if (daysRemaining <= 0) return { message: 'Recuerda: el pago de tu suscripción vence hoy.', actionLabel: 'Ver facturación' };
-      if (daysRemaining === 1) return { message: 'Recuerda: el pago de tu suscripción vence mañana.', actionLabel: 'Ver facturación' };
-      return { message: `Recuerda: el pago de tu suscripción vence en ${daysRemaining} días.`, actionLabel: 'Ver facturación' };
+      if (daysRemaining <= 0) return { message: 'Recuerda: el pago de tu suscripción vence hoy.', actionLabel: 'Ver facturación', backgroundColor: '#F59E0B' };
+      if (daysRemaining === 1) return { message: 'Recuerda: el pago de tu suscripción vence mañana.', actionLabel: 'Ver facturación', backgroundColor: '#F59E0B' };
+      return { message: `Recuerda: el pago de tu suscripción vence en ${daysRemaining} días.`, actionLabel: 'Ver facturación', backgroundColor: '#F59E0B' };
     }
 
     return null;
@@ -308,8 +321,8 @@ export function AppTopHeader() {
   return (
     <View style={{ paddingTop: insets.top }}>
       {billingBanner ? (
-        <View style={styles.trialBar}>
-          <Icon source="clock-outline" size={14} color="#7A5200" />
+        <View style={[styles.trialBar, { backgroundColor: billingBanner.backgroundColor || '#F59E0B' }]}>
+          <Icon source="clock-outline" size={14} color="#fff" />
           <Text style={styles.trialText}>{billingBanner.message}</Text>
           <TouchableOpacity
             onPress={() => {
