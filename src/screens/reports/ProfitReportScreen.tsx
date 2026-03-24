@@ -180,7 +180,7 @@ export function ProfitReportScreen() {
         ),
         db.query<any>('SELECT local_id, server_id, discount_percent_bp FROM suppliers'),
         db.query<any>(
-          `SELECT balance_cents, status
+          `SELECT local_id, balance_cents, status, data
            FROM accounts_receivable
            WHERE status IN ('PENDIENTE', 'PARCIAL')`
         ),
@@ -296,6 +296,15 @@ export function ProfitReportScreen() {
         (sale) => !sale.cancelled && sale.createdAt >= fromTs && sale.createdAt <= toTs
       );
       const grossSalesTotalCents = validSales.reduce((sum, sale) => sum + sale.totalCents, 0);
+      const cancelledSaleIds = new Set<string>();
+      const cancelledSaleInvoiceCodes = new Set<string>();
+      for (const sale of saleCatalog) {
+        if (!sale.cancelled) continue;
+        if (sale.localId) cancelledSaleIds.add(sale.localId);
+        if (sale.serverId) cancelledSaleIds.add(sale.serverId);
+        const invoiceCode = String(sale.parsed?.invoiceCode || '').trim();
+        if (invoiceCode) cancelledSaleInvoiceCodes.add(invoiceCode);
+      }
 
       const activePayments = paymentRows
         .map((row) => {
@@ -481,7 +490,20 @@ export function ProfitReportScreen() {
       const taxesCents = salesItbisCents - purchasesItbisCents;
       const otherIncomeExpensesCents = 0;
       const netProfitCents = operatingProfitCents - otherIncomeExpensesCents - taxesCents;
-      const accountsReceivableTotalCents = arRows.reduce((sum, row) => sum + Number(row.balance_cents || 0), 0);
+      const activeArRows = arRows.filter((row) => {
+        const parsed = parseJsonObject(row.data);
+        const saleRefs = [
+          String(parsed?.saleLocalId || ''),
+          String(parsed?.saleServerId || ''),
+          String(parsed?.saleId || ''),
+          String((parsed?.sale as any)?.id || ''),
+        ].filter((value) => value.trim() !== '');
+        const invoiceCode = String(parsed?.sale?.invoiceCode || parsed?.invoiceCode || '').trim();
+        const linkedToCancelledSale = saleRefs.some((ref) => cancelledSaleIds.has(ref));
+        const linkedToCancelledInvoice = invoiceCode ? cancelledSaleInvoiceCodes.has(invoiceCode) : false;
+        return !linkedToCancelledSale && !linkedToCancelledInvoice;
+      });
+      const accountsReceivableTotalCents = activeArRows.reduce((sum, row) => sum + Number(row.balance_cents || 0), 0);
 
       setMetrics({
         grossSalesTotalCents,
@@ -507,7 +529,7 @@ export function ProfitReportScreen() {
         taxesCents,
         netProfitCents,
         accountsReceivableTotalCents,
-        accountsReceivableCount: arRows.length,
+        accountsReceivableCount: activeArRows.length,
       });
     } catch (error) {
       console.error('Error cargando reporte de ganancia:', error);
