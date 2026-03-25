@@ -476,7 +476,13 @@ export function ProfitReportScreen() {
               priceCents: Number(item?.unitPriceCents ?? item?.priceCents ?? 0),
               itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
             })),
-            shippingCents: Number(sale.parsed?.shippingCents || 0),
+            shippingCents: Number(
+              sale.parsed?.shippingCents ??
+              sale.parsed?.fleteCents ??
+              (Number.isFinite(Number(sale.parsed?.shipping ?? sale.parsed?.flete))
+                ? Math.round(Number(sale.parsed?.shipping ?? sale.parsed?.flete) * 100)
+                : 0)
+            ),
             salePricesIncludeItbis: sale.parsed?.salePricesIncludeItbis !== false,
           });
           grossSalesItbisCents += Math.max(0, computed.itbisCents);

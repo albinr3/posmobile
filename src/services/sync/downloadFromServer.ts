@@ -572,7 +572,15 @@ export async function downloadFromServer(options: {
           typeof (saleDetail?.salePricesIncludeItbis ?? sale?.salePricesIncludeItbis ?? localSale?.salePricesIncludeItbis) === 'boolean'
             ? Boolean(saleDetail?.salePricesIncludeItbis ?? sale?.salePricesIncludeItbis ?? localSale?.salePricesIncludeItbis)
             : true,
-        shippingCents: Number(saleDetail?.shippingCents || sale?.shippingCents || localSale?.shippingCents || 0),
+        shippingCents: Number(
+          saleDetail?.shippingCents ??
+          saleDetail?.fleteCents ??
+          sale?.shippingCents ??
+          sale?.fleteCents ??
+          localSale?.shippingCents ??
+          localSale?.fleteCents ??
+          0
+        ),
         totalCents: Number(saleDetail?.totalCents || sale?.totalCents || localSale?.totalCents || 0),
         status,
         cancelledAt: cancelledAtRaw,

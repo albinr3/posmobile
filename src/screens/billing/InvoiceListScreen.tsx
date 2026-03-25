@@ -98,6 +98,26 @@ const resolveInvoiceItemCode = (item: any): string => {
   return value || '-';
 };
 
+const resolveInvoiceItemProductId = (item: any): string | null => {
+  const value = String(
+    item?.productId ||
+    item?.product_id ||
+    item?.product?.id ||
+    ''
+  ).trim();
+  return value || null;
+};
+
+const sanitizeFileNamePart = (value: unknown): string => {
+  const normalized = String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9 _-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return normalized || 'Cliente';
+};
+
 const resolveSaleCreatedAt = (rowCreatedAt: unknown, parsedData: any): number => {
   const candidates = [
     rowCreatedAt,
@@ -361,6 +381,231 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     }
   };
 
+  const enrichInvoiceItems = async (sourceItems: any[]): Promise<any[]> => {
+    const items = Array.isArray(sourceItems) ? sourceItems : [];
+    return Promise.all(
+      items.map(async (item: any) => {
+        const productId = resolveInvoiceItemProductId(item);
+        let sku = resolveInvoiceItemCode(item);
+        let productName = resolveInvoiceItemName(item);
+        let reference = resolveInvoiceItemReference(item);
+
+        const needsLookup = productName === 'Producto' || reference === '-' || sku === '-';
+        if (needsLookup) {
+          try {
+            let productRow: any = null;
+            if (productId) {
+              productRow = await db.queryFirst<any>(
+                'SELECT name, sku, data FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
+                [productId, productId]
+              );
+            }
+            if (!productRow && sku !== '-') {
+              productRow = await db.queryFirst<any>(
+                'SELECT name, sku, data FROM products WHERE sku = ? LIMIT 1',
+                [sku]
+              );
+            }
+
+            if (productRow) {
+              const dbName = String(productRow?.name || '').trim();
+              const dbSku = String(productRow?.sku || '').trim();
+              let dbReference = '';
+              try {
+                const parsedProductData = productRow?.data ? JSON.parse(String(productRow.data)) : null;
+                dbReference = String(
+                  parsedProductData?.reference ||
+                  parsedProductData?.ref ||
+                  parsedProductData?.productRef ||
+                  ''
+                ).trim();
+              } catch {
+                dbReference = '';
+              }
+              if (productName === 'Producto' && dbName) productName = dbName;
+              if (sku === '-' && dbSku) sku = dbSku;
+              if (reference === '-' && dbReference) reference = dbReference;
+            }
+          } catch {
+            // no-op: mantener fallbacks si no se puede hidratar
+          }
+        }
+
+        return {
+          ...item,
+          productId: productId || item?.productId || null,
+          productName,
+          reference,
+          sku,
+          quantity: Number(item?.quantity ?? item?.qty ?? 0),
+          priceCents: Number(item?.priceCents ?? item?.unitPriceCents ?? 0),
+          itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
+          unit: item?.unit || 'UNIDAD',
+          recipeAdjustments: Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [],
+        };
+      })
+    );
+  };
+
+  const resolveRawInvoiceItems = (parsedData: any): any[] => {
+    const directCandidates = [
+      parsedData?.items,
+      parsedData?.saleItems,
+      parsedData?.cartItems,
+      parsedData?.sale?.items,
+      parsedData?.document?.items,
+      parsedData?.payload?.items,
+    ];
+
+    for (const candidate of directCandidates) {
+      if (Array.isArray(candidate)) return candidate;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        try {
+          const parsed = JSON.parse(candidate);
+          if (Array.isArray(parsed)) return parsed;
+        } catch {
+          // continuar con siguiente candidato
+        }
+      }
+    }
+
+    return [];
+  };
+
+  const buildSharePdfUriWithCustomerName = async (
+    sourceUri: string,
+    customerName: string,
+    invoiceCode: string
+  ): Promise<string> => {
+    try {
+      const baseDir = LegacyFileSystem.cacheDirectory || LegacyFileSystem.documentDirectory;
+      if (!baseDir) return sourceUri;
+      const customerPart = sanitizeFileNamePart(customerName).slice(0, 20) || 'Cliente';
+      const invoicePart = sanitizeFileNamePart(invoiceCode).slice(0, 24) || 'Factura';
+      const targetUri = `${baseDir}${customerPart}-${invoicePart}.pdf`;
+      await LegacyFileSystem.deleteAsync(targetUri, { idempotent: true });
+      await LegacyFileSystem.copyAsync({ from: sourceUri, to: targetUri });
+      return targetUri;
+    } catch {
+      return sourceUri;
+    }
+  };
+
+  const resolveInvoiceCustomerAddress = async (parsedData: any, rowCustomerId: unknown): Promise<string | null> => {
+    const directAddress = String(
+      parsedData?.customerAddress ||
+      parsedData?.customer?.address ||
+      parsedData?.customerData?.address ||
+      ''
+    ).trim();
+    if (directAddress) return directAddress;
+
+    const customerId = String(rowCustomerId || parsedData?.customerId || '').trim();
+    if (!customerId) return null;
+    try {
+      const customerRow = await db.queryFirst<{ data?: string | null }>(
+        'SELECT data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+        [customerId, customerId]
+      );
+      if (!customerRow?.data) return null;
+      const parsedCustomer = JSON.parse(customerRow.data);
+      const customerAddress = String(parsedCustomer?.address || '').trim();
+      return customerAddress || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveInvoiceDueDate = async (
+    saleType: 'CONTADO' | 'CREDITO',
+    parsedData: any,
+    row: any,
+    invoiceCode: string
+  ): Promise<number | null> => {
+    if (saleType !== 'CREDITO') return null;
+
+    const dueCandidates = [
+      parsedData?.dueDate,
+      parsedData?.ar?.dueDate,
+      parsedData?.accountsReceivable?.dueDate,
+    ];
+    for (const candidate of dueCandidates) {
+      const dueNum = Number(candidate);
+      if (Number.isFinite(dueNum) && dueNum > 0) return dueNum;
+      if (typeof candidate === 'string' && candidate.trim()) {
+        const parsedTs = new Date(candidate).getTime();
+        if (Number.isFinite(parsedTs)) return parsedTs;
+      }
+    }
+
+    try {
+      const arRows = await db.query<any>(
+        `SELECT due_date, data
+         FROM accounts_receivable
+         WHERE due_date IS NOT NULL
+         ORDER BY rowid DESC`
+      );
+      const saleServerId = String(row?.server_id || '').trim();
+      for (const arRow of arRows) {
+        let arData: any = null;
+        try {
+          arData = arRow?.data ? JSON.parse(arRow.data) : null;
+        } catch {
+          arData = null;
+        }
+
+        const arInvoiceCode = String(arData?.sale?.invoiceCode || arData?.invoiceCode || '').trim();
+        const arSaleServerId = String(arData?.sale?.id || '').trim();
+        const matchesInvoice = arInvoiceCode && arInvoiceCode === invoiceCode;
+        const matchesSaleId = saleServerId && arSaleServerId && arSaleServerId === saleServerId;
+        if (!matchesInvoice && !matchesSaleId) continue;
+
+        const parsedDueDate = Number(arRow?.due_date);
+        if (Number.isFinite(parsedDueDate) && parsedDueDate > 0) return parsedDueDate;
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  };
+
+  const resolveInvoiceShippingCents = (params: {
+    parsedData: any;
+    items: any[];
+    salePricesIncludeItbis: boolean;
+    totalCents: number;
+  }): number => {
+    const rawShippingCents = params.parsedData?.shippingCents ?? params.parsedData?.fleteCents ?? null;
+    if (rawShippingCents !== null && rawShippingCents !== undefined) {
+      const parsedShippingCents = Number(rawShippingCents);
+      if (Number.isFinite(parsedShippingCents)) {
+        return Math.max(0, Math.round(parsedShippingCents));
+      }
+    }
+
+    const rawShippingAmount = params.parsedData?.shipping ?? params.parsedData?.flete ?? null;
+    if (rawShippingAmount !== null && rawShippingAmount !== undefined) {
+      const parsedShippingAmount = Number(rawShippingAmount);
+      if (Number.isFinite(parsedShippingAmount)) {
+        return Math.max(0, Math.round(parsedShippingAmount * 100));
+      }
+    }
+
+    const calculatedWithoutShipping = calcDocumentTotalsByTaxMode({
+      items: (params.items || []).map((item: any) => ({
+        quantity: Number(item.quantity || item.qty || 0),
+        priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+        itbisRateBp: Number(item.itbisRateBp || 1800),
+      })),
+      shippingCents: 0,
+      salePricesIncludeItbis: params.salePricesIncludeItbis,
+    }).totalCents;
+
+    const inferredShipping = Math.round(Number(params.totalCents || 0) - calculatedWithoutShipping);
+    return inferredShipping > 0 ? inferredShipping : 0;
+  };
+
   const buildThermalInvoiceHtml = (params: {
     paperSize: '58' | '80';
     logoDataUri: string | null;
@@ -370,10 +615,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     paymentMethodLabel: string;
     items: any[];
     salePricesIncludeItbis: boolean;
+    shippingCents?: number;
     totalCents: number;
     cancelled: boolean;
   }) => {
-    const { paperSize, logoDataUri, invoiceCode, createdAt, customerName, paymentMethodLabel, items, salePricesIncludeItbis, totalCents, cancelled } = params;
+    const { paperSize, logoDataUri, invoiceCode, createdAt, customerName, paymentMethodLabel, items, salePricesIncludeItbis, shippingCents = 0, totalCents, cancelled } = params;
     const widthMm = paperSize === '80' ? 80 : 58;
     const totals = calcDocumentTotalsByTaxMode({
       items: items.map((item: any) => ({
@@ -381,13 +627,16 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         priceCents: Number(item.priceCents || item.unitPriceCents || 0),
         itbisRateBp: Number(item.itbisRateBp || 1800),
       })),
-      shippingCents: 0,
+      shippingCents,
       salePricesIncludeItbis,
     });
 
-    const taxRows = showItbisBreakdown
-      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div><div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>`
+    const shippingRow = shippingCents > 0
+      ? `<div class="row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>`
       : '';
+    const taxRows = showItbisBreakdown
+      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div><div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>${shippingRow}`
+      : shippingRow;
 
     const itemsRows = items.map((item: any) => {
       const lineTotalCents = calcDocumentTotalsByTaxMode({
@@ -413,21 +662,27 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     invoiceCode: string;
     createdAt: number;
     customerName: string;
+    customerAddress?: string | null;
+    paymentMethod?: string | null;
+    transferBankName?: string | null;
+    paymentSplits?: Array<{ method: string; amountCents: number; transferBankName?: string | null }>;
     paymentMethodLabel: string;
     saleType: 'CONTADO' | 'CREDITO';
+    dueDate?: number | null;
     items: any[];
     salePricesIncludeItbis: boolean;
+    shippingCents?: number;
     totalCents: number;
     cancelled: boolean;
   }) => {
-    const { logoDataUri, company, invoiceCode, createdAt, customerName, paymentMethodLabel, saleType, items, salePricesIncludeItbis, totalCents, cancelled } = params;
+    const { logoDataUri, company, invoiceCode, createdAt, customerName, customerAddress, paymentMethod, transferBankName, paymentSplits, paymentMethodLabel, saleType, dueDate, items, salePricesIncludeItbis, shippingCents = 0, totalCents, cancelled } = params;
     const totals = calcDocumentTotalsByTaxMode({
       items: items.map((item: any) => ({
         quantity: Number(item.quantity || item.qty || 0),
         priceCents: Number(item.priceCents || item.unitPriceCents || 0),
         itbisRateBp: Number(item.itbisRateBp || 1800),
       })),
-      shippingCents: 0,
+      shippingCents,
       salePricesIncludeItbis,
     });
     const uniqueItbisRates = Array.from(new Set(items.map((item: any) => Number(item.itbisRateBp || 1800)).filter((rate: number) => Number.isFinite(rate) && rate > 0)));
@@ -447,10 +702,34 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const itemCode = resolveInvoiceItemCode(item);
       const itemName = resolveInvoiceItemName(item);
       const itemReference = resolveInvoiceItemReference(item);
-      return `<tr><td>${escapeHtml(itemCode)}</td><td>${escapeHtml(itemName)}</td><td>${escapeHtml(itemReference)}</td><td style="text-align:right;">${escapeHtml(String(qty))}</td><td style="text-align:right;">${formatCurrency(unitPriceCents)}</td><td style="text-align:right;">${formatCurrency(lineTotalCents)}</td></tr>`;
+      const adjustments = Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [];
+      const adjustmentsHtml = adjustments.length > 0
+        ? `<div style="margin-top:4px;font-size:11px;color:#374151;">Ajustes: ${escapeHtml(
+          adjustments
+            .map((adjustment: any) => `${adjustment?.type === 'SIN' ? 'Sin' : 'Extra'} ${String(adjustment?.ingredientName || '').trim()}`)
+            .join(', ')
+        )}</div>`
+        : '';
+      return `<tr><td>${escapeHtml(itemCode)}</td><td>${escapeHtml(itemName)}${adjustmentsHtml}</td><td>${escapeHtml(itemReference)}</td><td style="text-align:right;">${escapeHtml(String(qty))}</td><td style="text-align:right;">${formatCurrency(unitPriceCents)}</td><td style="text-align:right;">${formatCurrency(lineTotalCents)}</td></tr>`;
     }).join('');
 
-    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${saleType === 'CONTADO' ? `<div style="margin-top:6px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel)}</div>` : ''}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
+    const paymentSplitsList = Array.isArray(paymentSplits) ? paymentSplits : [];
+    const splitPaymentHtml = saleType === 'CONTADO' && paymentMethod === 'DIVIDIR_PAGO' && paymentSplitsList.length > 0
+      ? `<div style="margin-top:6px;"><strong>Métodos de pago:</strong><ul style="margin:4px 0 0 16px;padding:0;">${paymentSplitsList
+          .map((p) => `<li>${escapeHtml(formatPaymentWithBank(p?.method || 'EFECTIVO', p?.transferBankName || null))} — ${formatCurrency(Number(p?.amountCents || 0))}</li>`)
+          .join('')}</ul></div>`
+      : saleType === 'CONTADO'
+        ? `<div style="margin-top:6px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel || formatPaymentWithBank(paymentMethod, transferBankName || null))}</div>`
+        : '';
+
+    const dueDateLabel = Number.isFinite(Number(dueDate || NaN))
+      ? new Date(Number(dueDate)).toLocaleDateString('es-DO', { year: 'numeric', month: '2-digit', day: '2-digit' })
+      : '';
+    const creditInfoHtml = saleType === 'CREDITO' && dueDateLabel
+      ? `<div style="margin-top:8px;border:1px solid #FDE68A;background:#FFFBEB;border-radius:8px;padding:10px;font-size:12px;"><div style="font-weight:700;color:#92400E;">⏰ Venta a Crédito</div><div style="margin-top:3px;color:#92400E;"><strong>Fecha de vencimiento:</strong> ${escapeHtml(dueDateLabel)}</div></div>`
+      : '';
+
+    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div>${customerAddress ? `<div style="margin-top:6px;"><strong>Dirección:</strong> ${escapeHtml(customerAddress)}</div>` : ''}<div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${splitPaymentHtml}${creditInfoHtml}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}${shippingCents > 0 ? `<div class="totals-row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
   };
 
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
@@ -468,7 +747,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         parsedData = null;
       }
 
-      const items = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      const items = await enrichInvoiceItems(resolveRawInvoiceItems(parsedData));
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
@@ -476,10 +755,11 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         parsedData?.customerName || invoice.customerName || 'Cliente general',
         normalizeCustomerVisualId(parsedData?.customerVisualId) ?? invoice.customerVisualId
       );
+      const resolvedPaymentSplits = Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits;
       const paymentMethodLabel = getInvoicePaymentSummary({
         paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
         transferBankName: parsedData?.transferBankName || invoice.transferBankName,
-        paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+        paymentSplits: resolvedPaymentSplits,
       });
       const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
         ? 'CREDITO'
@@ -489,19 +769,35 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
+      const shippingCents = resolveInvoiceShippingCents({
+        parsedData,
+        items,
+        salePricesIncludeItbis,
+        totalCents,
+      });
 
       if (paperSize === 'carta') {
         const [logoDataUri, company] = await Promise.all([getLogoDataUri(), getCompanySnapshot()]);
+        const [customerAddress, dueDateForLetter] = await Promise.all([
+          resolveInvoiceCustomerAddress(parsedData, row.customer_id),
+          resolveInvoiceDueDate(saleType, parsedData, row, invoiceCode),
+        ]);
         const html = buildLetterInvoiceHtml({
           logoDataUri,
           company,
           invoiceCode,
           createdAt,
           customerName,
+          customerAddress,
+          paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
+          transferBankName: parsedData?.transferBankName || invoice.transferBankName,
+          paymentSplits: resolvedPaymentSplits,
           paymentMethodLabel,
           saleType,
+          dueDate: dueDateForLetter,
           items,
           salePricesIncludeItbis,
+          shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
         });
@@ -553,6 +849,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
         type: saleType,
         dueDate,
+        shippingCents,
         totalCents,
         salePricesIncludeItbis,
         items: items.map((item: any) => ({
@@ -613,18 +910,20 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         parsedData = null;
       }
 
-      const items = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      const items = await enrichInvoiceItems(resolveRawInvoiceItems(parsedData));
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
+      const customerNameForFile = String(parsedData?.customerName || invoice.customerName || 'Cliente').trim();
       const customerName = formatCustomerLabel(
         parsedData?.customerName || invoice.customerName || 'Cliente general',
         normalizeCustomerVisualId(parsedData?.customerVisualId) ?? invoice.customerVisualId
       );
+      const resolvedPaymentSplits = Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits;
       const paymentMethodLabel = getInvoicePaymentSummary({
         paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
         transferBankName: parsedData?.transferBankName || invoice.transferBankName,
-        paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+        paymentSplits: resolvedPaymentSplits,
       });
       const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
         ? 'CREDITO'
@@ -634,6 +933,16 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
+      const shippingCents = resolveInvoiceShippingCents({
+        parsedData,
+        items,
+        salePricesIncludeItbis,
+        totalCents,
+      });
+      const [customerAddress, dueDateForLetter] = await Promise.all([
+        resolveInvoiceCustomerAddress(parsedData, row.customer_id),
+        resolveInvoiceDueDate(saleType, parsedData, row, invoiceCode),
+      ]);
       const html = paperSize === 'carta'
         ? buildLetterInvoiceHtml({
           logoDataUri,
@@ -641,10 +950,16 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           invoiceCode,
           createdAt,
           customerName,
+          customerAddress,
+          paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
+          transferBankName: parsedData?.transferBankName || invoice.transferBankName,
+          paymentSplits: resolvedPaymentSplits,
           paymentMethodLabel,
           saleType,
+          dueDate: dueDateForLetter,
           items,
           salePricesIncludeItbis,
+          shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
         })
@@ -657,15 +972,17 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           paymentMethodLabel,
           items,
           salePricesIncludeItbis,
+          shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
         });
 
       const pdf = await Print.printToFileAsync({ html });
+      const shareUri = await buildSharePdfUriWithCustomerName(pdf.uri, customerNameForFile, invoiceCode);
       const sharingAvailable = await Sharing.isAvailableAsync();
 
       if (sharingAvailable) {
-        await Sharing.shareAsync(pdf.uri, {
+        await Sharing.shareAsync(shareUri, {
           mimeType: 'application/pdf',
           dialogTitle: `Factura ${invoiceCode}`,
           UTI: 'com.adobe.pdf',
@@ -674,7 +991,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         await Share.share({
           title: `Factura ${invoiceCode}`,
           message: `Factura ${invoiceCode}`,
-          url: pdf.uri,
+          url: shareUri,
         });
       }
     } catch (error) {

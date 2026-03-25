@@ -136,6 +136,13 @@ export async function prepareSyncRequestData(
         soldAtIso = saleTimestampRaw.toISOString();
       }
 
+      const rawSaleShippingCents =
+        data?.shippingCents ??
+        (Number.isFinite(Number(data?.shipping)) ? Math.round(Number(data.shipping) * 100) : 0);
+      const saleShippingCents = Number.isFinite(Number(rawSaleShippingCents))
+        ? Math.max(0, Math.round(Number(rawSaleShippingCents)))
+        : 0;
+
       return {
         customerId: resolvedCustomerId,
         type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
@@ -145,7 +152,7 @@ export async function prepareSyncRequestData(
         salePricesIncludeItbis:
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
-        shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
+        shippingCents: saleShippingCents,
         ...(soldAtIso ? { soldAt: soldAtIso } : {}),
       };
       }
@@ -319,12 +326,19 @@ export async function prepareSyncRequestData(
         })
       );
 
+      const rawQuoteShippingCents =
+        data?.shippingCents ??
+        (Number.isFinite(Number(data?.shipping)) ? Math.round(Number(data.shipping) * 100) : 0);
+      const quoteShippingCents = Number.isFinite(Number(rawQuoteShippingCents))
+        ? Math.max(0, Math.round(Number(rawQuoteShippingCents)))
+        : 0;
+
       return {
         customerId: resolvedQuoteCustomerId,
         salePricesIncludeItbis:
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: quoteItems,
-        shippingCents: data.shippingCents || Math.round((data.shipping || 0) * 100),
+        shippingCents: quoteShippingCents,
         notes: data.notes || null,
         validUntil: data.validUntil || null,
       };

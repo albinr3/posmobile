@@ -56,6 +56,22 @@ const resolveSaleCreatedAt = (rowCreatedAt: unknown, saleData: any): number => {
   return Date.now();
 };
 
+const resolveSaleShippingCents = (saleData: any): number => {
+  const rawShippingCents = saleData?.shippingCents ?? saleData?.fleteCents ?? null;
+  if (rawShippingCents !== null && rawShippingCents !== undefined) {
+    const parsedShippingCents = Number(rawShippingCents);
+    if (Number.isFinite(parsedShippingCents)) return Math.max(0, Math.round(parsedShippingCents));
+  }
+
+  const rawShippingAmount = saleData?.shipping ?? saleData?.flete ?? null;
+  if (rawShippingAmount !== null && rawShippingAmount !== undefined) {
+    const parsedShippingAmount = Number(rawShippingAmount);
+    if (Number.isFinite(parsedShippingAmount)) return Math.max(0, Math.round(parsedShippingAmount * 100));
+  }
+
+  return 0;
+};
+
 const buildReceiptHtml = (params: {
   invoiceCode: string;
   createdAt: number;
@@ -64,12 +80,13 @@ const buildReceiptHtml = (params: {
   transferBankName?: string | null;
   paymentSplits?: SalePaymentSplit[];
   totalCents: number;
+  shippingCents?: number;
   items: SaleItem[];
   logoUri: string;
   showItbisBreakdown: boolean;
   salePricesIncludeItbis?: boolean;
 }) => {
-  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, items, logoUri, showItbisBreakdown } = params;
+  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, shippingCents = 0, items, logoUri, showItbisBreakdown } = params;
 
   const itemsRows = (items || [])
     .map(
@@ -95,13 +112,17 @@ const buildReceiptHtml = (params: {
       priceCents: Number(item.priceCents || item.unitPriceCents || 0),
       itbisRateBp: Number(item.itbisRateBp || 1800),
     })),
-    shippingCents: 0,
+    shippingCents,
     salePricesIncludeItbis,
   });
+  const shippingRow = shippingCents > 0
+    ? `<div class="row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>`
+    : '';
   const taxRows = showItbisBreakdown
     ? `
           <div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
           <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>
+          ${shippingRow}
       `
     : '';
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
@@ -201,6 +222,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       transferBankName: sale.transferBankName,
       paymentSplits: sale.paymentSplits || [],
       totalCents: sale.totalCents,
+      shippingCents: resolveSaleShippingCents(sale),
       items: sale.items || [],
       logoUri,
       showItbisBreakdown,
@@ -243,6 +265,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       transferBankName: sale.transferBankName,
       paymentSplits: sale.paymentSplits || [],
       totalCents: sale.totalCents,
+      shippingCents: resolveSaleShippingCents(sale),
       items: sale.items || [],
       logoUri,
       showItbisBreakdown,
@@ -341,6 +364,13 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
           ))}
 
           <Divider style={styles.divider} />
+
+          {resolveSaleShippingCents(sale) > 0 ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>Flete:</Text>
+              <Text style={styles.value}>{formatCurrency(resolveSaleShippingCents(sale))}</Text>
+            </View>
+          ) : null}
 
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Total</Text>

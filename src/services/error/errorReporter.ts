@@ -36,6 +36,7 @@ type ErrorReportPayload = {
 
 let getClerkTokenFn: (() => Promise<string | null>) | null = null;
 let getSubUserTokenFn: (() => Promise<string | null>) | null = null;
+let getCurrentRouteFn: (() => string | null) | null = null;
 let flushing = false;
 
 const recentSignatures = new Map<string, number>();
@@ -46,6 +47,10 @@ export function setErrorTokenGetter(fn: () => Promise<string | null>) {
 
 export function setErrorSubUserTokenGetter(fn: () => Promise<string | null>) {
   getSubUserTokenFn = fn;
+}
+
+export function setErrorRouteGetter(fn: () => string | null) {
+  getCurrentRouteFn = fn;
 }
 
 function buildBaseMetadata(): Record<string, unknown> {
@@ -67,6 +72,22 @@ function normalizeError(error: unknown): { message: string; stack?: string } {
     return { message: error };
   }
   return { message: String((error as any)?.message || error || 'Error desconocido') };
+}
+
+function resolveRoute(options: ErrorReportOptions): string | null {
+  if (typeof options.route === 'string' && options.route.trim()) {
+    return options.route.trim();
+  }
+
+  if (!getCurrentRouteFn) return null;
+
+  try {
+    const route = getCurrentRouteFn();
+    if (typeof route !== 'string' || !route.trim()) return null;
+    return route.trim();
+  } catch {
+    return null;
+  }
 }
 
 function buildSignature(payload: ErrorReportPayload): string {
@@ -127,24 +148,36 @@ export async function reportError(error: unknown, options: ErrorReportOptions = 
   try {
     const normalized = normalizeError(error);
     const now = Date.now();
-    const accountId = useAuthStore.getState().accountId;
-    const subUser = useAuthStore.getState().subUser;
+    const authState = useAuthStore.getState();
+    const accountId = authState.accountId;
+    const subUser = authState.subUser;
+    const mainUser = authState.user;
+    const route = resolveRoute(options);
+    const resolvedUserId = subUser?.id || mainUser?.id || null;
+    const resolvedUserEmail = subUser?.email || mainUser?.email || null;
+    const resolvedUserPhone = mainUser?.phone || null;
     const payload: ErrorReportPayload = {
       message: normalized.message,
       stack: normalized.stack,
       code: options.code,
       severity: options.severity,
       accountId,
-      userId: subUser?.id || null,
-      userEmail: subUser?.email || null,
-      userPhone: null,
+      userId: resolvedUserId,
+      userEmail: resolvedUserEmail,
+      userPhone: resolvedUserPhone,
       metadata: {
         ...buildBaseMetadata(),
         accountId,
         subUserId: subUser?.id || null,
+        subUserName: subUser?.name || null,
+        subUserUsername: subUser?.username || null,
+        mainUserId: mainUser?.id || null,
+        mainUserName: mainUser?.name || null,
+        mainUserEmail: mainUser?.email || null,
         ...(options.metadata || {}),
         isFatal: options.isFatal ?? false,
-        route: options.route || null,
+        route,
+        screen: route,
       },
       createdAt: now,
     };

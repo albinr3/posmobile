@@ -76,6 +76,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     setPaymentMethod,
     setTransferBankName,
     setPaymentSplits,
+    shippingCents,
     paymentMethod,
     items,
     loadInvoiceForEdit,
@@ -254,6 +255,13 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
               : 'EFECTIVO',
           transferBankName: parsedData?.transferBankName ? String(parsedData.transferBankName) : null,
           paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : [],
+          shippingCents: Number(
+            parsedData?.shippingCents ??
+            parsedData?.fleteCents ??
+            (Number.isFinite(Number(parsedData?.shipping ?? parsedData?.flete))
+              ? Math.round(Number(parsedData?.shipping ?? parsedData?.flete) * 100)
+              : 0)
+          ),
           saleLocalId,
           invoiceCode: String(sale.invoice_code || parsedData?.invoiceCode || '-'),
         });
@@ -342,10 +350,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           priceCents: item.priceCents,
           itbisRateBp: item.itbisRateBp ?? 1800,
         })),
-        shippingCents: 0,
+        shippingCents,
         salePricesIncludeItbis,
       }),
-    [items, salePricesIncludeItbis]
+    [items, shippingCents, salePricesIncludeItbis]
   );
 
   const cartQuantityByProduct = useMemo(() => {

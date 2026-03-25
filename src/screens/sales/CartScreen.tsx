@@ -52,6 +52,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setTransferBankName,
     paymentSplits,
     setPaymentSplits,
+    shippingCents,
+    setShippingCents,
     clear,
     editingSaleLocalId,
     editingInvoiceCode,
@@ -64,6 +66,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
   const [splitMethodMenuIndex, setSplitMethodMenuIndex] = useState<number | null>(null);
   const [splitBankMenuIndex, setSplitBankMenuIndex] = useState<number | null>(null);
+  const [shippingModalVisible, setShippingModalVisible] = useState(false);
+  const [shippingDraft, setShippingDraft] = useState('');
+  const [shippingError, setShippingError] = useState<string | null>(null);
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const { setCustomer } = useCartStore();
   const { subUser } = useAuthStore();
@@ -179,6 +184,34 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setPriceError(null);
   };
 
+  const openShippingModal = () => {
+    setShippingDraft(shippingCents > 0 ? (shippingCents / 100).toFixed(2) : '');
+    setShippingError(null);
+    setShippingModalVisible(true);
+  };
+
+  const closeShippingModal = () => {
+    setShippingModalVisible(false);
+    setShippingDraft('');
+    setShippingError(null);
+  };
+
+  const applyShippingChange = () => {
+    const normalized = shippingDraft.replace(',', '.').trim();
+    if (!normalized) {
+      setShippingCents(0);
+      closeShippingModal();
+      return;
+    }
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      setShippingError('Ingresa un monto válido.');
+      return;
+    }
+    setShippingCents(Math.round(parsed * 100));
+    closeShippingModal();
+  };
+
   const applyPriceChange = () => {
     const cartItem = items.find(i => i.lineId === priceDialogLineId);
     if (!cartItem) {
@@ -224,6 +257,13 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           if (typeof parsed?.salePricesIncludeItbis === 'boolean') {
             setSalePricesIncludeItbis(parsed.salePricesIncludeItbis);
           }
+          setShippingCents(Number(
+            parsed?.shippingCents ??
+            parsed?.fleteCents ??
+            (Number.isFinite(Number(parsed?.shipping ?? parsed?.flete))
+              ? Math.round(Number(parsed?.shipping ?? parsed?.flete) * 100)
+              : 0)
+          ));
         } catch {
           // no-op
         }
@@ -243,10 +283,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           priceCents: item.priceCents,
           itbisRateBp: item.itbisRateBp ?? 1800,
         })),
-        shippingCents: 0,
+        shippingCents,
         salePricesIncludeItbis,
       }),
-    [items, salePricesIncludeItbis]
+    [items, shippingCents, salePricesIncludeItbis]
   );
 
   useFocusEffect(
@@ -566,7 +606,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
-        shippingCents: 0,
+        shippingCents,
         status: 'completed',
       };
 
@@ -600,7 +640,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             priceCents: item.priceCents,
             itbisRateBp: item.itbisRateBp ?? 1800,
           })),
-          shippingCents: 0,
+          shippingCents,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
         });
         const documentItems = items.map((item) => ({
@@ -695,7 +735,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             price: item.priceCents / 100,
             wasPriceOverridden: !!item.wasPriceOverridden,
           })),
-          shippingCents: 0,
+          shippingCents,
           status: 'completed',
         });
       } else {
@@ -713,6 +753,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           paymentMethod,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
           paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+          shippingCents,
           status: 'completed',
           createdAt: now,
           soldAt: now,
@@ -766,6 +807,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
+        shippingCents,
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
         items: items.map((item) => ({
@@ -992,6 +1034,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.subtotalCents)}</Text>
             </View>
             <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Flete:</Text>
+              <Button mode="text" compact onPress={openShippingModal}>
+                {shippingCents > 0 ? formatCurrency(shippingCents) : 'Agregar'}
+              </Button>
+            </View>
+            <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>
                 ITBIS {salePricesIncludeItbis ? '(incluido)' : '(no incluido)'}:
               </Text>
@@ -1019,6 +1067,39 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           </Surface>
         </BottomDock>
       )}
+
+      <Portal>
+        <Modal
+          visible={shippingModalVisible}
+          onDismiss={closeShippingModal}
+          contentContainerStyle={styles.priceModalCard}
+        >
+          <Text style={styles.priceModalTitle}>Agregar flete</Text>
+          <Text style={styles.priceModalMeta}>Se sumará al total de la factura.</Text>
+          <TextInput
+            label="Flete (RD$)"
+            value={shippingDraft}
+            onChangeText={(value) => {
+              setShippingDraft(value);
+              if (shippingError) setShippingError(null);
+            }}
+            mode="outlined"
+            keyboardType="decimal-pad"
+            style={styles.priceModalInput}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+          />
+          {shippingError ? <Text style={styles.priceErrorText}>{shippingError}</Text> : null}
+          <View style={styles.priceModalActions}>
+            <Button mode="outlined" onPress={closeShippingModal}>
+              Cancelar
+            </Button>
+            <Button mode="contained" buttonColor={ui.colors.primary} onPress={applyShippingChange}>
+              Guardar
+            </Button>
+          </View>
+        </Modal>
+      </Portal>
 
       <Portal>
         <Modal

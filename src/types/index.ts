@@ -45,6 +45,7 @@ export interface Sale {
   salePricesIncludeItbis?: boolean;
   subtotalCents?: number;
   itbisCents?: number;
+  shippingCents?: number;
   createdAt: number;
   synced: boolean;
   data: string;

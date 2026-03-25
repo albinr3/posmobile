@@ -34,6 +34,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
     void reportError(error, {
       code: 'UNHANDLED_ERROR',
       severity: 'CRITICAL',
+      route: this.props.boundaryName || null,
       metadata: {
         componentStack: errorInfo?.componentStack,
         boundaryName: this.props.boundaryName || null,

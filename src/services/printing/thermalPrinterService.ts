@@ -62,6 +62,7 @@ export interface SaleTicketPayload {
   type?: string | null;
   dueDate?: number | null;
   salePricesIncludeItbis?: boolean;
+  shippingCents?: number;
   totalCents: number;
   items: TicketItem[];
 }
@@ -194,6 +195,9 @@ export const buildSaleTicketText = (
   }
 
   lines.push(separator);
+  if (Number(payload.shippingCents || 0) > 0) {
+    lines.push(formatColumns('FLETE', formatCurrency(Number(payload.shippingCents || 0)), width));
+  }
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
   lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
   if (isCreditSale) {
