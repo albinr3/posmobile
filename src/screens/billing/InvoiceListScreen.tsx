@@ -61,6 +61,43 @@ const escapeHtml = (value: unknown): string =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 
+const resolveInvoiceItemName = (item: any): string => {
+  const value = String(
+    item?.productName ||
+    item?.name ||
+    item?.description ||
+    item?.product?.name ||
+    item?.product_description ||
+    'Producto'
+  ).trim();
+  return value || 'Producto';
+};
+
+const resolveInvoiceItemReference = (item: any): string => {
+  const value = String(
+    item?.reference ||
+    item?.ref ||
+    item?.productRef ||
+    item?.product?.reference ||
+    item?.product_reference ||
+    '-'
+  ).trim();
+  return value || '-';
+};
+
+const resolveInvoiceItemCode = (item: any): string => {
+  const value = String(
+    item?.sku ||
+    item?.code ||
+    item?.barcode ||
+    item?.productCode ||
+    item?.product?.sku ||
+    item?.product?.code ||
+    '-'
+  ).trim();
+  return value || '-';
+};
+
 const resolveSaleCreatedAt = (rowCreatedAt: unknown, parsedData: any): number => {
   const candidates = [
     rowCreatedAt,
@@ -362,7 +399,9 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         shippingCents: 0,
         salePricesIncludeItbis,
       }).totalCents;
-      return `<div class="item"><div><strong>${escapeHtml(String(item.productName || 'Producto'))} | ${escapeHtml(String(item.reference || '').trim() || '-')}</strong></div><div class="row"><span>${escapeHtml(formatProductQty(Number(item.quantity || item.qty || 0), item.unit))} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span><span><strong>${formatCurrency(lineTotalCents)}</strong></span></div></div>`;
+      const itemName = resolveInvoiceItemName(item);
+      const itemReference = resolveInvoiceItemReference(item);
+      return `<div class="item"><div><strong>${escapeHtml(itemName)} | ${escapeHtml(itemReference)}</strong></div><div class="row"><span>${escapeHtml(formatProductQty(Number(item.quantity || item.qty || 0), item.unit))} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span><span><strong>${formatCurrency(lineTotalCents)}</strong></span></div></div>`;
     }).join('');
 
     return `<html><head><meta charset="utf-8" /><style>@page { size: ${widthMm}mm auto; margin: 0; } body { font-family: Arial, sans-serif; margin: 0; color: #000; } .ticket { width: ${widthMm}mm; padding: 10px; font-size: ${paperSize === '80' ? 13 : 12}px; } .brand { text-align: center; margin-bottom: 6px; } .logo { height: 28px; width: auto; } .row { display: flex; justify-content: space-between; margin: 3px 0; gap: 8px; } .sep { border-top: 1px dashed #444; margin: 7px 0; } .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; } .total { font-size: ${paperSize === '80' ? 17 : 15}px; font-weight: 800; margin-top: 6px; } .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }</style></head><body><div class="ticket"><div class="brand">${logoDataUri ? `<img src="${logoDataUri}" class="logo" />` : '<div style="font-weight:800;">MOVOpos</div>'}</div><div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div><div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div><div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:4px;"><strong>Método:</strong> ${escapeHtml(paymentMethodLabel)}</div><div class="sep"></div><div>${itemsRows}</div>${taxRows}<div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}</div></body></html>`;
@@ -405,7 +444,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         shippingCents: 0,
         salePricesIncludeItbis,
       }).totalCents;
-      return `<tr><td>${escapeHtml(String(item.sku || '-'))}</td><td>${escapeHtml(String(item.productName || 'Producto'))}</td><td>${escapeHtml(String(item.reference || '').trim() || '-')}</td><td style="text-align:right;">${escapeHtml(String(qty))}</td><td style="text-align:right;">${formatCurrency(unitPriceCents)}</td><td style="text-align:right;">${formatCurrency(lineTotalCents)}</td></tr>`;
+      const itemCode = resolveInvoiceItemCode(item);
+      const itemName = resolveInvoiceItemName(item);
+      const itemReference = resolveInvoiceItemReference(item);
+      return `<tr><td>${escapeHtml(itemCode)}</td><td>${escapeHtml(itemName)}</td><td>${escapeHtml(itemReference)}</td><td style="text-align:right;">${escapeHtml(String(qty))}</td><td style="text-align:right;">${formatCurrency(unitPriceCents)}</td><td style="text-align:right;">${formatCurrency(lineTotalCents)}</td></tr>`;
     }).join('');
 
     return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${saleType === 'CONTADO' ? `<div style="margin-top:6px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel)}</div>` : ''}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
