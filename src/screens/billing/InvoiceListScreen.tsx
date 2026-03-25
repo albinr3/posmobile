@@ -2,6 +2,7 @@ import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, Alert, TouchableOpacity, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -16,7 +17,12 @@ import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
-import { hasConnectedPrinter, printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
+import {
+  COMPANY_SETTINGS_SNAPSHOT_KEY,
+  PAPER_SIZE_KEY,
+  hasConnectedPrinter,
+  printSaleTicketDirect,
+} from '../../services/printing/thermalPrinterService';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
@@ -38,6 +44,22 @@ interface InvoiceListScreenProps {
 }
 
 const INVOICE_AUTO_SYNC_MIN_INTERVAL_MS = 60_000;
+type InvoicePaperSize = '58' | '80' | 'carta';
+
+interface CompanySnapshot {
+  name: string;
+  phone: string;
+  address: string;
+  logoUrl?: string | null;
+}
+
+const escapeHtml = (value: unknown): string =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 
 const resolveSaleCreatedAt = (rowCreatedAt: unknown, parsedData: any): number => {
   const candidates = [
@@ -280,14 +302,118 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     }
   };
 
+  const resolveInvoicePaperSize = async (): Promise<InvoicePaperSize> => {
+    const raw = (await AsyncStorage.getItem(PAPER_SIZE_KEY)) || '';
+    if (raw === '80' || raw === 'carta') return raw;
+    return '58';
+  };
+
+  const getCompanySnapshot = async (): Promise<CompanySnapshot> => {
+    try {
+      const raw = await AsyncStorage.getItem(COMPANY_SETTINGS_SNAPSHOT_KEY);
+      if (!raw) return { name: 'MOVOpos', phone: '', address: '', logoUrl: null };
+      const parsed = JSON.parse(raw);
+      return {
+        name: String(parsed?.name || 'MOVOpos').trim() || 'MOVOpos',
+        phone: String(parsed?.phone || '').trim(),
+        address: String(parsed?.address || '').trim(),
+        logoUrl: String(parsed?.logoUrl || '').trim() || null,
+      };
+    } catch {
+      return { name: 'MOVOpos', phone: '', address: '', logoUrl: null };
+    }
+  };
+
+  const buildThermalInvoiceHtml = (params: {
+    paperSize: '58' | '80';
+    logoDataUri: string | null;
+    invoiceCode: string;
+    createdAt: number;
+    customerName: string;
+    paymentMethodLabel: string;
+    items: any[];
+    salePricesIncludeItbis: boolean;
+    totalCents: number;
+    cancelled: boolean;
+  }) => {
+    const { paperSize, logoDataUri, invoiceCode, createdAt, customerName, paymentMethodLabel, items, salePricesIncludeItbis, totalCents, cancelled } = params;
+    const widthMm = paperSize === '80' ? 80 : 58;
+    const totals = calcDocumentTotalsByTaxMode({
+      items: items.map((item: any) => ({
+        quantity: Number(item.quantity || item.qty || 0),
+        priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+        itbisRateBp: Number(item.itbisRateBp || 1800),
+      })),
+      shippingCents: 0,
+      salePricesIncludeItbis,
+    });
+
+    const taxRows = showItbisBreakdown
+      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div><div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>`
+      : '';
+
+    const itemsRows = items.map((item: any) => {
+      const lineTotalCents = calcDocumentTotalsByTaxMode({
+        items: [{
+          quantity: Number(item.quantity || item.qty || 0),
+          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+          itbisRateBp: Number(item.itbisRateBp || 1800),
+        }],
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      }).totalCents;
+      return `<div class="item"><div><strong>${escapeHtml(String(item.productName || 'Producto'))} | ${escapeHtml(String(item.reference || '').trim() || '-')}</strong></div><div class="row"><span>${escapeHtml(formatProductQty(Number(item.quantity || item.qty || 0), item.unit))} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span><span><strong>${formatCurrency(lineTotalCents)}</strong></span></div></div>`;
+    }).join('');
+
+    return `<html><head><meta charset="utf-8" /><style>@page { size: ${widthMm}mm auto; margin: 0; } body { font-family: Arial, sans-serif; margin: 0; color: #000; } .ticket { width: ${widthMm}mm; padding: 10px; font-size: ${paperSize === '80' ? 13 : 12}px; } .brand { text-align: center; margin-bottom: 6px; } .logo { height: 28px; width: auto; } .row { display: flex; justify-content: space-between; margin: 3px 0; gap: 8px; } .sep { border-top: 1px dashed #444; margin: 7px 0; } .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; } .total { font-size: ${paperSize === '80' ? 17 : 15}px; font-weight: 800; margin-top: 6px; } .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }</style></head><body><div class="ticket"><div class="brand">${logoDataUri ? `<img src="${logoDataUri}" class="logo" />` : '<div style="font-weight:800;">MOVOpos</div>'}</div><div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div><div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div><div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:4px;"><strong>Método:</strong> ${escapeHtml(paymentMethodLabel)}</div><div class="sep"></div><div>${itemsRows}</div>${taxRows}<div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}</div></body></html>`;
+  };
+
+  const buildLetterInvoiceHtml = (params: {
+    logoDataUri: string | null;
+    company: CompanySnapshot;
+    invoiceCode: string;
+    createdAt: number;
+    customerName: string;
+    paymentMethodLabel: string;
+    saleType: 'CONTADO' | 'CREDITO';
+    items: any[];
+    salePricesIncludeItbis: boolean;
+    totalCents: number;
+    cancelled: boolean;
+  }) => {
+    const { logoDataUri, company, invoiceCode, createdAt, customerName, paymentMethodLabel, saleType, items, salePricesIncludeItbis, totalCents, cancelled } = params;
+    const totals = calcDocumentTotalsByTaxMode({
+      items: items.map((item: any) => ({
+        quantity: Number(item.quantity || item.qty || 0),
+        priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+        itbisRateBp: Number(item.itbisRateBp || 1800),
+      })),
+      shippingCents: 0,
+      salePricesIncludeItbis,
+    });
+    const uniqueItbisRates = Array.from(new Set(items.map((item: any) => Number(item.itbisRateBp || 1800)).filter((rate: number) => Number.isFinite(rate) && rate > 0)));
+    const itbisLabel = uniqueItbisRates.length === 1
+      ? `ITBIS (${(uniqueItbisRates[0] / 100).toFixed(2)}% ${salePricesIncludeItbis ? 'incluido' : 'no incluido'})`
+      : `ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})`;
+    const logoSource = String(company.logoUrl || '').trim() || logoDataUri || '';
+
+    const itemRows = items.map((item: any) => {
+      const qty = Number(item.quantity || item.qty || 0);
+      const unitPriceCents = Number(item.priceCents || item.unitPriceCents || 0);
+      const lineTotalCents = calcDocumentTotalsByTaxMode({
+        items: [{ quantity: qty, priceCents: unitPriceCents, itbisRateBp: Number(item.itbisRateBp || 1800) }],
+        shippingCents: 0,
+        salePricesIncludeItbis,
+      }).totalCents;
+      return `<tr><td>${escapeHtml(String(item.sku || '-'))}</td><td>${escapeHtml(String(item.productName || 'Producto'))}</td><td>${escapeHtml(String(item.reference || '').trim() || '-')}</td><td style="text-align:right;">${escapeHtml(String(qty))}</td><td style="text-align:right;">${formatCurrency(unitPriceCents)}</td><td style="text-align:right;">${formatCurrency(lineTotalCents)}</td></tr>`;
+    }).join('');
+
+    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${saleType === 'CONTADO' ? `<div style="margin-top:6px;"><strong>Método de pago:</strong> ${escapeHtml(paymentMethodLabel)}</div>` : ''}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
+  };
+
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
     try {
-      const shouldAttemptPrint = await hasConnectedPrinter();
-      if (!shouldAttemptPrint) {
-        Alert.alert('Impresión', 'No hay una impresora conectada en Ajustes.');
-        return;
-      }
-
+      const paperSize = await resolveInvoicePaperSize();
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
         Alert.alert('Factura', 'No se encontró la factura.');
@@ -308,11 +434,45 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         parsedData?.customerName || invoice.customerName || 'Cliente general',
         normalizeCustomerVisualId(parsedData?.customerVisualId) ?? invoice.customerVisualId
       );
+      const paymentMethodLabel = getInvoicePaymentSummary({
+        paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
+        transferBankName: parsedData?.transferBankName || invoice.transferBankName,
+        paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
+      });
       const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
         ? 'CREDITO'
         : String(parsedData?.paymentMethod || invoice.paymentMethod || '').toUpperCase() === 'CREDITO'
           ? 'CREDITO'
           : 'CONTADO';
+      const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
+        ? parsedData.salePricesIncludeItbis
+        : true;
+
+      if (paperSize === 'carta') {
+        const [logoDataUri, company] = await Promise.all([getLogoDataUri(), getCompanySnapshot()]);
+        const html = buildLetterInvoiceHtml({
+          logoDataUri,
+          company,
+          invoiceCode,
+          createdAt,
+          customerName,
+          paymentMethodLabel,
+          saleType,
+          items,
+          salePricesIncludeItbis,
+          totalCents,
+          cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+        });
+        await Print.printAsync({ html });
+        return;
+      }
+
+      const shouldAttemptPrint = await hasConnectedPrinter();
+      if (!shouldAttemptPrint) {
+        Alert.alert('Impresión', 'No hay una impresora conectada en Ajustes.');
+        return;
+      }
+
       let dueDate: number | null = null;
       if (saleType === 'CREDITO') {
         const arRows = await db.query<any>(
@@ -352,7 +512,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         type: saleType,
         dueDate,
         totalCents,
-        salePricesIncludeItbis: typeof parsedData?.salePricesIncludeItbis === 'boolean' ? parsedData.salePricesIncludeItbis : true,
+        salePricesIncludeItbis,
         items: items.map((item: any) => ({
           productName: String(item.productName || 'Producto'),
           quantity: Number(item.quantity || item.qty || 0),
@@ -360,12 +520,12 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           totalCents: calcDocumentTotalsByTaxMode({
             items: [{
               quantity: Number(item.quantity || item.qty || 0),
-              priceCents: Number(item.priceCents || item.unitPriceCents || 0),
-              itbisRateBp: Number(item.itbisRateBp || 1800),
-            }],
-            shippingCents: 0,
-            salePricesIncludeItbis: typeof parsedData?.salePricesIncludeItbis === 'boolean' ? parsedData.salePricesIncludeItbis : true,
-          }).totalCents,
+                  priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+                  itbisRateBp: Number(item.itbisRateBp || 1800),
+                }],
+                shippingCents: 0,
+                salePricesIncludeItbis,
+              }).totalCents,
           unit: item.unit || 'UNIDAD',
           reference: String(item.reference || '').trim() || null,
           productId: String(item.productId || '').trim() || null,
@@ -396,7 +556,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const handleShareInvoicePdf = async (invoice: InvoiceListItem) => {
     try {
-      const logoDataUri = await getLogoDataUri();
+      const paperSize = await resolveInvoicePaperSize();
+      const [logoDataUri, company] = await Promise.all([getLogoDataUri(), getCompanySnapshot()]);
 
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
@@ -414,90 +575,49 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const totalCents = Number(row.total_cents || parsedData?.totalCents || 0);
       const createdAt = resolveSaleCreatedAt(row.created_at, parsedData);
       const invoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '-');
-      const customerName = parsedData?.customerName || invoice.customerName || '(General) Cliente general';
+      const customerName = formatCustomerLabel(
+        parsedData?.customerName || invoice.customerName || 'Cliente general',
+        normalizeCustomerVisualId(parsedData?.customerVisualId) ?? invoice.customerVisualId
+      );
       const paymentMethodLabel = getInvoicePaymentSummary({
         paymentMethod: parsedData?.paymentMethod || invoice.paymentMethod,
         transferBankName: parsedData?.transferBankName || invoice.transferBankName,
         paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
       });
+      const saleType = String(parsedData?.type || '').toUpperCase() === 'CREDITO'
+        ? 'CREDITO'
+        : String(parsedData?.paymentMethod || invoice.paymentMethod || '').toUpperCase() === 'CREDITO'
+          ? 'CREDITO'
+          : 'CONTADO';
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
-      const totals = calcDocumentTotalsByTaxMode({
-        items: items.map((item: any) => ({
-          quantity: Number(item.quantity || item.qty || 0),
-          priceCents: Number(item.priceCents || item.unitPriceCents || 0),
-          itbisRateBp: Number(item.itbisRateBp || 1800),
-        })),
-        shippingCents: 0,
-        salePricesIncludeItbis,
-      });
-      const taxRows = showItbisBreakdown
-        ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
-              <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>`
-        : '';
-
-      const itemsRows = items
-        .map(
-          (item: any) => `
-            <div class="item">
-              <div><strong>${String(item.productName || 'Producto')} | ${String(item.reference || '').trim() || '-'}</strong></div>
-              <div class="row">
-                <span>${formatProductQty(Number(item.quantity || item.qty || 0), item.unit)} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span>
-                <span><strong>${formatCurrency(calcDocumentTotalsByTaxMode({
-                  items: [{
-                    quantity: Number(item.quantity || item.qty || 0),
-                    priceCents: Number(item.priceCents || item.unitPriceCents || 0),
-                    itbisRateBp: Number(item.itbisRateBp || 1800),
-                  }],
-                  shippingCents: 0,
-                  salePricesIncludeItbis,
-                }).totalCents)}</strong></span>
-              </div>
-            </div>
-          `
-        )
-        .join('');
-
-      const html = `
-        <html>
-          <head>
-            <meta charset="utf-8" />
-            <style>
-              @page { size: 80mm auto; margin: 0; }
-              body { font-family: Arial, sans-serif; margin: 0; }
-              .ticket { width: 80mm; padding: 10px; font-size: 13px; color: #000; }
-              .brand { text-align: center; margin-bottom: 6px; }
-              .logo { height: 28px; width: auto; }
-              .row { display: flex; justify-content: space-between; margin: 3px 0; }
-              .sep { border-top: 1px dashed #444; margin: 7px 0; }
-              .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; }
-              .total { font-size: 17px; font-weight: 800; margin-top: 6px; }
-              .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }
-            </style>
-          </head>
-          <body>
-            <div class="ticket">
-              <div class="brand">
-                ${
-                  logoDataUri
-                    ? `<img src="${logoDataUri}" class="logo" />`
-                    : '<div style="font-weight:800;">MOVOpos</div>'
-                }
-              </div>
-              <div class="row"><span>Factura:</span><span><strong>${invoiceCode}</strong></span></div>
-              <div class="row"><span>Fecha:</span><span>${formatDateTime(createdAt)}</span></div>
-              <div style="margin-top:4px;"><strong>Cliente:</strong> ${customerName}</div>
-              <div style="margin-top:4px;"><strong>Método:</strong> ${paymentMethodLabel}</div>
-              <div class="sep"></div>
-              <div>${itemsRows}</div>
-              ${taxRows}
-              <div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
-              ${String(row.status || '').toLowerCase() === 'cancelled' ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}
-            </div>
-          </body>
-        </html>
-      `;
+      const html = paperSize === 'carta'
+        ? buildLetterInvoiceHtml({
+          logoDataUri,
+          company,
+          invoiceCode,
+          createdAt,
+          customerName,
+          paymentMethodLabel,
+          saleType,
+          items,
+          salePricesIncludeItbis,
+          totalCents,
+          cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+        })
+        : buildThermalInvoiceHtml({
+          paperSize: paperSize === '80' ? '80' : '58',
+          logoDataUri,
+          invoiceCode,
+          createdAt,
+          customerName,
+          paymentMethodLabel,
+          items,
+          salePricesIncludeItbis,
+          totalCents,
+          cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+        });
 
       const pdf = await Print.printToFileAsync({ html });
       const sharingAvailable = await Sharing.isAvailableAsync();

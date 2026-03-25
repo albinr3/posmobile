@@ -31,7 +31,7 @@ interface PrinterDevicesScreenProps {
 const CONNECTED_PRINTER_KEY = 'connected_printer';
 const PAPER_SIZE_KEY = 'printer_paper_size_mm';
 
-type PaperSizeMm = '58' | '80';
+type PaperSizeMm = '58' | '80' | 'carta';
 
 async function requestBluetoothPermissions(): Promise<{ granted: boolean; blocked: boolean; message?: string }> {
   if (Platform.OS !== 'android') {
@@ -99,6 +99,8 @@ export function PrinterDevicesScreen({ navigation }: PrinterDevicesScreenProps) 
 
       if (savedPaperSize === '80') {
         setPaperSize('80');
+      } else if (savedPaperSize === 'carta') {
+        setPaperSize('carta');
       } else {
         setPaperSize('58');
       }
@@ -295,8 +297,18 @@ export function PrinterDevicesScreen({ navigation }: PrinterDevicesScreenProps) 
             <Text style={styles.paperOptionText}>80 mm</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.paperOption} onPress={() => void savePaperSize('carta')}>
+            <View style={[styles.radioOuter, paperSize === 'carta' && styles.radioOuterActive]}>
+              {paperSize === 'carta' ? <View style={styles.radioInner} /> : null}
+            </View>
+            <Text style={styles.paperOptionText}>Carta</Text>
+          </TouchableOpacity>
+
           {paperSize === '80' ? (
             <Text style={styles.paperHint}>Formato 80 mm activo para facturas y recibos térmicos.</Text>
+          ) : null}
+          {paperSize === 'carta' ? (
+            <Text style={styles.paperHint}>Formato carta activo para facturas al compartir o imprimir desde la lista.</Text>
           ) : null}
         </View>
 

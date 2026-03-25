@@ -109,6 +109,10 @@ export const PAPER_SIZE_KEY = 'printer_paper_size_mm';
 
 type PaperSizeMm = '58' | '80';
 
+const normalizeThermalPaperSize = (paperSize: unknown): PaperSizeMm => {
+  return String(paperSize || '').trim() === '80' ? '80' : '58';
+};
+
 const getPaperColumns = (paperSize: PaperSizeMm): number => (paperSize === '80' ? 48 : 32);
 
 const fitColumn = (value: string, max: number): string => {
@@ -144,7 +148,7 @@ const readPrinterSettings = async (): Promise<{ autoPrint: boolean; printer: Sto
   return {
     autoPrint: savedAutoPrint === 'true',
     printer: parsedPrinter,
-    paperSize: savedPaperSize === '80' ? '80' : '58',
+    paperSize: normalizeThermalPaperSize(savedPaperSize),
   };
 };
 
@@ -421,7 +425,7 @@ export const printSaleTicketDirect = async (
   const companyHeader = await readCompanyTicketHeader();
   const settings = await readPrinterSettings();
   const printer = providedPrinter ?? settings.printer;
-  const paperSize = providedPaperSize ?? settings.paperSize;
+  const paperSize = normalizeThermalPaperSize(providedPaperSize ?? settings.paperSize);
   if (!printer?.address) {
     return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
   }
@@ -465,7 +469,7 @@ export const printPaymentReceiptDirect = async (
   const companyHeader = await readCompanyTicketHeader();
   const settings = await readPrinterSettings();
   const printer = providedPrinter ?? settings.printer;
-  const paperSize = providedPaperSize ?? settings.paperSize;
+  const paperSize = normalizeThermalPaperSize(providedPaperSize ?? settings.paperSize);
   if (!printer?.address) {
     return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
   }
@@ -508,7 +512,7 @@ export const printQuoteTicketDirect = async (
   const companyHeader = await readCompanyTicketHeader();
   const settings = await readPrinterSettings();
   const printer = providedPrinter ?? settings.printer;
-  const paperSize = providedPaperSize ?? settings.paperSize;
+  const paperSize = normalizeThermalPaperSize(providedPaperSize ?? settings.paperSize);
   if (!printer?.address) {
     return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
   }
@@ -551,7 +555,7 @@ export const printReturnTicketDirect = async (
   const companyHeader = await readCompanyTicketHeader();
   const settings = await readPrinterSettings();
   const printer = providedPrinter ?? settings.printer;
-  const paperSize = providedPaperSize ?? settings.paperSize;
+  const paperSize = normalizeThermalPaperSize(providedPaperSize ?? settings.paperSize);
   if (!printer?.address) {
     return { printed: false, reason: 'missing_config', message: 'No hay una impresora conectada en Ajustes.' };
   }
