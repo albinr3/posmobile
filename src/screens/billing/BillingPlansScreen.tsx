@@ -410,7 +410,7 @@ export function BillingPlansScreen() {
                   <Text style={styles.infoWarning}>No hay cuentas bancarias configuradas.</Text>
                 ) : (
                   <>
-                    <Text style={styles.sectionHint}>Selecciona el banco para la transferencia:</Text>
+                    <Text style={[styles.sectionHint, styles.bankSelectionHint]}>Selecciona el banco para la transferencia:</Text>
                     <View style={styles.bankChipWrap}>
                       {overview.bankAccounts.map((account) => (
                         <Chip
@@ -441,7 +441,16 @@ export function BillingPlansScreen() {
                           ) : null}
                         </View>
                         <Text style={styles.bankCardLine}>Tipo: {selectedBankAccount.accountType}</Text>
-                        <Text style={styles.bankCardLine}>Número: {selectedBankAccount.accountNumber}</Text>
+                        <View style={styles.bankCardNumberWrap}>
+                          <Text style={styles.bankCardLine}>Número:</Text>
+                          <Text selectable style={styles.bankCardNumberValue}>
+                            {selectedBankAccount.accountNumber}
+                          </Text>
+                          <View style={styles.copyHintRow}>
+                            <Icon source="content-copy" size={12} color={ui.colors.textMuted} />
+                            <Text style={styles.copyHintText}>Mantén presionado para copiar</Text>
+                          </View>
+                        </View>
                         <Text style={styles.bankCardLine}>A nombre de: {selectedBankAccount.accountName}</Text>
                         <Text style={styles.bankCardLineStrong}>
                           Monto: {formatMoney(overview?.subscription?.priceDopCents || 130000, 'DOP')}
@@ -670,6 +679,7 @@ const styles = StyleSheet.create({
   cardTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '800', marginBottom: 8 },
   sectionSubTitle: { color: ui.colors.text, fontSize: 14, fontWeight: '700', marginBottom: 6 },
   sectionHint: { color: ui.colors.textMuted, fontSize: 12, marginBottom: 8 },
+  bankSelectionHint: { marginTop: 8 },
   tabRow: { flexDirection: 'row', gap: 8, marginBottom: 10 },
   tabButton: {
     flex: 1,
@@ -713,6 +723,10 @@ const styles = StyleSheet.create({
   bankCardTitle: { color: ui.colors.text, fontSize: 14, fontWeight: '800' },
   bankLogo: { width: 28, height: 28 },
   bankCardLine: { color: ui.colors.textMuted, fontSize: 12, marginTop: 4 },
+  bankCardNumberWrap: { marginTop: 4 },
+  bankCardNumberValue: { color: ui.colors.text, fontSize: 14, fontWeight: '800', marginTop: 2, letterSpacing: 0.3 },
+  copyHintRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
+  copyHintText: { color: ui.colors.textMuted, fontSize: 10, fontWeight: '600' },
   bankCardLineStrong: { color: ui.colors.text, fontSize: 13, fontWeight: '800', marginTop: 6 },
   bankInstructions: { color: ui.colors.textMuted, fontSize: 11, marginTop: 8, borderTopWidth: 1, borderTopColor: ui.colors.border, paddingTop: 8 },
   proofCard: {
