@@ -227,7 +227,7 @@ export function ARListScreen({ navigation, route }: ARListScreenProps) {
               <Icon source={isChecked ? 'check' : 'plus'} size={14} color={isChecked ? '#fff' : ui.colors.primary} />
             </TouchableOpacity>
             <View style={styles.customerTextRow}>
-              <Text style={styles.customerName} numberOfLines={1}>
+              <Text style={styles.customerName}>
                 {formatCustomerLabel(item.customerName, item.customerVisualId)}
               </Text>
             </View>

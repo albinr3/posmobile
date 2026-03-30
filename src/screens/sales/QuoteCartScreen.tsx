@@ -405,7 +405,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
             {canOverridePrice ? (
               <TouchableOpacity style={styles.priceEditChip} onPress={() => openPriceDialog(item)}>
                 <Icon source="pencil" size={12} color={ui.colors.primary} />
-                <Text style={styles.priceEditText}>Editar</Text>
+                <Text style={styles.priceEditText}>Editar precio</Text>
               </TouchableOpacity>
             ) : null}
           </View>

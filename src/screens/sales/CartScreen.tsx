@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -289,21 +289,19 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     [items, shippingCents, salePricesIncludeItbis]
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      const routeCustomerId = route?.params?.customerId;
-      const routeCustomerName = route?.params?.customerName;
-      const routeCustomerVisualId = route?.params?.customerVisualId;
+  useEffect(() => {
+    const routeCustomerId = route?.params?.customerId;
+    const routeCustomerName = route?.params?.customerName;
+    const routeCustomerVisualId = route?.params?.customerVisualId;
 
-      if (
-        typeof routeCustomerId !== 'undefined' ||
-        typeof routeCustomerName !== 'undefined' ||
-        typeof routeCustomerVisualId !== 'undefined'
-      ) {
-        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
-      }
-    }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer])
-  );
+    if (
+      typeof routeCustomerId !== 'undefined' ||
+      typeof routeCustomerName !== 'undefined' ||
+      typeof routeCustomerVisualId !== 'undefined'
+    ) {
+      setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
+    }
+  }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer]);
 
   const resolveLocalProductId = async (rawProductId: string): Promise<string | null> => {
     if (!rawProductId) return null;
@@ -870,7 +868,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             {canOverridePrice ? (
               <TouchableOpacity style={styles.priceEditChip} onPress={() => openPriceDialog(item)}>
                 <Icon source="pencil" size={12} color={ui.colors.primary} />
-                <Text style={styles.priceEditText}>Editar</Text>
+                <Text style={styles.priceEditText}>Editar precio</Text>
               </TouchableOpacity>
             ) : null}
           </View>
