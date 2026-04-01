@@ -154,6 +154,7 @@ function SalesStack() {
       <Stack.Screen name="POSMain" component={POSScreenWithBoundary} />
       <Stack.Screen name="Cart" component={CartScreenWithBoundary} />
       <Stack.Screen name="SelectCustomer" component={SelectCustomerScreenWithBoundary} />
+      <Stack.Screen name="AddCustomer" component={AddCustomerScreenWithBoundary} />
       <Stack.Screen name="Receipt" component={ReceiptScreenWithBoundary} options={{ headerLeft: () => null }} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
@@ -166,6 +167,7 @@ function QuotesStack() {
       <Stack.Screen name="QuoteMain" component={QuoteScreenWithBoundary} />
       <Stack.Screen name="QuoteCart" component={QuoteCartScreenWithBoundary} />
       <Stack.Screen name="SelectQuoteCustomer" component={SelectCustomerScreenWithBoundary} initialParams={{ mode: 'QUOTE' }} />
+      <Stack.Screen name="AddCustomer" component={AddCustomerScreenWithBoundary} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
@@ -367,7 +369,7 @@ function BottomTabs() {
         component={SalesStack}
         options={({ route }) => {
           const nestedRoute = getFocusedRouteNameFromRoute(route) ?? 'POSMain';
-          const hideTabBar = ['Cart', 'SelectCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
+          const hideTabBar = ['Cart', 'SelectCustomer', 'AddCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
 
           return {
             title: 'Ventas',
