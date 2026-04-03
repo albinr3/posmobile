@@ -21,6 +21,9 @@ interface CartExtraState {
     transferBankName?: string | null;
     paymentSplits?: SalePaymentSplit[];
     shippingCents?: number;
+    customerSaleDiscountPercentBp?: number | null;
+    discountPercentBp?: number | null;
+    discountWasManual?: boolean;
     saleLocalId: string;
     invoiceCode: string;
   }) => void;
@@ -54,7 +57,21 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     set({ shippingCents: nextShippingCents });
   },
 
-  loadInvoiceForEdit: ({ items, customerId, customerName, customerVisualId, paymentMethod, transferBankName, paymentSplits, shippingCents, saleLocalId, invoiceCode }) => {
+  loadInvoiceForEdit: ({
+    items,
+    customerId,
+    customerName,
+    customerVisualId,
+    paymentMethod,
+    transferBankName,
+    paymentSplits,
+    shippingCents,
+    customerSaleDiscountPercentBp,
+    discountPercentBp,
+    discountWasManual,
+    saleLocalId,
+    invoiceCode,
+  }) => {
     set({
       items,
       customerId,
@@ -64,6 +81,13 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       transferBankName: transferBankName || null,
       paymentSplits: Array.isArray(paymentSplits) ? paymentSplits : [],
       shippingCents: Number.isFinite(shippingCents) ? Math.max(0, Math.round(shippingCents || 0)) : 0,
+      customerSaleDiscountPercentBp: Number.isFinite(Number(customerSaleDiscountPercentBp))
+        ? Math.max(0, Math.min(10000, Math.round(Number(customerSaleDiscountPercentBp))))
+        : null,
+      discountPercentBp: Number.isFinite(Number(discountPercentBp))
+        ? Math.max(0, Math.min(10000, Math.round(Number(discountPercentBp))))
+        : null,
+      discountWasManual: discountWasManual === true,
       editingSaleLocalId: saleLocalId,
       editingInvoiceCode: invoiceCode,
     });
@@ -86,6 +110,9 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       transferBankName: null,
       paymentSplits: [],
       shippingCents: 0,
+      customerSaleDiscountPercentBp: null,
+      discountPercentBp: null,
+      discountWasManual: false,
       editingSaleLocalId: null,
       editingInvoiceCode: null,
     });

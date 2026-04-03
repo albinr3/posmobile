@@ -14,7 +14,7 @@ import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface POSScreenProps {
@@ -77,6 +77,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     setTransferBankName,
     setPaymentSplits,
     shippingCents,
+    discountPercentBp,
     paymentMethod,
     items,
     loadInvoiceForEdit,
@@ -231,21 +232,39 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           normalizeCustomerVisualId(parsedData?.customerVisualId) ??
           parseCustomerVisualIdFromData(parsedData) ??
           null;
-        if (!resolvedCustomerVisualId && sale.customer_id) {
+        let customerSaleDiscountPercentBp: number | null = null;
+        if (sale.customer_id) {
           const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
             'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
             [sale.customer_id, sale.customer_id]
           );
-          resolvedCustomerVisualId =
-            normalizeCustomerVisualId(customerRow?.visual_id) ??
-            parseCustomerVisualIdFromData(customerRow?.data) ??
-            null;
+          if (!resolvedCustomerVisualId) {
+            resolvedCustomerVisualId =
+              normalizeCustomerVisualId(customerRow?.visual_id) ??
+              parseCustomerVisualIdFromData(customerRow?.data) ??
+              null;
+          }
+          if (customerRow?.data) {
+            try {
+              const parsedCustomer = JSON.parse(customerRow.data);
+              const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(
+                parsedCustomer?.saleDiscountPercentBp ?? parsedCustomer?.sale_discount_percent_bp ?? 0
+              );
+              customerSaleDiscountPercentBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+            } catch {
+              customerSaleDiscountPercentBp = null;
+            }
+          }
         }
+        const normalizedDiscountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
         loadInvoiceForEdit({
           items: resolvedItems,
           customerId: sale.customer_id ? String(sale.customer_id) : null,
           customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
           customerVisualId: resolvedCustomerVisualId,
+          customerSaleDiscountPercentBp,
+          discountPercentBp: normalizedDiscountPercentBp > 0 ? normalizedDiscountPercentBp : null,
+          discountWasManual: String(parsedData?.discountSource || '').toUpperCase() === 'MANUAL',
           paymentMethod:
             resolvedPaymentMethod === 'CREDITO' ||
             resolvedPaymentMethod === 'TARJETA' ||
@@ -352,8 +371,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         })),
         shippingCents,
         salePricesIncludeItbis,
+        discountPercentBp: normalizeDiscountPercentBp(discountPercentBp ?? 0),
       }),
-    [items, shippingCents, salePricesIncludeItbis]
+    [discountPercentBp, items, shippingCents, salePricesIncludeItbis]
   );
 
   const cartQuantityByProduct = useMemo(() => {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Product, SaleItem } from '../types';
+import { normalizeDiscountPercentBp } from '../utils/tax';
 
 function buildLineId(productId: string, recipeAdjustments: any[] = []): string {
   const adjustmentsKey = [...recipeAdjustments]
@@ -14,12 +15,21 @@ export interface BaseCartState {
   customerId: string | null;
   customerName: string | null;
   customerVisualId: number | null;
+  customerSaleDiscountPercentBp: number | null;
+  discountPercentBp: number | null;
+  discountWasManual: boolean;
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (lineId: string) => void;
   removeOneLineByProductId: (productId: string) => void;
   updateQuantity: (lineId: string, quantity: number) => void;
   updatePrice: (lineId: string, priceCents: number) => void;
-  setCustomer: (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => void;
+  setCustomer: (
+    customerId: string | null,
+    customerName: string | null,
+    customerVisualId?: number | null,
+    customerSaleDiscountPercentBp?: number | null
+  ) => void;
+  setDiscountPercentBp: (discountPercentBp: number | null, markAsManual?: boolean) => void;
   clear: () => void;
   getTotal: () => number;
   getItemCount: () => number;
@@ -39,6 +49,9 @@ function createBaseCartSlice<TState extends BaseCartState>(
     customerId: null,
     customerName: null,
     customerVisualId: null,
+    customerSaleDiscountPercentBp: null,
+    discountPercentBp: null,
+    discountWasManual: false,
 
     addItem: (product: Product, quantity: number = 1) => {
       set((state) => {
@@ -161,8 +174,30 @@ function createBaseCartSlice<TState extends BaseCartState>(
       }) as Partial<TState>);
     },
 
-    setCustomer: (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => {
-      set({ customerId, customerName, customerVisualId: customerVisualId ?? null } as Partial<TState>);
+    setCustomer: (
+      customerId: string | null,
+      customerName: string | null,
+      customerVisualId?: number | null,
+      customerSaleDiscountPercentBp?: number | null
+    ) => {
+      const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(customerSaleDiscountPercentBp ?? 0);
+      const resolvedCustomerDiscountBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+      set({
+        customerId,
+        customerName,
+        customerVisualId: customerVisualId ?? null,
+        customerSaleDiscountPercentBp: resolvedCustomerDiscountBp,
+        discountPercentBp: resolvedCustomerDiscountBp,
+        discountWasManual: false,
+      } as Partial<TState>);
+    },
+
+    setDiscountPercentBp: (discountPercentBp: number | null, markAsManual: boolean = true) => {
+      const normalizedDiscountBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+      set({
+        discountPercentBp: normalizedDiscountBp > 0 ? normalizedDiscountBp : null,
+        discountWasManual: markAsManual,
+      } as Partial<TState>);
     },
 
     clear: () => {
@@ -171,6 +206,9 @@ function createBaseCartSlice<TState extends BaseCartState>(
         customerId: null,
         customerName: null,
         customerVisualId: null,
+        customerSaleDiscountPercentBp: null,
+        discountPercentBp: null,
+        discountWasManual: false,
       } as Partial<TState>);
     },
 

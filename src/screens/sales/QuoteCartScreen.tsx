@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -16,7 +16,7 @@ import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface QuoteCartScreenProps {
@@ -29,6 +29,28 @@ interface QuoteCartScreenProps {
     };
   };
 }
+
+const formatDiscountPercentFromBp = (discountPercentBp: number | null | undefined): string => {
+  const normalizedDiscountBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+  if (normalizedDiscountBp <= 0) return '';
+  const value = (normalizedDiscountBp / 100).toFixed(2);
+  return value.replace(/\.?0+$/, '');
+};
+
+const parseDiscountPercentInput = (rawInput: string): { valueBp: number | null; error: string | null } => {
+  const normalized = String(rawInput || '').replace(',', '.').trim();
+  if (!normalized) return { valueBp: null, error: null };
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    return { valueBp: null, error: 'Ingresa un porcentaje válido.' };
+  }
+  if (parsed < 0 || parsed > 100) {
+    return { valueBp: null, error: 'El descuento debe estar entre 0 y 100%.' };
+  }
+
+  return { valueBp: Math.round(parsed * 100), error: null };
+};
 
 export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   const insets = useSafeAreaInsets();
@@ -47,6 +69,10 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     customerId,
     customerName,
     customerVisualId,
+    customerSaleDiscountPercentBp,
+    discountPercentBp,
+    discountWasManual,
+    setDiscountPercentBp,
     clear,
     setCustomer,
     editingQuoteLocalId,
@@ -55,6 +81,10 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   } = useQuoteCartStore();
   const { subUser } = useAuthStore();
   const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
+  const canApplyDiscounts = !!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN';
+  const appliedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+  const [discountDraft, setDiscountDraft] = useState('');
+  const [discountError, setDiscountError] = useState<string | null>(null);
   const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
   const [priceError, setPriceError] = useState<string | null>(null);
@@ -64,18 +94,60 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
   );
   useFocusEffect(
     useCallback(() => {
+      if (editingQuoteLocalId) return;
       const routeCustomerId = route?.params?.customerId;
       const routeCustomerName = route?.params?.customerName;
       const routeCustomerVisualId = route?.params?.customerVisualId;
 
-      if (
-        typeof routeCustomerId !== 'undefined' ||
-        typeof routeCustomerName !== 'undefined' ||
-        typeof routeCustomerVisualId !== 'undefined'
-      ) {
-        setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
-      }
-    }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer])
+      let active = true;
+      const applyRouteCustomer = async () => {
+        if (
+          typeof routeCustomerId === 'undefined' &&
+          typeof routeCustomerName === 'undefined' &&
+          typeof routeCustomerVisualId === 'undefined'
+        ) {
+          return;
+        }
+
+        let customerDiscountBp: number | null = null;
+        if (routeCustomerId) {
+          const customerRow = await db.queryFirst<{ data?: string | null }>(
+            'SELECT data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [routeCustomerId, routeCustomerId]
+          );
+          if (customerRow?.data) {
+            try {
+              const parsedCustomer = JSON.parse(customerRow.data);
+              const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(
+                parsedCustomer?.saleDiscountPercentBp ?? parsedCustomer?.sale_discount_percent_bp ?? 0
+              );
+              customerDiscountBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+            } catch {
+              customerDiscountBp = null;
+            }
+          }
+        }
+
+        if (!active) return;
+        setCustomer(
+          routeCustomerId ?? null,
+          routeCustomerName ?? null,
+          routeCustomerVisualId ?? null,
+          customerDiscountBp
+        );
+      };
+
+      void applyRouteCustomer();
+      return () => {
+        active = false;
+      };
+    }, [
+      editingQuoteLocalId,
+      route?.params?.customerId,
+      route?.params?.customerName,
+      route?.params?.customerVisualId,
+      setCustomer,
+    ])
   );
 
   useFocusEffect(
@@ -117,6 +189,24 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
     }, [editingQuoteLocalId])
   );
 
+  const applyDiscountDraft = (nextDraft: string, markAsManual: boolean = true): boolean => {
+    const parsed = parseDiscountPercentInput(nextDraft);
+    if (parsed.error) {
+      setDiscountError(parsed.error);
+      return false;
+    }
+
+    setDiscountError(null);
+    setDiscountPercentBp(parsed.valueBp, markAsManual);
+    return true;
+  };
+
+  useEffect(() => {
+    const nextDraft = formatDiscountPercentFromBp(discountPercentBp);
+    setDiscountDraft(nextDraft);
+    setDiscountError(null);
+  }, [discountPercentBp, customerId, customerSaleDiscountPercentBp]);
+
   const quoteTotals = useMemo(
     () =>
       calcDocumentTotalsByTaxMode({
@@ -127,8 +217,9 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         })),
         shippingCents: 0,
         salePricesIncludeItbis,
+        discountPercentBp: appliedDiscountPercentBp,
       }),
-    [items, salePricesIncludeItbis]
+    [appliedDiscountPercentBp, items, salePricesIncludeItbis]
   );
 
   const openRecipeDialog = (item: typeof items[0]) => {
@@ -249,6 +340,20 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
 
     setLoading(true);
     try {
+      if (!applyDiscountDraft(discountDraft, discountWasManual)) {
+        Alert.alert('Descuento inválido', 'Corrige el porcentaje de descuento antes de guardar la cotización.');
+        return;
+      }
+      const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+      const resolvedDiscountSource =
+        discountWasManual
+          ? 'MANUAL'
+          : resolvedDiscountPercentBp > 0
+            ? 'CUSTOMER'
+            : 'NONE';
+      const resolvedDiscountMode = discountWasManual ? 'MANUAL' : 'AUTO';
+      const resolvedManualDiscountPercentBp = discountWasManual ? resolvedDiscountPercentBp : undefined;
+
       const now = Date.now();
       const isEditing = !!editingQuoteLocalId;
       const localId = editingQuoteLocalId || generateLocalId();
@@ -275,6 +380,14 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         items,
         subtotalCents: quoteTotals.subtotalCents,
         itbisCents: quoteTotals.itbisCents,
+        subtotalBeforeDiscountCents: quoteTotals.subtotalBeforeDiscountCents,
+        discountSubtotalCents: quoteTotals.discountSubtotalCents,
+        itemsTotalBeforeDiscountCents: quoteTotals.itemsTotalBeforeDiscountCents,
+        discountTotalCents: quoteTotals.discountTotalCents,
+        discountPercentBp: resolvedDiscountPercentBp,
+        discountSource: resolvedDiscountSource,
+        discountMode: resolvedDiscountMode,
+        manualDiscountPercentBp: resolvedManualDiscountPercentBp,
         totalCents: quoteTotals.totalCents,
         salePricesIncludeItbis,
         status: 'draft',
@@ -356,6 +469,8 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         customerName: formatCustomerLabel(quoteData.customerName || 'Cliente general', quoteData.customerVisualId),
         totalCents: quoteData.totalCents,
         salePricesIncludeItbis: quoteData.salePricesIncludeItbis,
+        discountPercentBp: resolvedDiscountPercentBp,
+        discountTotalCents: quoteTotals.discountTotalCents,
         items: quoteData.items.map((item: any) => ({
           productName: String(item.productName || 'Producto'),
           quantity: Number(item.quantity || 0),
@@ -483,12 +598,57 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
             </Button>
           </View>
 
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Descuento (%):</Text>
+            <View style={styles.discountInputWrap}>
+              <TextInput
+                value={discountDraft}
+                onChangeText={(value) => {
+                  setDiscountDraft(value);
+                  if (discountError) setDiscountError(null);
+                  if (!canApplyDiscounts) return;
+                  applyDiscountDraft(value, true);
+                }}
+                onBlur={() => {
+                  if (!canApplyDiscounts) return;
+                  if (!applyDiscountDraft(discountDraft, true)) {
+                    setDiscountDraft(formatDiscountPercentFromBp(discountPercentBp));
+                  }
+                }}
+                mode="outlined"
+                keyboardType="decimal-pad"
+                editable={canApplyDiscounts}
+                style={styles.discountInput}
+                dense
+                outlineColor={ui.colors.border}
+                activeOutlineColor={ui.colors.primary}
+                placeholder="0"
+              />
+            </View>
+          </View>
+          {discountError ? <Text style={styles.discountErrorText}>{discountError}</Text> : null}
+          {!canApplyDiscounts ? (
+            <Text style={styles.discountReadonlyHint}>No tienes permiso para modificar descuentos.</Text>
+          ) : null}
+
           <Divider style={styles.divider} />
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Subtotal:</Text>
-            <Text style={styles.summaryLabel}>{formatCurrency(quoteTotals.subtotalCents)}</Text>
+            <Text style={styles.summaryLabel}>
+              {formatCurrency(
+                quoteTotals.discountSubtotalCents > 0
+                  ? quoteTotals.subtotalBeforeDiscountCents
+                  : quoteTotals.subtotalCents
+              )}
+            </Text>
           </View>
+          {quoteTotals.discountSubtotalCents > 0 ? (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Descuento ({(appliedDiscountPercentBp / 100).toFixed(2)}%):</Text>
+              <Text style={styles.summaryDiscountValue}>-{formatCurrency(quoteTotals.discountSubtotalCents)}</Text>
+            </View>
+          ) : null}
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>
               ITBIS {salePricesIncludeItbis ? '(incluido)' : '(no incluido)'}:
@@ -802,6 +962,32 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 14,
     color: ui.colors.textMuted,
+  },
+  summaryDiscountValue: {
+    fontSize: 14,
+    color: ui.colors.danger,
+    fontWeight: '700',
+  },
+  discountInputWrap: {
+    width: 98,
+  },
+  discountInput: {
+    height: 36,
+    backgroundColor: ui.colors.surface,
+  },
+  discountReadonlyHint: {
+    marginTop: -2,
+    marginBottom: 8,
+    fontSize: 11,
+    color: ui.colors.textMuted,
+    textAlign: 'right',
+  },
+  discountErrorText: {
+    marginTop: -2,
+    marginBottom: 8,
+    fontSize: 12,
+    color: ui.colors.danger,
+    textAlign: 'right',
   },
   divider: {
     marginVertical: 12,

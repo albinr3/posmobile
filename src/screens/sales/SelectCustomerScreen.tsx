@@ -8,6 +8,7 @@ import { useCartStore } from '../../store/cartStore';
 import { useQuoteCartStore } from '../../store/quoteCartStore';
 import { ui } from '../../theme/ui';
 import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 interface SelectCustomerScreenProps {
   navigation: any;
@@ -26,6 +27,19 @@ interface CustomerRow {
   phone?: string;
   data?: string | null;
 }
+
+const parseCustomerSaleDiscountPercentBp = (customerDataRaw: string | null | undefined): number | null => {
+  if (!customerDataRaw) return null;
+  try {
+    const parsed = JSON.parse(customerDataRaw);
+    const normalized = normalizeDiscountPercentBp(
+      parsed?.saleDiscountPercentBp ?? parsed?.sale_discount_percent_bp ?? 0
+    );
+    return normalized > 0 ? normalized : null;
+  } catch {
+    return null;
+  }
+};
 
 export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -67,11 +81,16 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
     });
   });
 
-  const handleSelectCustomer = (customerId: string | null, customerName: string | null, customerVisualId?: number | null) => {
+  const handleSelectCustomer = (
+    customerId: string | null,
+    customerName: string | null,
+    customerVisualId?: number | null,
+    customerSaleDiscountPercentBp?: number | null
+  ) => {
     if (mode === 'QUOTE') {
-      setQuoteCustomer(customerId, customerName, customerVisualId ?? null);
+      setQuoteCustomer(customerId, customerName, customerVisualId ?? null, customerSaleDiscountPercentBp ?? null);
     } else {
-      setSaleCustomer(customerId, customerName, customerVisualId ?? null);
+      setSaleCustomer(customerId, customerName, customerVisualId ?? null, customerSaleDiscountPercentBp ?? null);
     }
     navigation.goBack();
   };
@@ -109,7 +128,8 @@ export function SelectCustomerScreen({ navigation, route }: SelectCustomerScreen
                 handleSelectCustomer(
                   item.local_id,
                   item.name,
-                  normalizeCustomerVisualId(item.visual_id) ?? parseCustomerVisualIdFromData(item.data)
+                  normalizeCustomerVisualId(item.visual_id) ?? parseCustomerVisualIdFromData(item.data),
+                  parseCustomerSaleDiscountPercentBp(item.data)
                 )
               }
             >

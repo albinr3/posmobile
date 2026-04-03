@@ -23,7 +23,7 @@ import {
   hasConnectedPrinter,
   printSaleTicketDirect,
 } from '../../services/printing/thermalPrinterService';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface InvoiceListItem {
@@ -574,6 +574,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     parsedData: any;
     items: any[];
     salePricesIncludeItbis: boolean;
+    discountPercentBp?: number | null;
     totalCents: number;
   }): number => {
     const rawShippingCents = params.parsedData?.shippingCents ?? params.parsedData?.fleteCents ?? null;
@@ -600,6 +601,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       })),
       shippingCents: 0,
       salePricesIncludeItbis: params.salePricesIncludeItbis,
+      discountPercentBp: normalizeDiscountPercentBp(params.discountPercentBp ?? 0),
     }).totalCents;
 
     const inferredShipping = Math.round(Number(params.totalCents || 0) - calculatedWithoutShipping);
@@ -615,12 +617,29 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     paymentMethodLabel: string;
     items: any[];
     salePricesIncludeItbis: boolean;
+    discountPercentBp?: number | null;
+    discountTotalCents?: number;
     shippingCents?: number;
     totalCents: number;
     cancelled: boolean;
   }) => {
-    const { paperSize, logoDataUri, invoiceCode, createdAt, customerName, paymentMethodLabel, items, salePricesIncludeItbis, shippingCents = 0, totalCents, cancelled } = params;
+    const {
+      paperSize,
+      logoDataUri,
+      invoiceCode,
+      createdAt,
+      customerName,
+      paymentMethodLabel,
+      items,
+      salePricesIncludeItbis,
+      discountPercentBp,
+      discountTotalCents,
+      shippingCents = 0,
+      totalCents,
+      cancelled,
+    } = params;
     const widthMm = paperSize === '80' ? 80 : 58;
+    const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
     const totals = calcDocumentTotalsByTaxMode({
       items: items.map((item: any) => ({
         quantity: Number(item.quantity || item.qty || 0),
@@ -629,14 +648,19 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       })),
       shippingCents,
       salePricesIncludeItbis,
+      discountPercentBp: resolvedDiscountPercentBp,
     });
+    const resolvedDiscountTotalCents = Math.max(0, Math.round(Number(discountTotalCents ?? totals.discountTotalCents ?? 0)));
 
     const shippingRow = shippingCents > 0
       ? `<div class="row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>`
       : '';
+    const discountRow = resolvedDiscountTotalCents > 0
+      ? `<div class="row"><span>Descuento (${(resolvedDiscountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>-${formatCurrency(resolvedDiscountTotalCents)}</span></div>`
+      : '';
     const taxRows = showItbisBreakdown
-      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div><div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>${shippingRow}`
-      : shippingRow;
+      ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div><div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>${discountRow}${shippingRow}`
+      : `${discountRow}${shippingRow}`;
 
     const itemsRows = items.map((item: any) => {
       const lineTotalCents = calcDocumentTotalsByTaxMode({
@@ -671,11 +695,34 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     dueDate?: number | null;
     items: any[];
     salePricesIncludeItbis: boolean;
+    discountPercentBp?: number | null;
+    discountTotalCents?: number;
     shippingCents?: number;
     totalCents: number;
     cancelled: boolean;
   }) => {
-    const { logoDataUri, company, invoiceCode, createdAt, customerName, customerAddress, paymentMethod, transferBankName, paymentSplits, paymentMethodLabel, saleType, dueDate, items, salePricesIncludeItbis, shippingCents = 0, totalCents, cancelled } = params;
+    const {
+      logoDataUri,
+      company,
+      invoiceCode,
+      createdAt,
+      customerName,
+      customerAddress,
+      paymentMethod,
+      transferBankName,
+      paymentSplits,
+      paymentMethodLabel,
+      saleType,
+      dueDate,
+      items,
+      salePricesIncludeItbis,
+      discountPercentBp,
+      discountTotalCents,
+      shippingCents = 0,
+      totalCents,
+      cancelled,
+    } = params;
+    const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
     const totals = calcDocumentTotalsByTaxMode({
       items: items.map((item: any) => ({
         quantity: Number(item.quantity || item.qty || 0),
@@ -684,7 +731,9 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       })),
       shippingCents,
       salePricesIncludeItbis,
+      discountPercentBp: resolvedDiscountPercentBp,
     });
+    const resolvedDiscountTotalCents = Math.max(0, Math.round(Number(discountTotalCents ?? totals.discountTotalCents ?? 0)));
     const uniqueItbisRates = Array.from(new Set(items.map((item: any) => Number(item.itbisRateBp || 1800)).filter((rate: number) => Number.isFinite(rate) && rate > 0)));
     const itbisLabel = uniqueItbisRates.length === 1
       ? `ITBIS (${(uniqueItbisRates[0] / 100).toFixed(2)}% ${salePricesIncludeItbis ? 'incluido' : 'no incluido'})`
@@ -729,7 +778,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       ? `<div style="margin-top:8px;border:1px solid #FDE68A;background:#FFFBEB;border-radius:8px;padding:10px;font-size:12px;"><div style="font-weight:700;color:#92400E;">⏰ Venta a Crédito</div><div style="margin-top:3px;color:#92400E;"><strong>Fecha de vencimiento:</strong> ${escapeHtml(dueDateLabel)}</div></div>`
       : '';
 
-    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div>${customerAddress ? `<div style="margin-top:6px;"><strong>Dirección:</strong> ${escapeHtml(customerAddress)}</div>` : ''}<div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${splitPaymentHtml}${creditInfoHtml}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}${shippingCents > 0 ? `<div class="totals-row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
+    const discountRow = resolvedDiscountTotalCents > 0
+      ? `<div class="totals-row"><span>Descuento (${(resolvedDiscountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>-${formatCurrency(resolvedDiscountTotalCents)}</span></div>`
+      : '';
+    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div>${customerAddress ? `<div style="margin-top:6px;"><strong>Dirección:</strong> ${escapeHtml(customerAddress)}</div>` : ''}<div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${splitPaymentHtml}${creditInfoHtml}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}${discountRow}${shippingCents > 0 ? `<div class="totals-row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>` : ''}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
   };
 
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
@@ -769,10 +821,13 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
+      const discountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
+      const discountTotalCents = Number(parsedData?.discountTotalCents || 0);
       const shippingCents = resolveInvoiceShippingCents({
         parsedData,
         items,
         salePricesIncludeItbis,
+        discountPercentBp,
         totalCents,
       });
 
@@ -797,6 +852,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           dueDate: dueDateForLetter,
           items,
           salePricesIncludeItbis,
+          discountPercentBp,
+          discountTotalCents,
           shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
@@ -849,6 +906,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : invoice.paymentSplits,
         type: saleType,
         dueDate,
+        discountPercentBp,
+        discountTotalCents,
         shippingCents,
         totalCents,
         salePricesIncludeItbis,
@@ -933,10 +992,13 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
+      const discountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
+      const discountTotalCents = Number(parsedData?.discountTotalCents || 0);
       const shippingCents = resolveInvoiceShippingCents({
         parsedData,
         items,
         salePricesIncludeItbis,
+        discountPercentBp,
         totalCents,
       });
       const [customerAddress, dueDateForLetter] = await Promise.all([
@@ -959,6 +1021,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           dueDate: dueDateForLetter,
           items,
           salePricesIncludeItbis,
+          discountPercentBp,
+          discountTotalCents,
           shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
@@ -972,6 +1036,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           paymentMethodLabel,
           items,
           salePricesIncludeItbis,
+          discountPercentBp,
+          discountTotalCents,
           shippingCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',

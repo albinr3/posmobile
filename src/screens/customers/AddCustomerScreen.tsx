@@ -10,6 +10,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { normalizeCustomerVisualId } from '../../utils/customerLabels';
+import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 interface AddCustomerScreenProps {
   navigation: any;
@@ -60,6 +61,8 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
   const [province, setProvince] = useState('');
   const [creditEnabled, setCreditEnabled] = useState(false);
   const [creditDays, setCreditDays] = useState('');
+  const [saleDiscountPercent, setSaleDiscountPercent] = useState('');
+  const [initialSaleDiscountPercentBp, setInitialSaleDiscountPercentBp] = useState(0);
   const [notes, setNotes] = useState('');
   const [visualId, setVisualId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -68,6 +71,10 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
   const [serverId, setServerId] = useState<string | null>(null);
   const [provinceMenuVisible, setProvinceMenuVisible] = useState(false);
   const { getToken } = useAuth();
+  const { subUser } = useAuthStore();
+  const canManageCustomers = !!subUser?.isOwner || (subUser as any)?.canManageCustomers === true || subUser?.role === 'ADMIN';
+  const canApplyDiscounts = !!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN';
+  const canEditAutomaticDiscount = canManageCustomers && canApplyDiscounts;
 
   const resolveNextVisualId = useCallback(async (preferGenericOne: boolean): Promise<number> => {
     const rows = await db.query<{ visual_id?: number | null }>('SELECT visual_id FROM customers');
@@ -124,6 +131,11 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           setProvince(String(parsed?.province || ''));
           setCreditEnabled(Boolean(parsed?.creditEnabled));
           setCreditDays(String(parsed?.creditDays ?? ''));
+          const parsedDiscountPercentBp = normalizeDiscountPercentBp(
+            parsed?.saleDiscountPercentBp ?? parsed?.sale_discount_percent_bp ?? 0
+          );
+          setInitialSaleDiscountPercentBp(parsedDiscountPercentBp);
+          setSaleDiscountPercent(parsedDiscountPercentBp > 0 ? String(parsedDiscountPercentBp / 100) : '');
           setNotes(String(parsed?.notes || ''));
         } catch (error) {
           if (!isActive) return;
@@ -154,6 +166,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
         if (active) setVisualId(null);
       }
     };
+    setInitialSaleDiscountPercentBp(0);
     void hydrateVisualId();
     return () => {
       active = false;
@@ -173,6 +186,17 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
       const preferGenericOne = normalizedName === 'cliente general';
       const resolvedVisualId = visualId ?? (await resolveNextVisualId(preferGenericOne));
       const creditDaysValue = creditDays ? parseInt(creditDays, 10) : 0;
+      const normalizedDiscountInput = String(saleDiscountPercent || '').replace(',', '.').trim();
+      const parsedSaleDiscountPercent = normalizedDiscountInput ? Number(normalizedDiscountInput) : 0;
+      if (!Number.isFinite(parsedSaleDiscountPercent) || parsedSaleDiscountPercent < 0 || parsedSaleDiscountPercent > 100) {
+        Alert.alert('Error', 'El descuento automático debe estar entre 0 y 100%.');
+        return;
+      }
+      const saleDiscountPercentBp = normalizeDiscountPercentBp(Math.round(parsedSaleDiscountPercent * 100));
+      if (!canEditAutomaticDiscount && saleDiscountPercentBp !== initialSaleDiscountPercentBp) {
+        Alert.alert('Permiso requerido', 'No tienes permiso para modificar el descuento automático del cliente.');
+        return;
+      }
 
       const customerData = {
         id: serverId || undefined,
@@ -185,6 +209,7 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
         province: province.trim() || null,
         creditEnabled,
         creditDays: Number.isNaN(creditDaysValue) ? 0 : creditDaysValue,
+        saleDiscountPercentBp,
         notes: notes.trim() || null,
         createdAt: Date.now(),
       };
@@ -310,6 +335,24 @@ export function AddCustomerScreen({ navigation, route }: AddCustomerScreenProps)
           </View>
           {creditEnabled ? (
             <TextInput label="Dias de credito" value={creditDays} onChangeText={setCreditDays} mode="outlined" keyboardType="number-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          ) : null}
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>Descuentos</Text>
+          <TextInput
+            label="Descuento automático (%)"
+            value={saleDiscountPercent}
+            onChangeText={setSaleDiscountPercent}
+            mode="outlined"
+            keyboardType="decimal-pad"
+            editable={canEditAutomaticDiscount}
+            style={styles.input}
+            outlineColor={ui.colors.border}
+            activeOutlineColor={ui.colors.primary}
+          />
+          {!canEditAutomaticDiscount ? (
+            <Text style={styles.switchDescription}>No tienes permiso para editar descuentos automáticos.</Text>
           ) : null}
         </View>
 

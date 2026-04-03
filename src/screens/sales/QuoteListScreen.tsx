@@ -15,7 +15,7 @@ import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface QuoteListItem {
@@ -232,6 +232,8 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
     const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
       ? parsedData.salePricesIncludeItbis
       : true;
+    const discountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
+    const discountTotalCents = Number(parsedData?.discountTotalCents || 0);
     const totals = calcDocumentTotalsByTaxMode({
       items: items.map((item: any) => ({
         quantity: Number(item.quantity || item.qty || 0),
@@ -240,11 +242,16 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
       })),
       shippingCents: 0,
       salePricesIncludeItbis,
+      discountPercentBp,
     });
+    const discountRow = discountTotalCents > 0
+      ? `<div class="row"><span>Descuento (${(discountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>-${formatCurrency(discountTotalCents)}</span></div>`
+      : '';
     const taxRows = showItbisBreakdown
       ? `<div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
-            <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>`
-      : '';
+            <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>
+            ${discountRow}`
+      : discountRow;
     const logoDataUri = await getLogoDataUri();
 
     const itemsRows = items
@@ -327,6 +334,8 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
       const salePricesIncludeItbis = typeof parsedData?.salePricesIncludeItbis === 'boolean'
         ? parsedData.salePricesIncludeItbis
         : true;
+      const discountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
+      const discountTotalCents = Number(parsedData?.discountTotalCents || 0);
 
       const printResult = await printQuoteTicketDirect({
         quoteCode,
@@ -334,6 +343,8 @@ export function QuoteListScreen({ navigation }: QuoteListScreenProps) {
         customerName,
         totalCents,
         salePricesIncludeItbis,
+        discountPercentBp,
+        discountTotalCents,
         items: items.map((item: any) => ({
           productName: String(item.productName || 'Producto'),
           quantity: Number(item.quantity || item.qty || 0),

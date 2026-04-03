@@ -9,6 +9,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { ui } from '../../theme/ui';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import {
   isCancelledStatus,
   normalizeSaleType,
@@ -147,7 +148,25 @@ export function SalesReportScreen() {
         if (!Number.isFinite(createdAt) || createdAt < fromTs || createdAt > toTs) {
           continue;
         }
-        const totalCents = Number(row.total_cents || parsed?.totalCents || 0);
+        let totalCents = Number(row.total_cents || parsed?.totalCents || 0);
+        if ((!Number.isFinite(totalCents) || totalCents <= 0) && Array.isArray(parsed?.items) && parsed.items.length > 0) {
+          totalCents = calcDocumentTotalsByTaxMode({
+            items: parsed.items.map((item: any) => ({
+              quantity: Number(item?.quantity ?? item?.qty ?? 0),
+              priceCents: Number(item?.priceCents ?? item?.unitPriceCents ?? 0),
+              itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
+            })),
+            shippingCents: Number(
+              parsed?.shippingCents ??
+              parsed?.fleteCents ??
+              (Number.isFinite(Number(parsed?.shipping ?? parsed?.flete))
+                ? Math.round(Number(parsed?.shipping ?? parsed?.flete) * 100)
+                : 0)
+            ),
+            salePricesIncludeItbis: parsed?.salePricesIncludeItbis !== false,
+            discountPercentBp: normalizeDiscountPercentBp(parsed?.discountPercentBp ?? 0),
+          }).totalCents;
+        }
         const type = normalizeSaleType(parsed?.type, parsed?.paymentMethod);
 
         mapped.push({

@@ -4,6 +4,14 @@ export type TaxLineTotals = {
   totalCents: number;
 };
 
+const MAX_DISCOUNT_BP = 10000;
+
+export function normalizeDiscountPercentBp(rawDiscountPercentBp: unknown): number {
+  const discountPercentBp = Number(rawDiscountPercentBp);
+  if (!Number.isFinite(discountPercentBp)) return 0;
+  return Math.max(0, Math.min(MAX_DISCOUNT_BP, Math.round(discountPercentBp)));
+}
+
 export function calcLineTotalsByTaxMode(params: {
   unitPriceCents: number;
   quantity: number;
@@ -53,31 +61,57 @@ export function calcDocumentTotalsByTaxMode(params: {
   }>;
   shippingCents?: number;
   salePricesIncludeItbis?: boolean;
+  discountPercentBp?: number | null;
 }) {
   const shippingCents = Math.max(0, Math.round(Number(params.shippingCents || 0)));
   const salePricesIncludeItbis = params.salePricesIncludeItbis !== false;
+  const discountPercentBp = normalizeDiscountPercentBp(params.discountPercentBp ?? 0);
 
+  let subtotalBeforeDiscountCents = 0;
+  let discountSubtotalCents = 0;
   let subtotalCents = 0;
   let itbisCents = 0;
+  let itemsTotalBeforeDiscountCents = 0;
+  let discountTotalCents = 0;
   let itemsTotalCents = 0;
 
   for (const item of params.items || []) {
     const quantity = Number(item?.quantity ?? item?.qty ?? 0);
     const unitPriceCents = Number(item?.priceCents ?? item?.unitPriceCents ?? 0);
+    const lineItbisRateBp = Math.max(0, Math.round(Number(item?.itbisRateBp ?? 1800)));
     const line = calcLineTotalsByTaxMode({
       unitPriceCents,
       quantity,
-      itbisRateBp: item?.itbisRateBp ?? 1800,
+      itbisRateBp: lineItbisRateBp,
       salePricesIncludeItbis,
     });
-    subtotalCents += line.subtotalCents;
-    itbisCents += line.itbisCents;
-    itemsTotalCents += line.totalCents;
+
+    const lineDiscountSubtotalCents =
+      discountPercentBp > 0
+        ? Math.max(0, Math.min(line.subtotalCents, Math.round((line.subtotalCents * discountPercentBp) / 10000)))
+        : 0;
+    const lineSubtotalAfterDiscountCents = Math.max(0, line.subtotalCents - lineDiscountSubtotalCents);
+    const lineItbisAfterDiscountCents =
+      lineItbisRateBp > 0 ? Math.max(0, Math.round((lineSubtotalAfterDiscountCents * lineItbisRateBp) / 10000)) : 0;
+    const lineTotalAfterDiscountCents = lineSubtotalAfterDiscountCents + lineItbisAfterDiscountCents;
+    const lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+
+    subtotalBeforeDiscountCents += line.subtotalCents;
+    discountSubtotalCents += lineDiscountSubtotalCents;
+    subtotalCents += lineSubtotalAfterDiscountCents;
+    itbisCents += lineItbisAfterDiscountCents;
+    itemsTotalBeforeDiscountCents += line.totalCents;
+    discountTotalCents += lineDiscountTotalCents;
+    itemsTotalCents += lineTotalAfterDiscountCents;
   }
 
   return {
+    subtotalBeforeDiscountCents,
+    discountSubtotalCents,
     subtotalCents,
     itbisCents,
+    itemsTotalBeforeDiscountCents,
+    discountTotalCents,
     itemsTotalCents,
     totalCents: itemsTotalCents + shippingCents,
   };

@@ -20,7 +20,7 @@ import { buildLineId } from '../../store/createCartStore';
 import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterService';
 import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
 import { getSalesSettings } from '../../services/settings/salesSettings';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface CartScreenProps {
@@ -35,6 +35,28 @@ interface CartScreenProps {
   };
 }
 
+const formatDiscountPercentFromBp = (discountPercentBp: number | null | undefined): string => {
+  const normalizedDiscountBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+  if (normalizedDiscountBp <= 0) return '';
+  const value = (normalizedDiscountBp / 100).toFixed(2);
+  return value.replace(/\.?0+$/, '');
+};
+
+const parseDiscountPercentInput = (rawInput: string): { valueBp: number | null; error: string | null } => {
+  const normalized = String(rawInput || '').replace(',', '.').trim();
+  if (!normalized) return { valueBp: null, error: null };
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    return { valueBp: null, error: 'Ingresa un porcentaje válido.' };
+  }
+  if (parsed < 0 || parsed > 100) {
+    return { valueBp: null, error: 'El descuento debe estar entre 0 y 100%.' };
+  }
+
+  return { valueBp: Math.round(parsed * 100), error: null };
+};
+
 export function CartScreen({ navigation, route }: CartScreenProps) {
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
@@ -46,6 +68,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     customerId,
     customerName,
     customerVisualId,
+    customerSaleDiscountPercentBp,
+    discountPercentBp,
+    discountWasManual,
+    setDiscountPercentBp,
     paymentMethod,
     setPaymentMethod,
     transferBankName,
@@ -69,10 +95,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [shippingModalVisible, setShippingModalVisible] = useState(false);
   const [shippingDraft, setShippingDraft] = useState('');
   const [shippingError, setShippingError] = useState<string | null>(null);
+  const [discountDraft, setDiscountDraft] = useState('');
+  const [discountError, setDiscountError] = useState<string | null>(null);
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const { setCustomer } = useCartStore();
   const { subUser } = useAuthStore();
   const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
+  const canApplyDiscounts = !!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN';
+  const appliedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
 
   const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
   const [priceDraft, setPriceDraft] = useState('');
@@ -212,6 +242,24 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     closeShippingModal();
   };
 
+  const applyDiscountDraft = (nextDraft: string, markAsManual: boolean = true): boolean => {
+    const parsed = parseDiscountPercentInput(nextDraft);
+    if (parsed.error) {
+      setDiscountError(parsed.error);
+      return false;
+    }
+
+    setDiscountError(null);
+    setDiscountPercentBp(parsed.valueBp, markAsManual);
+    return true;
+  };
+
+  useEffect(() => {
+    const nextDraft = formatDiscountPercentFromBp(discountPercentBp);
+    setDiscountDraft(nextDraft);
+    setDiscountError(null);
+  }, [discountPercentBp, customerId, customerSaleDiscountPercentBp]);
+
   const applyPriceChange = () => {
     const cartItem = items.find(i => i.lineId === priceDialogLineId);
     if (!cartItem) {
@@ -285,23 +333,66 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         })),
         shippingCents,
         salePricesIncludeItbis,
+        discountPercentBp: appliedDiscountPercentBp,
       }),
-    [items, shippingCents, salePricesIncludeItbis]
+    [items, shippingCents, salePricesIncludeItbis, appliedDiscountPercentBp]
   );
 
   useEffect(() => {
+    if (editingSaleLocalId) return;
     const routeCustomerId = route?.params?.customerId;
     const routeCustomerName = route?.params?.customerName;
     const routeCustomerVisualId = route?.params?.customerVisualId;
 
-    if (
-      typeof routeCustomerId !== 'undefined' ||
-      typeof routeCustomerName !== 'undefined' ||
-      typeof routeCustomerVisualId !== 'undefined'
-    ) {
-      setCustomer(routeCustomerId ?? null, routeCustomerName ?? null, routeCustomerVisualId ?? null);
-    }
-  }, [route?.params?.customerId, route?.params?.customerName, route?.params?.customerVisualId, setCustomer]);
+    let active = true;
+    const applyRouteCustomer = async () => {
+      if (
+        typeof routeCustomerId === 'undefined' &&
+        typeof routeCustomerName === 'undefined' &&
+        typeof routeCustomerVisualId === 'undefined'
+      ) {
+        return;
+      }
+
+      let customerDiscountBp: number | null = null;
+      if (routeCustomerId) {
+        const customerRow = await db.queryFirst<{ data?: string | null }>(
+          'SELECT data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [routeCustomerId, routeCustomerId]
+        );
+        if (customerRow?.data) {
+          try {
+            const parsedCustomer = JSON.parse(customerRow.data);
+            const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(
+              parsedCustomer?.saleDiscountPercentBp ?? parsedCustomer?.sale_discount_percent_bp ?? 0
+            );
+            customerDiscountBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+          } catch {
+            customerDiscountBp = null;
+          }
+        }
+      }
+
+      if (!active) return;
+      setCustomer(
+        routeCustomerId ?? null,
+        routeCustomerName ?? null,
+        routeCustomerVisualId ?? null,
+        customerDiscountBp
+      );
+    };
+
+    void applyRouteCustomer();
+    return () => {
+      active = false;
+    };
+  }, [
+    editingSaleLocalId,
+    route?.params?.customerId,
+    route?.params?.customerName,
+    route?.params?.customerVisualId,
+    setCustomer,
+  ]);
 
   const resolveLocalProductId = async (rawProductId: string): Promise<string | null> => {
     if (!rawProductId) return null;
@@ -466,10 +557,24 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setLoading(true);
     try {
       if (items.length === 0) return;
+    if (!applyDiscountDraft(discountDraft, discountWasManual)) {
+      Alert.alert('Descuento inválido', 'Corrige el porcentaje de descuento antes de completar la venta.');
+      return;
+    }
+    const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
+    const resolvedDiscountSource =
+      discountWasManual
+        ? 'MANUAL'
+        : resolvedDiscountPercentBp > 0
+          ? 'CUSTOMER'
+          : 'NONE';
+    const resolvedDiscountMode = discountWasManual ? 'MANUAL' : 'AUTO';
+    const resolvedManualDiscountPercentBp = discountWasManual ? resolvedDiscountPercentBp : undefined;
     let creditDueDate: number | null = null;
     let selectedCustomerId = customerId;
     let selectedCustomerName = customerName;
     let selectedCustomerVisualId = customerVisualId;
+    let selectedCustomerSaleDiscountPercentBp = customerSaleDiscountPercentBp ?? null;
 
     if (!selectedCustomerId) {
       const defaultCustomer = await db.queryFirst<{ local_id: string; name: string; visual_id?: number | null; data?: string | null }>(
@@ -492,7 +597,18 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         normalizeCustomerVisualId(defaultCustomer.visual_id) ??
         parseCustomerVisualIdFromData(defaultCustomer.data) ??
         null;
-      setCustomer(selectedCustomerId, selectedCustomerName, selectedCustomerVisualId);
+      let defaultCustomerDiscountBp: number | null = null;
+      try {
+        const parsedDefaultCustomer = defaultCustomer?.data ? JSON.parse(defaultCustomer.data) : null;
+        const normalizedDefaultCustomerDiscountBp = normalizeDiscountPercentBp(
+          parsedDefaultCustomer?.saleDiscountPercentBp ?? parsedDefaultCustomer?.sale_discount_percent_bp ?? 0
+        );
+        defaultCustomerDiscountBp = normalizedDefaultCustomerDiscountBp > 0 ? normalizedDefaultCustomerDiscountBp : null;
+      } catch {
+        defaultCustomerDiscountBp = null;
+      }
+      selectedCustomerSaleDiscountPercentBp = defaultCustomerDiscountBp;
+      setCustomer(selectedCustomerId, selectedCustomerName, selectedCustomerVisualId, defaultCustomerDiscountBp);
     }
 
     if (selectedCustomerId && !selectedCustomerVisualId) {
@@ -504,8 +620,26 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         normalizeCustomerVisualId(customerRow?.visual_id) ??
         parseCustomerVisualIdFromData(customerRow?.data) ??
         null;
+      let customerDiscountBp: number | null = null;
+      try {
+        const parsedCustomer = customerRow?.data ? JSON.parse(customerRow.data) : null;
+        const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(
+          parsedCustomer?.saleDiscountPercentBp ?? parsedCustomer?.sale_discount_percent_bp ?? 0
+        );
+        customerDiscountBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+      } catch {
+        customerDiscountBp = null;
+      }
+      if (customerDiscountBp !== null || selectedCustomerSaleDiscountPercentBp === null) {
+        selectedCustomerSaleDiscountPercentBp = customerDiscountBp;
+      }
       if (selectedCustomerVisualId) {
-        setCustomer(selectedCustomerId, selectedCustomerName ?? null, selectedCustomerVisualId);
+        setCustomer(
+          selectedCustomerId,
+          selectedCustomerName ?? null,
+          selectedCustomerVisualId,
+          selectedCustomerSaleDiscountPercentBp
+        );
       }
     }
 
@@ -598,6 +732,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         })),
         subtotalCents: cartTotals.subtotalCents,
         itbisCents: cartTotals.itbisCents,
+        subtotalBeforeDiscountCents: cartTotals.subtotalBeforeDiscountCents,
+        discountSubtotalCents: cartTotals.discountSubtotalCents,
+        itemsTotalBeforeDiscountCents: cartTotals.itemsTotalBeforeDiscountCents,
+        discountTotalCents: cartTotals.discountTotalCents,
+        discountPercentBp: resolvedDiscountPercentBp,
+        discountSource: resolvedDiscountSource,
+        discountMode: resolvedDiscountMode,
+        manualDiscountPercentBp: resolvedManualDiscountPercentBp,
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
         paymentMethod,
@@ -640,6 +782,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           })),
           shippingCents,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
+          discountPercentBp: resolvedDiscountPercentBp,
         });
         const documentItems = items.map((item) => ({
           productId: item.productId,
@@ -685,6 +828,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           items: documentItems,
           subtotalCents: documentTotals.subtotalCents,
           itbisCents: documentTotals.itbisCents,
+          subtotalBeforeDiscountCents: documentTotals.subtotalBeforeDiscountCents,
+          discountSubtotalCents: documentTotals.discountSubtotalCents,
+          itemsTotalBeforeDiscountCents: documentTotals.itemsTotalBeforeDiscountCents,
+          discountTotalCents: documentTotals.discountTotalCents,
+          discountPercentBp: resolvedDiscountPercentBp,
+          discountSource: resolvedDiscountSource,
+          discountMode: resolvedDiscountMode,
+          manualDiscountPercentBp: resolvedManualDiscountPercentBp,
           totalCents: documentTotals.totalCents,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           editedAt: now,
@@ -721,6 +872,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           paymentMethod,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
           paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+          discountMode: resolvedDiscountMode,
+          manualDiscountPercentBp: resolvedManualDiscountPercentBp,
           createdAt,
           soldAt: createdAt,
           items: items.map((item) => ({
@@ -746,6 +899,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           items,
           subtotalCents: cartTotals.subtotalCents,
           itbisCents: cartTotals.itbisCents,
+          subtotalBeforeDiscountCents: cartTotals.subtotalBeforeDiscountCents,
+          discountSubtotalCents: cartTotals.discountSubtotalCents,
+          itemsTotalBeforeDiscountCents: cartTotals.itemsTotalBeforeDiscountCents,
+          discountTotalCents: cartTotals.discountTotalCents,
+          discountPercentBp: resolvedDiscountPercentBp,
+          discountSource: resolvedDiscountSource,
+          discountMode: resolvedDiscountMode,
+          manualDiscountPercentBp: resolvedManualDiscountPercentBp,
           totalCents: cartTotals.totalCents,
           salePricesIncludeItbis,
           paymentMethod,
@@ -805,6 +966,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
+        discountPercentBp: resolvedDiscountPercentBp,
+        discountTotalCents: cartTotals.discountTotalCents,
         shippingCents,
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
@@ -957,6 +1120,39 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             </View>
 
             <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Descuento (%):</Text>
+              <View style={styles.discountInputWrap}>
+                <TextInput
+                  value={discountDraft}
+                  onChangeText={(value) => {
+                    setDiscountDraft(value);
+                    if (discountError) setDiscountError(null);
+                    if (!canApplyDiscounts) return;
+                    applyDiscountDraft(value, true);
+                  }}
+                  onBlur={() => {
+                    if (!canApplyDiscounts) return;
+                    if (!applyDiscountDraft(discountDraft, true)) {
+                      setDiscountDraft(formatDiscountPercentFromBp(discountPercentBp));
+                    }
+                  }}
+                  mode="outlined"
+                  keyboardType="decimal-pad"
+                  editable={canApplyDiscounts}
+                  style={styles.discountInput}
+                  dense
+                  outlineColor={ui.colors.border}
+                  activeOutlineColor={ui.colors.primary}
+                  placeholder="0"
+                />
+              </View>
+            </View>
+            {discountError ? <Text style={styles.discountErrorText}>{discountError}</Text> : null}
+            {!canApplyDiscounts ? (
+              <Text style={styles.discountReadonlyHint}>No tienes permiso para modificar descuentos.</Text>
+            ) : null}
+
+            <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Método de Pago:</Text>
               <Menu
                 visible={menuVisible}
@@ -1029,8 +1225,20 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Subtotal:</Text>
-              <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.subtotalCents)}</Text>
+              <Text style={styles.summaryLabel}>
+                {formatCurrency(
+                  cartTotals.discountSubtotalCents > 0
+                    ? cartTotals.subtotalBeforeDiscountCents
+                    : cartTotals.subtotalCents
+                )}
+              </Text>
             </View>
+            {cartTotals.discountSubtotalCents > 0 ? (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Descuento ({(appliedDiscountPercentBp / 100).toFixed(2)}%):</Text>
+                <Text style={styles.summaryDiscountValue}>-{formatCurrency(cartTotals.discountSubtotalCents)}</Text>
+              </View>
+            ) : null}
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Flete:</Text>
               <Button mode="text" compact onPress={openShippingModal}>
@@ -1499,6 +1707,32 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 14,
     color: ui.colors.textMuted,
+  },
+  summaryDiscountValue: {
+    fontSize: 14,
+    color: ui.colors.danger,
+    fontWeight: '700',
+  },
+  discountInputWrap: {
+    width: 98,
+  },
+  discountInput: {
+    height: 36,
+    backgroundColor: ui.colors.surface,
+  },
+  discountReadonlyHint: {
+    marginTop: -2,
+    marginBottom: 8,
+    fontSize: 11,
+    color: ui.colors.textMuted,
+    textAlign: 'right',
+  },
+  discountErrorText: {
+    marginTop: -2,
+    marginBottom: 8,
+    fontSize: 12,
+    color: ui.colors.danger,
+    textAlign: 'right',
   },
   selectorBlock: {
     marginBottom: 8,

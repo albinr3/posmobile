@@ -27,9 +27,12 @@ export interface Customer {
   email?: string;
   address?: string;
   creditLimit?: number;
+  saleDiscountPercentBp?: number;
   synced: boolean;
   data: string;
 }
+
+export type DocumentDiscountSource = 'NONE' | 'CUSTOMER' | 'MANUAL';
 
 export interface Sale {
   localId: string;
@@ -46,6 +49,10 @@ export interface Sale {
   subtotalCents?: number;
   itbisCents?: number;
   shippingCents?: number;
+  discountSource?: DocumentDiscountSource;
+  discountPercentBp?: number;
+  discountSubtotalCents?: number;
+  discountTotalCents?: number;
   createdAt: number;
   synced: boolean;
   data: string;

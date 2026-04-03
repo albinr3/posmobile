@@ -10,6 +10,9 @@ interface QuoteCartExtraState {
     customerId: string | null;
     customerName: string | null;
     customerVisualId?: number | null;
+    customerSaleDiscountPercentBp?: number | null;
+    discountPercentBp?: number | null;
+    discountWasManual?: boolean;
     editingQuoteLocalId: string;
     editingQuoteServerId: string | null;
     editingQuoteCode: string | null;
@@ -30,6 +33,13 @@ export const useQuoteCartStore = createCartStore<QuoteCartExtraState>((set) => (
       customerId: draft.customerId,
       customerName: draft.customerName,
       customerVisualId: draft.customerVisualId ?? null,
+      customerSaleDiscountPercentBp: Number.isFinite(Number(draft.customerSaleDiscountPercentBp))
+        ? Math.max(0, Math.min(10000, Math.round(Number(draft.customerSaleDiscountPercentBp))))
+        : null,
+      discountPercentBp: Number.isFinite(Number(draft.discountPercentBp))
+        ? Math.max(0, Math.min(10000, Math.round(Number(draft.discountPercentBp))))
+        : null,
+      discountWasManual: draft.discountWasManual === true,
       editingQuoteLocalId: draft.editingQuoteLocalId,
       editingQuoteServerId: draft.editingQuoteServerId,
       editingQuoteCode: draft.editingQuoteCode,
@@ -50,6 +60,9 @@ export const useQuoteCartStore = createCartStore<QuoteCartExtraState>((set) => (
       customerId: null,
       customerName: null,
       customerVisualId: null,
+      customerSaleDiscountPercentBp: null,
+      discountPercentBp: null,
+      discountWasManual: false,
       editingQuoteLocalId: null,
       editingQuoteServerId: null,
       editingQuoteCode: null,

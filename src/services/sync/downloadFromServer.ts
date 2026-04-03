@@ -2,6 +2,7 @@ import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
 import { normalizeCustomerVisualId } from '../../utils/customerLabels';
+import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 const DETAIL_FETCH_BATCH_SIZE = 8;
 const DOWNLOAD_TIMEOUT_MS = 30000;
@@ -342,7 +343,12 @@ export async function downloadFromServer(options: {
           phone: customer.phone || null,
           is_available_for_sale: 1,
           synced: 1,
-          data: JSON.stringify(customer),
+          data: JSON.stringify({
+            ...customer,
+            saleDiscountPercentBp: normalizeDiscountPercentBp(
+              customer?.saleDiscountPercentBp ?? customer?.sale_discount_percent_bp ?? 0
+            ),
+          }),
         };
 
         if (exists) {
@@ -579,6 +585,30 @@ export async function downloadFromServer(options: {
           sale?.fleteCents ??
           localSale?.shippingCents ??
           localSale?.fleteCents ??
+          0
+        ),
+        discountSource: String(
+          saleDetail?.discountSource ??
+          sale?.discountSource ??
+          localSale?.discountSource ??
+          'NONE'
+        ).toUpperCase(),
+        discountPercentBp: normalizeDiscountPercentBp(
+          saleDetail?.discountPercentBp ??
+          sale?.discountPercentBp ??
+          localSale?.discountPercentBp ??
+          0
+        ),
+        discountSubtotalCents: Number(
+          saleDetail?.discountSubtotalCents ??
+          sale?.discountSubtotalCents ??
+          localSale?.discountSubtotalCents ??
+          0
+        ),
+        discountTotalCents: Number(
+          saleDetail?.discountTotalCents ??
+          sale?.discountTotalCents ??
+          localSale?.discountTotalCents ??
           0
         ),
         totalCents: Number(saleDetail?.totalCents || sale?.totalCents || localSale?.totalCents || 0),
@@ -823,6 +853,30 @@ export async function downloadFromServer(options: {
           typeof (quoteDetail?.salePricesIncludeItbis ?? quote?.salePricesIncludeItbis ?? localQuote?.salePricesIncludeItbis) === 'boolean'
             ? Boolean(quoteDetail?.salePricesIncludeItbis ?? quote?.salePricesIncludeItbis ?? localQuote?.salePricesIncludeItbis)
             : true,
+        discountSource: String(
+          quoteDetail?.discountSource ??
+          quote?.discountSource ??
+          localQuote?.discountSource ??
+          'NONE'
+        ).toUpperCase(),
+        discountPercentBp: normalizeDiscountPercentBp(
+          quoteDetail?.discountPercentBp ??
+          quote?.discountPercentBp ??
+          localQuote?.discountPercentBp ??
+          0
+        ),
+        discountSubtotalCents: Number(
+          quoteDetail?.discountSubtotalCents ??
+          quote?.discountSubtotalCents ??
+          localQuote?.discountSubtotalCents ??
+          0
+        ),
+        discountTotalCents: Number(
+          quoteDetail?.discountTotalCents ??
+          quote?.discountTotalCents ??
+          localQuote?.discountTotalCents ??
+          0
+        ),
         totalCents: Number(quoteDetail?.totalCents || quote?.totalCents || localQuote?.totalCents || 0),
         status: 'synced',
         createdAt,

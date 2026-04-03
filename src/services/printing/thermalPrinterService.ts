@@ -62,6 +62,8 @@ export interface SaleTicketPayload {
   type?: string | null;
   dueDate?: number | null;
   salePricesIncludeItbis?: boolean;
+  discountPercentBp?: number | null;
+  discountTotalCents?: number;
   shippingCents?: number;
   totalCents: number;
   items: TicketItem[];
@@ -72,6 +74,8 @@ export interface QuoteTicketPayload {
   createdAt: number;
   customerName?: string | null;
   salePricesIncludeItbis?: boolean;
+  discountPercentBp?: number | null;
+  discountTotalCents?: number;
   totalCents: number;
   items: TicketItem[];
 }
@@ -195,6 +199,17 @@ export const buildSaleTicketText = (
   }
 
   lines.push(separator);
+  const discountTotalCents = Math.max(0, Math.round(Number(payload.discountTotalCents || 0)));
+  const discountPercentBp = Math.max(0, Math.round(Number(payload.discountPercentBp || 0)));
+  if (discountTotalCents > 0) {
+    lines.push(
+      formatColumns(
+        `DESCUENTO (${(discountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)`,
+        `-${formatCurrency(discountTotalCents)}`,
+        width
+      )
+    );
+  }
   if (Number(payload.shippingCents || 0) > 0) {
     lines.push(formatColumns('FLETE', formatCurrency(Number(payload.shippingCents || 0)), width));
   }
@@ -298,6 +313,17 @@ export const buildQuoteTicketText = (
   }
 
   lines.push(separator);
+  const discountTotalCents = Math.max(0, Math.round(Number(payload.discountTotalCents || 0)));
+  const discountPercentBp = Math.max(0, Math.round(Number(payload.discountPercentBp || 0)));
+  if (discountTotalCents > 0) {
+    lines.push(
+      formatColumns(
+        `DESCUENTO (${(discountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)`,
+        `-${formatCurrency(discountTotalCents)}`,
+        width
+      )
+    );
+  }
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
   lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
   lines.push('Gracias por su preferencia');

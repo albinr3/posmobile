@@ -13,6 +13,7 @@ import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductKind, inferProductUnit } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 interface QuoteScreenProps {
   navigation: any;
@@ -112,6 +113,25 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
       }
 
       const rawItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      let customerSaleDiscountPercentBp: number | null = null;
+      if (parsedData?.customerId) {
+        const customerRow = await db.queryFirst<{ data?: string | null }>(
+          'SELECT data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [parsedData.customerId, parsedData.customerId]
+        );
+        if (customerRow?.data) {
+          try {
+            const parsedCustomer = JSON.parse(customerRow.data);
+            const normalizedCustomerDiscountBp = normalizeDiscountPercentBp(
+              parsedCustomer?.saleDiscountPercentBp ?? parsedCustomer?.sale_discount_percent_bp ?? 0
+            );
+            customerSaleDiscountPercentBp = normalizedCustomerDiscountBp > 0 ? normalizedCustomerDiscountBp : null;
+          } catch {
+            customerSaleDiscountPercentBp = null;
+          }
+        }
+      }
+      const normalizedDiscountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
       const mappedItems = await Promise.all(
         rawItems.map(async (item: any) => {
           const incomingProductId = String(item.productId || '');
@@ -159,6 +179,9 @@ export function QuoteScreen({ navigation, route }: QuoteScreenProps) {
           normalizeCustomerVisualId(parsedData?.customerVisualId) ??
           parseCustomerVisualIdFromData(parsedData) ??
           null,
+        customerSaleDiscountPercentBp,
+        discountPercentBp: normalizedDiscountPercentBp > 0 ? normalizedDiscountPercentBp : null,
+        discountWasManual: String(parsedData?.discountSource || '').toUpperCase() === 'MANUAL',
         editingQuoteLocalId: String(quoteRow.local_id),
         editingQuoteServerId: quoteRow.server_id ? String(quoteRow.server_id) : null,
         editingQuoteCode: String(quoteRow.quote_code || parsedData?.quoteCode || ''),

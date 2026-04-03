@@ -387,6 +387,7 @@ export function ProfitReportScreen() {
                 })),
                 shippingCents: 0,
                 salePricesIncludeItbis: parsed?.salePricesIncludeItbis !== false,
+                discountPercentBp: Number(parsed?.discountPercentBp || 0),
               });
               returnsItbisCents += Math.max(0, computed.itbisCents);
             } else {
@@ -484,6 +485,7 @@ export function ProfitReportScreen() {
                 : 0)
             ),
             salePricesIncludeItbis: sale.parsed?.salePricesIncludeItbis !== false,
+            discountPercentBp: Number(sale.parsed?.discountPercentBp || 0),
           });
           grossSalesItbisCents += Math.max(0, computed.itbisCents);
           continue;
@@ -497,7 +499,7 @@ export function ProfitReportScreen() {
       const otherIncomeExpensesCents = 0;
       const netProfitCents = operatingProfitCents - otherIncomeExpensesCents - taxesCents;
       const activeArRows = arRows.filter((row) => {
-        const parsed = parseJsonObject(row.data);
+        const parsed = (parseJsonObject(row.data) || {}) as any;
         const saleRefs = [
           String(parsed?.saleLocalId || ''),
           String(parsed?.saleServerId || ''),

@@ -12,7 +12,7 @@ import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
-import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
+import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -85,8 +85,24 @@ const buildReceiptHtml = (params: {
   logoUri: string;
   showItbisBreakdown: boolean;
   salePricesIncludeItbis?: boolean;
+  discountPercentBp?: number | null;
+  discountTotalCents?: number;
 }) => {
-  const { invoiceCode, createdAt, customerName, paymentMethod, transferBankName, paymentSplits, totalCents, shippingCents = 0, items, logoUri, showItbisBreakdown } = params;
+  const {
+    invoiceCode,
+    createdAt,
+    customerName,
+    paymentMethod,
+    transferBankName,
+    paymentSplits,
+    totalCents,
+    shippingCents = 0,
+    items,
+    logoUri,
+    showItbisBreakdown,
+    discountPercentBp,
+    discountTotalCents,
+  } = params;
 
   const itemsRows = (items || [])
     .map(
@@ -114,17 +130,27 @@ const buildReceiptHtml = (params: {
     })),
     shippingCents,
     salePricesIncludeItbis,
+    discountPercentBp: normalizeDiscountPercentBp(discountPercentBp ?? 0),
   });
+  const resolvedDiscountTotalCents = Math.max(
+    0,
+    Math.round(Number(discountTotalCents ?? totals.discountTotalCents ?? 0))
+  );
+  const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
   const shippingRow = shippingCents > 0
     ? `<div class="row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>`
+    : '';
+  const discountRow = resolvedDiscountTotalCents > 0
+    ? `<div class="row"><span>Descuento (${(resolvedDiscountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>-${formatCurrency(resolvedDiscountTotalCents)}</span></div>`
     : '';
   const taxRows = showItbisBreakdown
     ? `
           <div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
           <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>
+          ${discountRow}
           ${shippingRow}
       `
-    : '';
+    : `${discountRow}${shippingRow}`;
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
   const paymentSummary = paymentMethod === 'DIVIDIR_PAGO'
     ? (paymentSplits || []).map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`).join(' + ')
@@ -227,6 +253,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       logoUri,
       showItbisBreakdown,
       salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
+      discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
+      discountTotalCents: Number(sale.discountTotalCents || 0),
     });
 
     try {
@@ -270,6 +298,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       logoUri,
       showItbisBreakdown,
       salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
+      discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
+      discountTotalCents: Number(sale.discountTotalCents || 0),
     });
 
     try {
@@ -369,6 +399,15 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
             <View style={styles.infoRow}>
               <Text style={styles.label}>Flete:</Text>
               <Text style={styles.value}>{formatCurrency(resolveSaleShippingCents(sale))}</Text>
+            </View>
+          ) : null}
+
+          {Number(sale.discountTotalCents || 0) > 0 ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>
+                Descuento ({(normalizeDiscountPercentBp(sale.discountPercentBp ?? 0) / 100).toFixed(2).replace(/\.?0+$/, '')}%):
+              </Text>
+              <Text style={styles.value}>-{formatCurrency(Number(sale.discountTotalCents || 0))}</Text>
             </View>
           ) : null}
 

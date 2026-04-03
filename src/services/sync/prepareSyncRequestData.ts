@@ -2,6 +2,7 @@ import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, normalizeCategoryIdForApi, summarizeError } from './syncShared';
 import { inferProductKind, inferProductUnit } from '../../utils/productUnits';
+import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 export async function prepareSyncRequestData(
   entityType: string,
@@ -48,6 +49,7 @@ export async function prepareSyncRequestData(
         creditEnabled: data.creditEnabled || false,
         creditDays: data.creditDays || 0,
         creditLimitCents: data.creditLimitCents || Math.round((data.creditLimit || 0) * 100),
+        saleDiscountPercentBp: normalizeDiscountPercentBp(data.saleDiscountPercentBp ?? 0),
         notes: data.notes || null,
       };
     case 'sale':
@@ -153,6 +155,11 @@ export async function prepareSyncRequestData(
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
         shippingCents: saleShippingCents,
+        discountMode: data.discountMode === 'MANUAL' ? 'MANUAL' : 'AUTO',
+        manualDiscountPercentBp:
+          data.discountMode === 'MANUAL' || (data.manualDiscountPercentBp !== undefined && data.manualDiscountPercentBp !== null)
+            ? normalizeDiscountPercentBp(data.manualDiscountPercentBp ?? data.discountPercentBp ?? 0)
+            : undefined,
         ...(soldAtIso ? { soldAt: soldAtIso } : {}),
       };
       }
@@ -339,6 +346,11 @@ export async function prepareSyncRequestData(
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: quoteItems,
         shippingCents: quoteShippingCents,
+        discountMode: data.discountMode === 'MANUAL' ? 'MANUAL' : 'AUTO',
+        manualDiscountPercentBp:
+          data.discountMode === 'MANUAL' || (data.manualDiscountPercentBp !== undefined && data.manualDiscountPercentBp !== null)
+            ? normalizeDiscountPercentBp(data.manualDiscountPercentBp ?? data.discountPercentBp ?? 0)
+            : undefined,
         notes: data.notes || null,
         validUntil: data.validUntil || null,
       };
