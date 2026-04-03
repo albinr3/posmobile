@@ -91,10 +91,20 @@ export function calcDocumentTotalsByTaxMode(params: {
         ? Math.max(0, Math.min(line.subtotalCents, Math.round((line.subtotalCents * discountPercentBp) / 10000)))
         : 0;
     const lineSubtotalAfterDiscountCents = Math.max(0, line.subtotalCents - lineDiscountSubtotalCents);
-    const lineItbisAfterDiscountCents =
-      lineItbisRateBp > 0 ? Math.max(0, Math.round((lineSubtotalAfterDiscountCents * lineItbisRateBp) / 10000)) : 0;
-    const lineTotalAfterDiscountCents = lineSubtotalAfterDiscountCents + lineItbisAfterDiscountCents;
-    const lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+
+    // Evita drift de 1 centavo en precios con ITBIS incluido cuando no hay descuento.
+    let lineItbisAfterDiscountCents = line.itbisCents;
+    let lineTotalAfterDiscountCents = line.totalCents;
+    let lineDiscountTotalCents = 0;
+
+    if (lineDiscountSubtotalCents > 0) {
+      lineItbisAfterDiscountCents =
+        lineItbisRateBp > 0
+          ? Math.max(0, Math.round((lineSubtotalAfterDiscountCents * lineItbisRateBp) / 10000))
+          : 0;
+      lineTotalAfterDiscountCents = lineSubtotalAfterDiscountCents + lineItbisAfterDiscountCents;
+      lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+    }
 
     subtotalBeforeDiscountCents += line.subtotalCents;
     discountSubtotalCents += lineDiscountSubtotalCents;
