@@ -7,7 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
-import { setSalesSettings } from '../../services/settings/salesSettings';
+import { normalizeSalesSettings, setSalesSettings } from '../../services/settings/salesSettings';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { useSyncStore } from '../../store/syncStore';
@@ -55,9 +55,15 @@ type CompanySettingsResponse = {
   phone?: string | null;
   address?: string | null;
   defaultViewMode?: string | null;
+  modoVistaPorDefecto?: string | null;
   showItbisOnReceipts?: boolean | null;
+  desglosarItbisEnRecibos?: boolean | null;
   defaultProfitMarginBp?: number | null;
+  margenGananciaDefectoBp?: number | null;
   salePricesIncludeItbis?: boolean | null;
+  preciosIncluyenItbis?: boolean | null;
+  precioVentaIncluyeItbis?: boolean | null;
+  salesSettings?: Record<string, unknown> | null;
 };
 
 type CompanySettingsData = {
@@ -83,6 +89,14 @@ function normalizeCompanySettings(apiUrl: string, payload: CompanySettingsRespon
     address: payload?.company?.direccion?.trim() || payload?.address?.trim() || '',
     logoUrl,
   };
+}
+
+function normalizeSalesSettingsPayload(payload: CompanySettingsResponse | null | undefined) {
+  const mergedPayload = {
+    ...(payload?.salesSettings || {}),
+    ...(payload || {}),
+  };
+  return normalizeSalesSettings(mergedPayload);
 }
 
 async function cacheCompanySettingsSnapshot(data: CompanySettingsData): Promise<void> {
@@ -132,6 +146,20 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const [defaultProfitMargin, setDefaultProfitMargin] = useState('30.00');
   const [savingSalesSettings, setSavingSalesSettings] = useState(false);
+
+  const persistSalesSettingsLocally = async (overrides?: Partial<{ defaultViewMode: 'list' | 'grid'; showItbisOnReceipts: boolean; salePricesIncludeItbis: boolean }>) => {
+    const resolvedDefaultViewMode = overrides?.defaultViewMode ?? defaultViewMode;
+    const resolvedShowItbisOnReceipts = overrides?.showItbisOnReceipts ?? showItbisOnReceipts;
+    const resolvedSalePricesIncludeItbis = overrides?.salePricesIncludeItbis ?? salePricesIncludeItbis;
+    const parsedMargin = Number.parseFloat(defaultProfitMargin || '0');
+    const marginBp = Math.round((Number.isFinite(parsedMargin) ? parsedMargin : 0) * 100);
+    await setSalesSettings({
+      defaultViewMode: resolvedDefaultViewMode,
+      showItbisOnReceipts: resolvedShowItbisOnReceipts,
+      defaultProfitMarginBp: Math.max(0, marginBp),
+      salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+    });
+  };
 
   useEffect(() => {
     loadSettings();
@@ -201,17 +229,12 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
       setCompanyLogoError(false);
       setIsEditingCompany(false);
-      setDefaultViewMode(response.data?.defaultViewMode === 'grid' ? 'grid' : 'list');
-      setShowItbisOnReceipts(Boolean(response.data?.showItbisOnReceipts ?? true));
-      setSalePricesIncludeItbis(Boolean(response.data?.salePricesIncludeItbis ?? true));
-      const marginBp = Number(response.data?.defaultProfitMarginBp ?? 3000);
-      setDefaultProfitMargin((Math.max(0, Number.isFinite(marginBp) ? marginBp : 3000) / 100).toFixed(2));
-      await setSalesSettings({
-        defaultViewMode: response.data?.defaultViewMode === 'grid' ? 'grid' : 'list',
-        showItbisOnReceipts: Boolean(response.data?.showItbisOnReceipts ?? true),
-        defaultProfitMarginBp: Math.max(0, Number.isFinite(marginBp) ? marginBp : 3000),
-        salePricesIncludeItbis: Boolean(response.data?.salePricesIncludeItbis ?? true),
-      });
+      const normalizedSalesSettings = normalizeSalesSettingsPayload(response.data);
+      setDefaultViewMode(normalizedSalesSettings.defaultViewMode);
+      setShowItbisOnReceipts(normalizedSalesSettings.showItbisOnReceipts);
+      setSalePricesIncludeItbis(normalizedSalesSettings.salePricesIncludeItbis);
+      setDefaultProfitMargin((normalizedSalesSettings.defaultProfitMarginBp / 100).toFixed(2));
+      await setSalesSettings(normalizedSalesSettings);
     } catch (error) {
       console.error('Error cargando configuración de empresa:', error);
       if (axios.isAxiosError(error)) {
@@ -315,33 +338,49 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
     }
   };
 
-  const saveSalesSettings = async () => {
+  const saveSalesSettings = async (options?: {
+    overrides?: Partial<{
+      defaultViewMode: 'list' | 'grid';
+      showItbisOnReceipts: boolean;
+      salePricesIncludeItbis: boolean;
+      defaultProfitMargin: string;
+    }>;
+    silent?: boolean;
+  }) => {
+    const silent = options?.silent === true;
+    const resolvedDefaultViewMode = options?.overrides?.defaultViewMode ?? defaultViewMode;
+    const resolvedShowItbisOnReceipts = options?.overrides?.showItbisOnReceipts ?? showItbisOnReceipts;
+    const resolvedSalePricesIncludeItbis = options?.overrides?.salePricesIncludeItbis ?? salePricesIncludeItbis;
+    const resolvedDefaultProfitMargin = options?.overrides?.defaultProfitMargin ?? defaultProfitMargin;
+
     try {
-      setSavingSalesSettings(true);
-      setCompanySettingsError(null);
-      setCompanySettingsSuccess(null);
+      if (!silent) {
+        setSavingSalesSettings(true);
+        setCompanySettingsError(null);
+        setCompanySettingsSuccess(null);
+      }
 
       if (!subUserToken) {
-        setCompanySettingsError('No hay subusuario autenticado.');
+        if (!silent) setCompanySettingsError('No hay subusuario autenticado.');
         return;
       }
 
       const clerkToken = await getToken();
       if (!clerkToken) {
-        setCompanySettingsError('No hay sesión principal activa para guardar configuración de ventas.');
+        if (!silent) setCompanySettingsError('No hay sesión principal activa para guardar configuración de ventas.');
         return;
       }
 
       const name = companySettings.name.trim();
       if (!name) {
-        setCompanySettingsError('El nombre comercial es requerido para guardar ajustes.');
+        if (!silent) setCompanySettingsError('El nombre comercial es requerido para guardar ajustes.');
         return;
       }
 
       const phone = companySettings.phone.trim();
       const address = companySettings.address.trim();
       const logoUrl = companySettings.logoUrl ? companySettings.logoUrl.trim() : '';
-      const parsedMargin = Number.parseFloat(defaultProfitMargin || '0');
+      const parsedMargin = Number.parseFloat(resolvedDefaultProfitMargin || '0');
       const marginBp = Math.round((Number.isFinite(parsedMargin) ? parsedMargin : 0) * 100);
 
       const payload = {
@@ -349,10 +388,10 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         phone,
         address,
         logoUrl: logoUrl || null,
-        defaultViewMode,
-        showItbisOnReceipts,
-        salePricesIncludeItbis,
-        preciosVentaIncluyenItbis: salePricesIncludeItbis,
+        defaultViewMode: resolvedDefaultViewMode,
+        showItbisOnReceipts: resolvedShowItbisOnReceipts,
+        salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+        preciosVentaIncluyenItbis: resolvedSalePricesIncludeItbis,
         defaultProfitMarginBp: Math.max(0, marginBp),
         company: {
           nombre: name,
@@ -381,29 +420,32 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         }
       }
 
-      setDefaultViewMode(response.data?.defaultViewMode === 'grid' ? 'grid' : defaultViewMode);
-      setShowItbisOnReceipts(Boolean(response.data?.showItbisOnReceipts ?? showItbisOnReceipts));
-      setSalePricesIncludeItbis(Boolean(response.data?.salePricesIncludeItbis ?? salePricesIncludeItbis));
-      const marginBpFromApi = Number(response.data?.defaultProfitMarginBp ?? marginBp);
-      setDefaultProfitMargin((Math.max(0, Number.isFinite(marginBpFromApi) ? marginBpFromApi : marginBp) / 100).toFixed(2));
-      await setSalesSettings({
-        defaultViewMode: response.data?.defaultViewMode === 'grid' ? 'grid' : defaultViewMode,
-        showItbisOnReceipts: Boolean(response.data?.showItbisOnReceipts ?? showItbisOnReceipts),
-        defaultProfitMarginBp: Math.max(0, Number.isFinite(marginBpFromApi) ? marginBpFromApi : marginBp),
-        salePricesIncludeItbis: Boolean(response.data?.salePricesIncludeItbis ?? salePricesIncludeItbis),
+      const normalizedSalesSettings = normalizeSalesSettingsPayload({
+        ...(response.data || {}),
+        defaultViewMode: resolvedDefaultViewMode,
+        showItbisOnReceipts: resolvedShowItbisOnReceipts,
+        salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+        defaultProfitMarginBp: marginBp,
       });
+      setDefaultViewMode(normalizedSalesSettings.defaultViewMode);
+      setShowItbisOnReceipts(normalizedSalesSettings.showItbisOnReceipts);
+      setSalePricesIncludeItbis(normalizedSalesSettings.salePricesIncludeItbis);
+      setDefaultProfitMargin((normalizedSalesSettings.defaultProfitMarginBp / 100).toFixed(2));
+      await setSalesSettings(normalizedSalesSettings);
       await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
-      setCompanySettingsSuccess('Configuración de ventas guardada.');
+      if (!silent) setCompanySettingsSuccess('Configuración de ventas guardada.');
     } catch (error) {
       console.error('Error guardando configuración de ventas:', error);
-      if (axios.isAxiosError(error)) {
-        const backendMessage = typeof error.response?.data?.error === 'string' ? error.response.data.error : null;
-        setCompanySettingsError(backendMessage || 'No se pudo guardar la configuración de ventas.');
-      } else {
-        setCompanySettingsError('No se pudo guardar la configuración de ventas.');
+      if (!silent) {
+        if (axios.isAxiosError(error)) {
+          const backendMessage = typeof error.response?.data?.error === 'string' ? error.response.data.error : null;
+          setCompanySettingsError(backendMessage || 'No se pudo guardar la configuración de ventas.');
+        } else {
+          setCompanySettingsError('No se pudo guardar la configuración de ventas.');
+        }
       }
     } finally {
-      setSavingSalesSettings(false);
+      if (!silent) setSavingSalesSettings(false);
     }
   };
 
@@ -921,7 +963,11 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
           <View style={styles.viewModeRow}>
             <TouchableOpacity
               style={[styles.viewModeChip, defaultViewMode === 'list' && styles.viewModeChipActive]}
-              onPress={() => setDefaultViewMode('list')}
+              onPress={() => {
+                setDefaultViewMode('list');
+                void persistSalesSettingsLocally({ defaultViewMode: 'list' });
+                void saveSalesSettings({ overrides: { defaultViewMode: 'list' }, silent: true });
+              }}
             >
               <Text style={[styles.viewModeChipText, defaultViewMode === 'list' && styles.viewModeChipTextActive]}>
                 Lista
@@ -929,7 +975,11 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.viewModeChip, defaultViewMode === 'grid' && styles.viewModeChipActive]}
-              onPress={() => setDefaultViewMode('grid')}
+              onPress={() => {
+                setDefaultViewMode('grid');
+                void persistSalesSettingsLocally({ defaultViewMode: 'grid' });
+                void saveSalesSettings({ overrides: { defaultViewMode: 'grid' }, silent: true });
+              }}
             >
               <Text style={[styles.viewModeChipText, defaultViewMode === 'grid' && styles.viewModeChipTextActive]}>
                 Imágenes
@@ -942,7 +992,15 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
               <Text style={styles.saleSwitchTitle}>Desglosar ITBIS en recibos</Text>
               <Text style={styles.saleSwitchHint}>Mostrar detalle ITBIS en recibos y facturas.</Text>
             </View>
-            <Switch value={showItbisOnReceipts} onValueChange={setShowItbisOnReceipts} color={ui.colors.primary} />
+            <Switch
+              value={showItbisOnReceipts}
+              onValueChange={(value) => {
+                setShowItbisOnReceipts(value);
+                void persistSalesSettingsLocally({ showItbisOnReceipts: value });
+                void saveSalesSettings({ overrides: { showItbisOnReceipts: value }, silent: true });
+              }}
+              color={ui.colors.primary}
+            />
           </View>
 
           <View style={styles.saleSwitchCard}>
@@ -950,7 +1008,15 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
               <Text style={styles.saleSwitchTitle}>Precio de venta incluye ITBIS</Text>
               <Text style={styles.saleSwitchHint}>Si se desactiva, el ITBIS se suma al total al facturar.</Text>
             </View>
-            <Switch value={salePricesIncludeItbis} onValueChange={setSalePricesIncludeItbis} color={ui.colors.primary} />
+            <Switch
+              value={salePricesIncludeItbis}
+              onValueChange={(value) => {
+                setSalePricesIncludeItbis(value);
+                void persistSalesSettingsLocally({ salePricesIncludeItbis: value });
+                void saveSalesSettings({ overrides: { salePricesIncludeItbis: value }, silent: true });
+              }}
+              color={ui.colors.primary}
+            />
           </View>
 
           <Text style={styles.companyDetailLabel}>% ganancia por defecto en compras</Text>
@@ -973,7 +1039,9 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
             <Button
               mode="outlined"
               textColor={ui.colors.primary}
-              onPress={saveSalesSettings}
+              onPress={() => {
+                void saveSalesSettings();
+              }}
               loading={savingSalesSettings}
               disabled={savingSalesSettings}
             >

@@ -79,6 +79,7 @@ export function calcDocumentTotalsByTaxMode(params: {
     const quantity = Number(item?.quantity ?? item?.qty ?? 0);
     const unitPriceCents = Number(item?.priceCents ?? item?.unitPriceCents ?? 0);
     const lineItbisRateBp = Math.max(0, Math.round(Number(item?.itbisRateBp ?? 1800)));
+    const lineRate = lineItbisRateBp / 10000;
     const line = calcLineTotalsByTaxMode({
       unitPriceCents,
       quantity,
@@ -86,24 +87,41 @@ export function calcDocumentTotalsByTaxMode(params: {
       salePricesIncludeItbis,
     });
 
-    const lineDiscountSubtotalCents =
-      discountPercentBp > 0
-        ? Math.max(0, Math.min(line.subtotalCents, Math.round((line.subtotalCents * discountPercentBp) / 10000)))
-        : 0;
-    const lineSubtotalAfterDiscountCents = Math.max(0, line.subtotalCents - lineDiscountSubtotalCents);
-
-    // Evita drift de 1 centavo en precios con ITBIS incluido cuando no hay descuento.
+    let lineDiscountSubtotalCents = 0;
+    let lineSubtotalAfterDiscountCents = line.subtotalCents;
     let lineItbisAfterDiscountCents = line.itbisCents;
     let lineTotalAfterDiscountCents = line.totalCents;
     let lineDiscountTotalCents = 0;
 
-    if (lineDiscountSubtotalCents > 0) {
-      lineItbisAfterDiscountCents =
-        lineItbisRateBp > 0
-          ? Math.max(0, Math.round((lineSubtotalAfterDiscountCents * lineItbisRateBp) / 10000))
-          : 0;
-      lineTotalAfterDiscountCents = lineSubtotalAfterDiscountCents + lineItbisAfterDiscountCents;
-      lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+    if (discountPercentBp > 0) {
+      if (salePricesIncludeItbis) {
+        // Fórmula base (sin redondeos intermedios):
+        // subtotalRaw = total / (1 + itbis)
+        // subtotalConDescuentoRaw = subtotalRaw * (1 - descuento)
+        // totalConDescuentoRaw = subtotalConDescuentoRaw * (1 + itbis)
+        // Solo al final se redondea a centavos.
+        const lineSubtotalBeforeRawCents = line.totalCents / (1 + lineRate);
+        const lineDiscountSubtotalRawCents = (lineSubtotalBeforeRawCents * discountPercentBp) / 10000;
+        const lineSubtotalAfterRawCents = Math.max(0, lineSubtotalBeforeRawCents - lineDiscountSubtotalRawCents);
+
+        lineDiscountSubtotalCents = Math.max(
+          0,
+          Math.min(line.subtotalCents, Math.round(lineDiscountSubtotalRawCents))
+        );
+        lineSubtotalAfterDiscountCents = Math.max(0, line.subtotalCents - lineDiscountSubtotalCents);
+        lineTotalAfterDiscountCents = Math.max(0, Math.round(lineSubtotalAfterRawCents * (1 + lineRate)));
+        lineItbisAfterDiscountCents = Math.max(0, lineTotalAfterDiscountCents - lineSubtotalAfterDiscountCents);
+        lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+      } else {
+        lineDiscountSubtotalCents = Math.max(
+          0,
+          Math.min(line.subtotalCents, Math.round((line.subtotalCents * discountPercentBp) / 10000))
+        );
+        lineSubtotalAfterDiscountCents = Math.max(0, line.subtotalCents - lineDiscountSubtotalCents);
+        lineItbisAfterDiscountCents = lineItbisRateBp > 0 ? Math.max(0, Math.round(lineSubtotalAfterDiscountCents * lineRate)) : 0;
+        lineTotalAfterDiscountCents = lineSubtotalAfterDiscountCents + lineItbisAfterDiscountCents;
+        lineDiscountTotalCents = Math.max(0, line.totalCents - lineTotalAfterDiscountCents);
+      }
     }
 
     subtotalBeforeDiscountCents += line.subtotalCents;
