@@ -278,7 +278,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
             <Checkbox status={chargesItbis ? 'checked' : 'unchecked'} onPress={() => setChargesItbis((prev) => !prev)} color={ui.colors.primary} />
             <View style={styles.checkTextWrap}>
               <Text style={styles.checkTitle}>Sumar ITBIS en compras</Text>
-              <Text style={styles.fieldHelp}>Si se marca, se sumará ITBIS al costo según la tasa configurada abajo.</Text>
+              <Text style={styles.fieldHelp}>Si se marca, el cálculo de compras sumara adicionalmente al costo que coloques el ITBIS definido para este proveedor.</Text>
             </View>
           </View>
           {chargesItbis ? (

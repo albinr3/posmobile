@@ -579,7 +579,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       itemDiscountRaw.length > 0
         ? normalizeDiscountBp(parseNumberFromInput(nextItem.discountPercent) * 100)
         : normalizeDiscountBp(selectedSupplier?.discountPercentBp || 0);
-    const purchaseIncludesItbis = selectedSupplier ? Boolean(selectedSupplier.chargesItbis) : true;
+    const purchaseIncludesItbis = selectedSupplier ? Boolean(selectedSupplier.chargesItbis) : false;
     const purchaseItbisForSupplier = getPurchaseItbisRateBp(selectedSupplier);
     const saleMarginBp = normalizeMarginBp(parseNumberFromInput(nextItem.saleMarginPercent) * 100);
     const salePriceCents = Math.max(0, toCents(nextItem.salePrice));
@@ -720,7 +720,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
   const totalCents = useMemo(() => {
     const supplierDiscountBp = selectedSupplier?.discountPercentBp || 0;
-    const supplierChargesItbis = selectedSupplier ? Boolean(selectedSupplier.chargesItbis) : true;
+    const supplierChargesItbis = selectedSupplier ? Boolean(selectedSupplier.chargesItbis) : false;
     const normalizedPurchaseItbisRateBp = normalizeItbisRateBp(
       supplierChargesItbis
         ? selectedSupplier?.itbisRateBp ?? DEFAULT_PURCHASE_ITBIS_RATE_BP
@@ -978,7 +978,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           ...(typeof item.discountPercentBp === 'number' ? { discountPercentBp: item.discountPercentBp } : {}),
           ...(typeof item.saleMarginBp === 'number' ? { saleMarginBp: item.saleMarginBp } : {}),
           ...(typeof item.salePriceCents === 'number' ? { salePriceCents: item.salePriceCents } : {}),
-          purchaseIncludesItbis: item.purchaseIncludesItbis !== false,
+          purchaseIncludesItbis: Boolean(item.purchaseIncludesItbis),
         })),
       };
 
