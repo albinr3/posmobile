@@ -44,6 +44,85 @@ const PAYMENT_OPTIONS = [
 ];
 const VIEW_MODE_STORAGE_KEY = 'pos_view_mode';
 
+const normalizeEditPaymentMethod = (parsedData: any): string => {
+  const rawMethod = String(
+    parsedData?.paymentMethod ??
+    parsedData?.method ??
+    parsedData?.payment?.method ??
+    parsedData?.sale?.paymentMethod ??
+    parsedData?.sale?.method ??
+    ''
+  ).trim().toUpperCase();
+
+  if (
+    rawMethod === 'EFECTIVO' ||
+    rawMethod === 'TARJETA' ||
+    rawMethod === 'TRANSFERENCIA' ||
+    rawMethod === 'DIVIDIR_PAGO' ||
+    rawMethod === 'CREDITO'
+  ) {
+    return rawMethod;
+  }
+
+  const rawType = String(parsedData?.type ?? parsedData?.saleType ?? parsedData?.sale?.type ?? '')
+    .trim()
+    .toUpperCase();
+  if (rawType === 'CREDITO' || rawType === 'CREDIT') return 'CREDITO';
+
+  return 'EFECTIVO';
+};
+
+const normalizeEditTransferBankName = (parsedData: any, paymentMethod: string): string | null => {
+  if (paymentMethod !== 'TRANSFERENCIA') return null;
+  const rawBank = String(
+    parsedData?.transferBankName ??
+    parsedData?.bankName ??
+    parsedData?.bank ??
+    parsedData?.transfer?.bankName ??
+    parsedData?.payment?.transferBankName ??
+    ''
+  ).trim();
+  return rawBank || null;
+};
+
+const normalizeEditPaymentSplits = (parsedData: any): Array<{ method: string; amountCents: number; transferBankName: string | null }> => {
+  const sourceSplits = Array.isArray(parsedData?.paymentSplits)
+    ? parsedData.paymentSplits
+    : Array.isArray(parsedData?.splits)
+      ? parsedData.splits
+      : Array.isArray(parsedData?.splitPayments)
+        ? parsedData.splitPayments
+        : [];
+
+  return sourceSplits
+    .map((split: any) => {
+      const method = String(split?.method ?? split?.paymentMethod ?? split?.type ?? '').trim().toUpperCase();
+      const normalizedMethod =
+        method === 'TRANSFERENCIA' || method === 'TARJETA' || method === 'EFECTIVO' || method === 'OTRO'
+          ? method
+          : 'EFECTIVO';
+
+      let amountCents = Number(split?.amountCents ?? split?.montoCents ?? split?.amount_cents ?? NaN);
+      if (!Number.isFinite(amountCents)) {
+        const amount = Number(split?.amount ?? split?.monto ?? split?.value ?? NaN);
+        if (Number.isFinite(amount)) {
+          amountCents = Math.round(amount * 100);
+        }
+      }
+      const normalizedAmountCents = Number.isFinite(amountCents) ? Math.max(0, Math.round(amountCents)) : 0;
+      const transferBankName =
+        normalizedMethod === 'TRANSFERENCIA'
+          ? String(split?.transferBankName ?? split?.bankName ?? split?.bank ?? '').trim() || null
+          : null;
+      return {
+        method: normalizedMethod,
+        amountCents: normalizedAmountCents,
+        transferBankName,
+      };
+    })
+    .filter((split: { method: string; amountCents: number; transferBankName: string | null }) => split.amountCents > 0);
+};
+
 export function POSScreen({ navigation, route }: POSScreenProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [scanExactSkuQuery, setScanExactSkuQuery] = useState<string | null>(null);
@@ -186,7 +265,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
         const resolvedItems: SaleItem[] = [];
         for (const rawItem of rawItems) {
-          const sourceId = String(rawItem?.productId || '');
+          const sourceId = String(rawItem?.productId ?? rawItem?.product_id ?? rawItem?.product?.id ?? '').trim();
           if (!sourceId) continue;
 
           const productRow = await db.queryFirst<{ local_id: string; name?: string; data?: string }>(
@@ -203,14 +282,26 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           }
 
           const quantity = Number(rawItem?.quantity ?? rawItem?.qty ?? 0);
-          const unitPriceCents = Number(rawItem?.priceCents ?? rawItem?.unitPriceCents ?? 0);
+          let unitPriceCents = Number(
+            rawItem?.priceCents ??
+            rawItem?.unitPriceCents ??
+            rawItem?.unit_price_cents ??
+            rawItem?.lineUnitPriceCents ??
+            NaN
+          );
+          if (!Number.isFinite(unitPriceCents) || unitPriceCents <= 0) {
+            const unitPrice = Number(rawItem?.price ?? rawItem?.unitPrice ?? rawItem?.unit_price ?? NaN);
+            if (Number.isFinite(unitPrice) && unitPrice > 0) {
+              unitPriceCents = Math.round(unitPrice * 100);
+            }
+          }
           if (!Number.isFinite(quantity) || quantity <= 0) continue;
           if (!Number.isFinite(unitPriceCents) || unitPriceCents <= 0) continue;
 
           resolvedItems.push({
             lineId: buildLineId(productRow.local_id),
             productId: productRow.local_id,
-            productName: String(rawItem?.productName || productRow.name || 'Producto'),
+            productName: String(rawItem?.productName || rawItem?.name || rawItem?.product?.name || productRow.name || 'Producto'),
             quantity,
             priceCents: unitPriceCents,
             totalCents: Math.round(quantity * unitPriceCents),
@@ -227,17 +318,24 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           return;
         }
 
-        const resolvedPaymentMethod = String(parsedData?.paymentMethod || 'EFECTIVO').toUpperCase();
+        const resolvedPaymentMethod = normalizeEditPaymentMethod(parsedData);
+        const resolvedPaymentSplits = normalizeEditPaymentSplits(parsedData);
+        const resolvedTransferBankName = normalizeEditTransferBankName(parsedData, resolvedPaymentMethod);
+        const resolvedCustomerId = String(sale.customer_id || parsedData?.customerId || '').trim() || null;
         let resolvedCustomerVisualId =
           normalizeCustomerVisualId(parsedData?.customerVisualId) ??
           parseCustomerVisualIdFromData(parsedData) ??
           null;
+        let resolvedCustomerName = parsedData?.customerName ? String(parsedData.customerName) : null;
         let customerSaleDiscountPercentBp: number | null = null;
-        if (sale.customer_id) {
-          const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
-            'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
-            [sale.customer_id, sale.customer_id]
+        if (resolvedCustomerId) {
+          const customerRow = await db.queryFirst<{ name?: string | null; visual_id?: number | null; data?: string | null }>(
+            'SELECT name, visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [resolvedCustomerId, resolvedCustomerId]
           );
+          if (!resolvedCustomerName) {
+            resolvedCustomerName = customerRow?.name ? String(customerRow.name) : null;
+          }
           if (!resolvedCustomerVisualId) {
             resolvedCustomerVisualId =
               normalizeCustomerVisualId(customerRow?.visual_id) ??
@@ -259,21 +357,15 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         const normalizedDiscountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
         loadInvoiceForEdit({
           items: resolvedItems,
-          customerId: sale.customer_id ? String(sale.customer_id) : null,
-          customerName: parsedData?.customerName ? String(parsedData.customerName) : null,
+          customerId: resolvedCustomerId,
+          customerName: resolvedCustomerName,
           customerVisualId: resolvedCustomerVisualId,
           customerSaleDiscountPercentBp,
           discountPercentBp: normalizedDiscountPercentBp > 0 ? normalizedDiscountPercentBp : null,
           discountWasManual: String(parsedData?.discountSource || '').toUpperCase() === 'MANUAL',
-          paymentMethod:
-            resolvedPaymentMethod === 'CREDITO' ||
-            resolvedPaymentMethod === 'TARJETA' ||
-            resolvedPaymentMethod === 'TRANSFERENCIA' ||
-            resolvedPaymentMethod === 'DIVIDIR_PAGO'
-              ? resolvedPaymentMethod
-              : 'EFECTIVO',
-          transferBankName: parsedData?.transferBankName ? String(parsedData.transferBankName) : null,
-          paymentSplits: Array.isArray(parsedData?.paymentSplits) ? parsedData.paymentSplits : [],
+          paymentMethod: resolvedPaymentMethod,
+          transferBankName: resolvedTransferBankName,
+          paymentSplits: resolvedPaymentMethod === 'DIVIDIR_PAGO' ? resolvedPaymentSplits : [],
           shippingCents: Number(
             parsedData?.shippingCents ??
             parsedData?.fleteCents ??

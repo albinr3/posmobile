@@ -3,6 +3,7 @@ import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Te
 import { Searchbar, Text, Icon, TextInput } from 'react-native-paper';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
@@ -12,7 +13,11 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
-import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import {
+  COMPANY_SETTINGS_SNAPSHOT_KEY,
+  hasConnectedPrinter,
+  printPaymentReceiptDirect,
+} from '../../services/printing/thermalPrinterService';
 import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 
 interface PaymentReceiptsScreenProps {
@@ -37,6 +42,13 @@ interface PaymentReceiptItem {
   cancelledAt?: number | null;
   arId?: string | null;
   batchItems?: PaymentReceiptItem[];
+}
+
+interface CompanySnapshot {
+  name: string;
+  phone: string;
+  address: string;
+  logoUrl?: string | null;
 }
 
 export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps) {
@@ -328,48 +340,126 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     }
   };
 
-  const escapeHtml = (value: string) =>
-    String(value)
+  const escapeHtml = (value: unknown) =>
+    String(value ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
 
-  const buildReceiptPdfHtml = (item: PaymentReceiptItem) => {
+  const getCompanySnapshot = async (): Promise<CompanySnapshot> => {
+    try {
+      const raw = await AsyncStorage.getItem(COMPANY_SETTINGS_SNAPSHOT_KEY);
+      if (!raw) return { name: 'MOVOpos', phone: '', address: '', logoUrl: null };
+      const parsed = JSON.parse(raw);
+      return {
+        name: String(parsed?.name || 'MOVOpos').trim() || 'MOVOpos',
+        phone: String(parsed?.phone || '').trim(),
+        address: String(parsed?.address || '').trim(),
+        logoUrl: String(parsed?.logoUrl || '').trim() || null,
+      };
+    } catch {
+      return { name: 'MOVOpos', phone: '', address: '', logoUrl: null };
+    }
+  };
+
+  const buildReceiptPdfHtml = (item: PaymentReceiptItem, company: CompanySnapshot) => {
     const paymentLabel = formatPaymentWithBank(item.paymentMethod, item.transferBankName);
     const cancelledTag = item.cancelledAt ? '<div class="badge">CANCELADO</div>' : '';
+    const details = item.batchItems && item.batchItems.length > 1 ? item.batchItems : [item];
+    const detailsRows = details
+      .map((detail) => {
+        const methodLabel = formatPaymentWithBank(detail.paymentMethod, detail.transferBankName) || '-';
+        return `
+          <tr>
+            <td>${escapeHtml(detail.invoiceCode || '-')}</td>
+            <td>${escapeHtml(methodLabel)}</td>
+            <td style="text-align:right;">${formatCurrency(detail.amountCents)}</td>
+          </tr>
+        `;
+      })
+      .join('');
+    const logoSource = String(company.logoUrl || '').trim();
     return `
       <html>
         <head>
           <meta charset="utf-8" />
           <style>
-            body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #111827; background: #fff; }
-            .page { padding: 20px; }
-            .title { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
-            .badge { display: inline-block; background: #FEE2E2; color: #DC2626; font-weight: 700; font-size: 11px; padding: 4px 8px; border-radius: 999px; }
-            .row { display: flex; justify-content: space-between; margin: 6px 0; }
-            .label { color: #6B7280; font-size: 12px; }
-            .value { font-size: 13px; font-weight: 600; }
-            .total { margin-top: 12px; font-size: 18px; font-weight: 800; display: flex; justify-content: space-between; }
+            @page { size: letter; margin: 16mm 12mm; }
+            body { margin: 0; font-family: Arial, sans-serif; color: #111827; font-size: 12px; }
+            .doc { width: 100%; }
+            .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+            .company { display: flex; align-items: flex-start; gap: 12px; }
+            .logo-wrap { max-height: 68px; overflow: hidden; }
+            .logo { height: 68px; width: auto; object-fit: contain; }
+            .company-name { font-size: 22px; font-weight: 800; color: #111827; }
+            .muted { color: #4B5563; }
+            .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; }
+            .badge { display: inline-block; margin-top: 8px; background: #FEE2E2; color: #B91C1C; border: 1px solid #FCA5A5; font-weight: 700; font-size: 11px; padding: 4px 8px; border-radius: 999px; }
+            .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; }
+            .row { display: flex; justify-content: space-between; margin: 6px 0; gap: 8px; }
+            .label { color: #4B5563; }
+            .value { font-weight: 700; text-align: right; }
+            table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+            th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; }
+            th { text-align: left; color: #374151; font-weight: 700; }
             .notes { margin-top: 10px; font-size: 12px; color: #374151; }
-            .divider { border-top: 1px solid #E5E7EB; margin: 10px 0; }
+            .totals { margin-top: 14px; display: flex; justify-content: flex-end; }
+            .totals-box { width: 300px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; }
+            .total-row { display: flex; justify-content: space-between; margin-top: 4px; }
+            .total-final { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; }
           </style>
         </head>
         <body>
-          <div class="page">
-            <div class="title">Recibo de pago</div>
-            ${cancelledTag}
-            <div class="divider"></div>
-            <div class="row"><span class="label">Recibo</span><span class="value">${escapeHtml(item.receiptCode)}</span></div>
-            <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(formatCustomerLabel(item.customerName || 'Cliente', item.customerVisualId))}</span></div>
-            <div class="row"><span class="label">Factura</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
-            <div class="row"><span class="label">Fecha</span><span class="value">${escapeHtml(formatDateTime(item.createdAt))}</span></div>
-            <div class="row"><span class="label">Método</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
-            <div class="row"><span class="label">Referencia</span><span class="value">${escapeHtml(item.reference || '-')}</span></div>
-            <div class="row"><span class="label">Balance</span><span class="value">${item.balanceAfterCents !== null && item.balanceAfterCents !== undefined ? escapeHtml(formatCurrency(item.balanceAfterCents)) : '-'}</span></div>
+          <div class="doc">
+            <div class="top">
+              <div class="company">
+                ${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}
+                <div>
+                  <div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>
+                  ${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}
+                  ${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}
+                </div>
+              </div>
+              <div>
+                <div class="doc-title">RECIBO</div>
+                <div style="margin-top:6px;">
+                  <div><strong>No:</strong> ${escapeHtml(item.receiptCode)}</div>
+                  <div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(item.createdAt))}</div>
+                </div>
+                ${cancelledTag}
+              </div>
+            </div>
+
+            <div class="box">
+              <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(formatCustomerLabel(item.customerName || 'Cliente', item.customerVisualId))}</span></div>
+              <div class="row"><span class="label">Factura(s)</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
+              <div class="row"><span class="label">Método principal</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
+              <div class="row"><span class="label">Referencia</span><span class="value">${escapeHtml(item.reference || '-')}</span></div>
+              <div class="row"><span class="label">Balance</span><span class="value">${item.balanceAfterCents !== null && item.balanceAfterCents !== undefined ? escapeHtml(formatCurrency(item.balanceAfterCents)) : '-'}</span></div>
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Factura</th>
+                  <th>Método</th>
+                  <th style="text-align:right;">Monto</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${detailsRows}
+              </tbody>
+            </table>
+
             ${item.notes ? `<div class="notes"><strong>Notas:</strong> ${escapeHtml(item.notes)}</div>` : ''}
-            <div class="total"><span>Total</span><span>${formatCurrency(item.amountCents)}</span></div>
+            <div class="totals">
+              <div class="totals-box">
+                <div class="total-row"><span>Monto recibido</span><span>${formatCurrency(item.amountCents)}</span></div>
+                <div class="total-row total-final"><span>Total</span><span>${formatCurrency(item.amountCents)}</span></div>
+              </div>
+            </div>
           </div>
         </body>
       </html>
@@ -378,7 +468,8 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
 
   const handleSharePdf = async (item: PaymentReceiptItem) => {
     try {
-      const html = buildReceiptPdfHtml(item);
+      const company = await getCompanySnapshot();
+      const html = buildReceiptPdfHtml(item, company);
       const pdf = await Print.printToFileAsync({ html });
       const sharingAvailable = await Sharing.isAvailableAsync();
       const dialogTitle = `Recibo ${item.receiptCode}`;
@@ -482,7 +573,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         <Text style={styles.totalValue}>{formatCurrency(item.amountCents)}</Text>
       </View>
       <View style={styles.actionsRow}>
-        <TouchableOpacity style={[styles.actionButton, styles.shareButton]} onPress={() => handleSharePdf(item.batchItems?.[0] || item)}>
+        <TouchableOpacity style={[styles.actionButton, styles.shareButton]} onPress={() => handleSharePdf(item)}>
           <Icon source="share-variant" size={18} color="#fff" />
         </TouchableOpacity>
         <TouchableOpacity style={[styles.actionButton, styles.printButton]} onPress={() => handleReprint(item.batchItems?.[0] || item)}>
