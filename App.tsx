@@ -74,6 +74,7 @@ function RootApp() {
   const lastSyncBlockedReasonRef = useRef<string | null>(null);
   const authHydratedRef = useRef(false);
   const offlineExpiryAlertShownRef = useRef(false);
+  const clerkSignedOutDetectedAtRef = useRef<number | null>(null);
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
 
@@ -241,6 +242,7 @@ function RootApp() {
       }
 
       if (isLoaded && isSignedIn && user) {
+        clerkSignedOutDetectedAtRef.current = null;
         setUser({
           id: user.id,
           name: user.fullName || user.firstName || 'Usuario',
@@ -254,7 +256,31 @@ function RootApp() {
 
       if (isLoaded && !isSignedIn && storeIsAuthenticated) {
         if (hasInternet) {
-          if (APP_AUTH_DEBUG) console.log('[App] Clerk no firmado con internet -> logout()');
+          const tokenCheck = await getToken();
+          if (tokenCheck) {
+            clerkSignedOutDetectedAtRef.current = null;
+            if (APP_AUTH_DEBUG) console.log('[App] getToken() devolvió token aunque isSignedIn=false; se evita logout');
+            return;
+          }
+
+          const now = Date.now();
+          if (!clerkSignedOutDetectedAtRef.current) {
+            clerkSignedOutDetectedAtRef.current = now;
+            if (APP_AUTH_DEBUG) console.log('[App] posible logout de Clerk detectado; iniciando ventana de confirmación');
+            return;
+          }
+
+          const elapsedMs = now - clerkSignedOutDetectedAtRef.current;
+          if (elapsedMs < 90_000) {
+            if (APP_AUTH_DEBUG) {
+              console.log('[App] Clerk sigue no firmado, pero dentro de ventana de confirmación', {
+                elapsedMs,
+              });
+            }
+            return;
+          }
+
+          if (APP_AUTH_DEBUG) console.log('[App] Clerk no firmado confirmado por 90s con internet -> logout()');
           await logout();
         } else if (APP_AUTH_DEBUG) {
           console.log('[App] Clerk no firmado sin internet -> se mantiene sesión local');

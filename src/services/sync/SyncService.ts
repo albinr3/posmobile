@@ -149,6 +149,7 @@ class SyncService {
   }
 
   private async ensureSubUserSessionFresh(): Promise<{ ready: boolean; reason: string | null }> {
+    let currentTokenExpiryMs: number | null = null;
     try {
       const { useAuthStore } = await import('../../store/authStore');
       const state = useAuthStore.getState();
@@ -161,12 +162,12 @@ class SyncService {
         };
       }
 
-      const expiryMs = parseJwtExpiryMs(currentToken);
-      if (!expiryMs) {
+      currentTokenExpiryMs = parseJwtExpiryMs(currentToken);
+      if (!currentTokenExpiryMs) {
         return { ready: true, reason: null };
       }
 
-      const msUntilExpiry = expiryMs - Date.now();
+      const msUntilExpiry = currentTokenExpiryMs - Date.now();
       if (msUntilExpiry > SyncService.SUBUSER_REFRESH_WINDOW_MS) {
         return { ready: true, reason: null };
       }
@@ -217,6 +218,15 @@ class SyncService {
       return { ready: true, reason: null };
     } catch (error) {
       console.error('[SyncService] refresh subusuario falló:', summarizeError(error));
+      const msUntilExpiry = currentTokenExpiryMs !== null ? currentTokenExpiryMs - Date.now() : null;
+      if (msUntilExpiry !== null && msUntilExpiry > 0) {
+        if (SYNC_DEBUG) {
+          console.warn('[SyncService] refresh falló pero token actual sigue vigente; no se limpia sesión', {
+            msUntilExpiry,
+          });
+        }
+        return { ready: true, reason: null };
+      }
       try {
         const { useAuthStore } = await import('../../store/authStore');
         await useAuthStore.getState().setSubUser(null, null, null);
@@ -1076,9 +1086,19 @@ class SyncService {
       return true;
     }
 
+    const backendAuthLikeMessage =
+      axios.isAxiosError(error) &&
+      (
+        backendErrorMessage.includes('no autenticado') ||
+        backendErrorMessage.includes('unauthorized') ||
+        backendErrorMessage.includes('not authenticated')
+      );
     const backendAuthError =
       axios.isAxiosError(error) &&
-      (backendStatus === 401 || backendStatus === 403);
+      (
+        backendStatus === 401 ||
+        (backendStatus === 403 && backendAuthLikeMessage)
+      );
     if (backendAuthError) {
       this.backendAuthCooldownUntil = Date.now() + 60_000;
       if (SYNC_DEBUG) {
@@ -1103,7 +1123,7 @@ class SyncService {
           await state.setSubUser(null, null, null);
         }
       } catch (clearSessionError) {
-        console.warn('No se pudo limpiar sesion de subusuario tras 401/403:', clearSessionError);
+        console.warn('No se pudo limpiar sesion de subusuario tras 401/403 auth:', clearSessionError);
       }
       useSyncStore.getState().setSyncBlockedReason(
         'Sync pausado: backend rechazo autenticacion. Debes volver a seleccionar usuario para continuar.'
@@ -1130,13 +1150,32 @@ class SyncService {
       return true;
     }
 
-    const backendAuthLikeMessage =
+    const backendPermissionError =
       axios.isAxiosError(error) &&
+      backendStatus === 403 &&
       (
-        backendErrorMessage.includes('no autenticado') ||
-        backendErrorMessage.includes('unauthorized') ||
-        backendErrorMessage.includes('not authenticated')
+        backendErrorMessage.includes('no tienes permiso') ||
+        backendErrorMessage.includes('forbidden') ||
+        backendErrorMessage.includes('acceso denegado') ||
+        backendErrorMessage.includes('permiso')
       );
+    if (backendPermissionError) {
+      const errorCode = this.deriveErrorCode(error);
+      await db.update(
+        'sync_queue',
+        item.id,
+        {
+          status: 'error',
+          retry_count: item.retry_count + 1,
+          next_attempt_at: null,
+          last_error_code: errorCode,
+        },
+        'id'
+      );
+      console.warn(`Sync detenido por permisos (${item.entity_type} #${item.id}).`);
+      return false;
+    }
+
     if (backendAuthLikeMessage && SYNC_DEBUG) {
       console.warn('[SyncService] backend devolvió mensaje de auth con status no-auth estándar', {
         queueId: item?.id,
