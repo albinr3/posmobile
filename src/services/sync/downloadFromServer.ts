@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
-import { normalizeCustomerVisualId } from '../../utils/customerLabels';
+import { GENERIC_CUSTOMER_DISPLAY_NAME, normalizeCustomerVisualId } from '../../utils/customerLabels';
 import { normalizeDiscountPercentBp } from '../../utils/tax';
 
 const DETAIL_FETCH_BATCH_SIZE = 8;
@@ -1043,7 +1043,7 @@ export async function downloadFromServer(options: {
       const totalCents = ar.totalCents || 0;
       const balanceCents = ar.balanceCents || 0;
       const paidCents = Math.max(0, totalCents - balanceCents);
-      const customerName = ar.customer?.name || 'Cliente';
+      const customerName = ar.customer?.name || GENERIC_CUSTOMER_DISPLAY_NAME;
       const customerId = ar.customerId || ar.customer?.id || 'unknown';
       const customerVisualId =
         normalizeCustomerVisualId(ar.customerVisualId) ??
@@ -1261,7 +1261,7 @@ export async function downloadFromServer(options: {
           normalizeCustomerVisualId(payment?.customerVisualId) ??
           normalizeCustomerVisualId(payment?.customer?.visualId) ??
           null,
-        customerName: payment?.customer?.name ? String(payment.customer.name) : 'Cliente',
+        customerName: payment?.customer?.name ? String(payment.customer.name) : GENERIC_CUSTOMER_DISPLAY_NAME,
         amountCents: Number(payment?.amountCents || 0),
         method: String(payment?.method || 'EFECTIVO'),
         transferBankName: payment?.transferBankName ? String(payment.transferBankName) : null,

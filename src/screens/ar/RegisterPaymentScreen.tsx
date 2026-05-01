@@ -10,7 +10,12 @@ import { AccountReceivable } from '../../types';
 import { ui } from '../../theme/ui';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
-import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import {
+  formatCustomerLabel,
+  GENERIC_CUSTOMER_DISPLAY_NAME,
+  normalizeCustomerVisualId,
+  parseCustomerVisualIdFromData,
+} from '../../utils/customerLabels';
 
 interface RegisterPaymentScreenProps {
   navigation: any;
@@ -229,7 +234,10 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           const printResult = await printPaymentReceiptDirect({
             receiptCode,
             createdAt: now,
-            customerName: formatCustomerLabel(firstItem?.customerName || 'Cliente', firstItem?.customerVisualId),
+            customerName: formatCustomerLabel(
+              firstItem?.customerName || GENERIC_CUSTOMER_DISPLAY_NAME,
+              firstItem?.customerVisualId
+            ),
             invoiceCode: isBatch ? `${createdLocalPaymentIds.length} facturas` : firstInvoiceCode,
             paymentMethod,
             transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,

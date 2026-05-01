@@ -31,6 +31,16 @@ App móvil de punto de venta (POS) construida con React Native + Expo, con arqui
 - Offline/sync: las ventas pendientes guardan `salePricesIncludeItbis` y lo envían al sincronizar para no cambiar cálculos por toggles posteriores.
 - Compras: el precio de venta sugerido/guardado respeta el modo activo de la cuenta (incluido o no incluido).
 
+## Normalización de Cliente general (abril 2026)
+
+- Se centralizó en utilidades la regla de cliente genérico para mostrar siempre `Cliente general` (sin variantes como `(General)`, `(Genérico)` o fallback `Cliente` cuando aplica genérico).
+- Se agregó resolución robusta del cliente general en SQLite (prioriza el cliente real con visualId `1` cuando existe).
+- Al confirmar ventas y cotizaciones sin cliente explícito, la app móvil ahora asigna el cliente general real y evita crear nuevos documentos con cliente vacío.
+- Ventas a crédito: se bloquea el uso de cliente general y se exige un cliente específico.
+- Devoluciones: al buscar con cliente general, se mantiene compatibilidad con ventas históricas legacy que no tenían `customer_id`.
+- Recibos/listados/sync: se normalizaron fallbacks de nombre para mantener consistencia con la web en impresión y pantallas de facturas/cobros/devoluciones.
+- Alcance técnico: cambio solo en `src/` (compatible con OTA, sin requerir build nativo nuevo).
+
 ## Módulos implementados
 - Ventas POS (`sales`)
 - Cotizaciones (`sales/Quote*`)

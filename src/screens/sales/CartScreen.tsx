@@ -21,7 +21,15 @@ import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterServi
 import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
-import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import { resolveGeneralCustomerFromDb } from '../../utils/generalCustomer';
+import {
+  formatCustomerLabel,
+  GENERIC_CUSTOMER_DISPLAY_NAME,
+  GENERIC_CUSTOMER_VISUAL_ID,
+  isGenericCustomerLabel,
+  normalizeCustomerVisualId,
+  parseCustomerVisualIdFromData,
+} from '../../utils/customerLabels';
 
 interface CartScreenProps {
   navigation: any;
@@ -448,7 +456,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       saleLocalId: params.saleLocalId,
       saleServerId: null,
       customerId: params.customerId,
-      customerName: params.customerName || 'Cliente',
+      customerName: params.customerName || GENERIC_CUSTOMER_DISPLAY_NAME,
       customerVisualId: params.customerVisualId ?? null,
       invoiceCode: params.invoiceCode,
       totalCents: params.totalCents,
@@ -462,7 +470,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     const arRow = {
       customer_id: params.customerId,
       customer_visual_id: params.customerVisualId ?? null,
-      customer_name: params.customerName || 'Cliente',
+      customer_name: params.customerName || GENERIC_CUSTOMER_DISPLAY_NAME,
       total_cents: params.totalCents,
       paid_cents: 0,
       balance_cents: params.totalCents,
@@ -577,38 +585,24 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     let selectedCustomerSaleDiscountPercentBp = customerSaleDiscountPercentBp ?? null;
 
     if (!selectedCustomerId) {
-      const defaultCustomer = await db.queryFirst<{ local_id: string; name: string; visual_id?: number | null; data?: string | null }>(
-        `SELECT local_id, name, visual_id, data
-         FROM customers
-         WHERE LOWER(TRIM(name)) = 'cliente general'
-         ORDER BY CASE WHEN server_id IS NOT NULL THEN 0 ELSE 1 END, rowid ASC
-         LIMIT 1`
-      );
-      if (!defaultCustomer?.local_id) {
+      const defaultCustomer = await resolveGeneralCustomerFromDb();
+      if (!defaultCustomer?.localId) {
         Alert.alert(
           'Cliente requerido',
           'No se encontró el cliente "Cliente general". Sin ese cliente no se puede registrar la venta.'
         );
         return;
       }
-      selectedCustomerId = String(defaultCustomer.local_id);
-      selectedCustomerName = String(defaultCustomer.name || 'Cliente general');
-      selectedCustomerVisualId =
-        normalizeCustomerVisualId(defaultCustomer.visual_id) ??
-        parseCustomerVisualIdFromData(defaultCustomer.data) ??
-        null;
-      let defaultCustomerDiscountBp: number | null = null;
-      try {
-        const parsedDefaultCustomer = defaultCustomer?.data ? JSON.parse(defaultCustomer.data) : null;
-        const normalizedDefaultCustomerDiscountBp = normalizeDiscountPercentBp(
-          parsedDefaultCustomer?.saleDiscountPercentBp ?? parsedDefaultCustomer?.sale_discount_percent_bp ?? 0
-        );
-        defaultCustomerDiscountBp = normalizedDefaultCustomerDiscountBp > 0 ? normalizedDefaultCustomerDiscountBp : null;
-      } catch {
-        defaultCustomerDiscountBp = null;
-      }
-      selectedCustomerSaleDiscountPercentBp = defaultCustomerDiscountBp;
-      setCustomer(selectedCustomerId, selectedCustomerName, selectedCustomerVisualId, defaultCustomerDiscountBp);
+      selectedCustomerId = defaultCustomer.localId;
+      selectedCustomerName = defaultCustomer.name || GENERIC_CUSTOMER_DISPLAY_NAME;
+      selectedCustomerVisualId = defaultCustomer.visualId ?? GENERIC_CUSTOMER_VISUAL_ID;
+      selectedCustomerSaleDiscountPercentBp = defaultCustomer.saleDiscountPercentBp ?? null;
+      setCustomer(
+        selectedCustomerId,
+        selectedCustomerName,
+        selectedCustomerVisualId,
+        selectedCustomerSaleDiscountPercentBp
+      );
     }
 
     if (selectedCustomerId && !selectedCustomerVisualId) {
@@ -644,6 +638,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     }
 
     if (paymentMethod === 'CREDITO') {
+      if (!selectedCustomerId || isGenericCustomerLabel(selectedCustomerName, selectedCustomerVisualId)) {
+        Alert.alert(
+          'Cliente requerido',
+          'Las ventas a crédito requieren un cliente específico. "Cliente general" no está permitido para crédito.'
+        );
+        return;
+      }
+
       const customerRow = await db.queryFirst<{ data?: string; name?: string }>(
         'SELECT data, name FROM customers WHERE local_id = ?',
         [selectedCustomerId]
@@ -855,7 +857,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             invoiceCode: resolvedInvoiceCode,
             createdAt,
             customerId: selectedCustomerId,
-            customerName: selectedCustomerName || 'Cliente',
+            customerName: selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
             customerVisualId: selectedCustomerVisualId ?? null,
             totalCents: documentTotals.totalCents,
             dueDate: creditDueDate,
@@ -935,7 +937,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             invoiceCode,
             createdAt: now,
             customerId: selectedCustomerId,
-            customerName: selectedCustomerName || 'Cliente',
+            customerName: selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
             customerVisualId: selectedCustomerVisualId ?? null,
             totalCents: cartTotals.totalCents,
             dueDate: creditDueDate,
@@ -960,7 +962,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       const saleTicketPayload = {
         invoiceCode: resolvedInvoiceCode,
         createdAt,
-        customerName: formatCustomerLabel(selectedCustomerName || 'Cliente general', selectedCustomerVisualId),
+        customerName: formatCustomerLabel(
+          selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
+          selectedCustomerVisualId
+        ),
         paymentMethod,
         transferBankName,
         paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
@@ -1115,7 +1120,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Cliente:</Text>
               <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
-                {formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}
+                {formatCustomerLabel(customerName || GENERIC_CUSTOMER_DISPLAY_NAME, customerVisualId)}
               </Button>
             </View>
 

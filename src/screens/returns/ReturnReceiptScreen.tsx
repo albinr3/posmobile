@@ -9,6 +9,7 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatProductQty } from '../../utils/productUnits';
 import { hasConnectedPrinter, printReturnTicketDirect } from '../../services/printing/thermalPrinterService';
+import { formatCustomerLabel, GENERIC_CUSTOMER_DISPLAY_NAME } from '../../utils/customerLabels';
 
 interface ReturnReceiptItem {
   productName: string;
@@ -103,7 +104,7 @@ const buildReturnReceiptHtml = (receipt: ReturnReceiptPayload, logoUri: string) 
             <div class="row"><span>Devolucion:</span><span><strong>${escapeHtml(receipt.returnCode)}</strong></span></div>
             <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(receipt.returnedAt))}</span></div>
             <div class="row"><span>Factura:</span><span>${escapeHtml(receipt.invoiceCode || '-')}</span></div>
-            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(receipt.customerName || 'Cliente general')}</div>
+            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(formatCustomerLabel(receipt.customerName || GENERIC_CUSTOMER_DISPLAY_NAME))}</div>
           </div>
           <div>${itemsRows}</div>
           ${
@@ -142,7 +143,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
           returnCode: receipt.returnCode,
           returnedAt: receipt.returnedAt,
           invoiceCode: receipt.invoiceCode || '-',
-          customerName: receipt.customerName || 'Cliente general',
+          customerName: formatCustomerLabel(receipt.customerName || GENERIC_CUSTOMER_DISPLAY_NAME),
           totalCents: receipt.totalCents,
           notes: receipt.notes || null,
           items: (receipt.items || []).map((item) => ({
@@ -239,7 +240,7 @@ export function ReturnReceiptScreen({ navigation, route }: ReturnReceiptScreenPr
 
           <View style={styles.infoRow}>
             <Text style={styles.label}>Cliente:</Text>
-            <Text style={styles.value}>{receipt.customerName || 'Cliente general'}</Text>
+            <Text style={styles.value}>{formatCustomerLabel(receipt.customerName || GENERIC_CUSTOMER_DISPLAY_NAME)}</Text>
           </View>
 
           {receipt.notes ? (

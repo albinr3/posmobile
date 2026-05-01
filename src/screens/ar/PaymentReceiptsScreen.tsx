@@ -18,7 +18,13 @@ import {
   hasConnectedPrinter,
   printPaymentReceiptDirect,
 } from '../../services/printing/thermalPrinterService';
-import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import {
+  customerMatchesQuery,
+  formatCustomerLabel,
+  GENERIC_CUSTOMER_DISPLAY_NAME,
+  normalizeCustomerVisualId,
+  parseCustomerVisualIdFromData,
+} from '../../utils/customerLabels';
 
 interface PaymentReceiptsScreenProps {
   navigation: any;
@@ -117,7 +123,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         amountCents: Number(parsed?.amountCents || row.amount_cents || 0),
         paymentMethod: String(parsed?.method || parsed?.paymentMethod || 'EFECTIVO'),
         transferBankName: parsed?.transferBankName ? String(parsed.transferBankName) : null,
-        customerName: String(parsed?.customerName || 'Cliente'),
+        customerName: String(parsed?.customerName || GENERIC_CUSTOMER_DISPLAY_NAME),
         customerVisualId:
           normalizeCustomerVisualId(parsed?.customerVisualId) ??
           parseCustomerVisualIdFromData(parsed) ??
@@ -433,7 +439,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
             </div>
 
             <div class="box">
-              <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(formatCustomerLabel(item.customerName || 'Cliente', item.customerVisualId))}</span></div>
+              <div class="row"><span class="label">Cliente</span><span class="value">${escapeHtml(formatCustomerLabel(item.customerName || GENERIC_CUSTOMER_DISPLAY_NAME, item.customerVisualId))}</span></div>
               <div class="row"><span class="label">Factura(s)</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
               <div class="row"><span class="label">Método principal</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
               <div class="row"><span class="label">Referencia</span><span class="value">${escapeHtml(item.reference || '-')}</span></div>

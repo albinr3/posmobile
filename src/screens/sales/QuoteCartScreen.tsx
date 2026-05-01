@@ -17,7 +17,14 @@ import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { printQuoteTicketDirect } from '../../services/printing/thermalPrinterService';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
-import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import { resolveGeneralCustomerFromDb } from '../../utils/generalCustomer';
+import {
+  formatCustomerLabel,
+  GENERIC_CUSTOMER_DISPLAY_NAME,
+  GENERIC_CUSTOMER_VISUAL_ID,
+  normalizeCustomerVisualId,
+  parseCustomerVisualIdFromData,
+} from '../../utils/customerLabels';
 
 interface QuoteCartScreenProps {
   navigation: any;
@@ -358,13 +365,38 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       const isEditing = !!editingQuoteLocalId;
       const localId = editingQuoteLocalId || generateLocalId();
       const localQuoteCode = editingQuoteCode || `LOCAL-${Date.now()}`;
-      let resolvedCustomerVisualId = customerVisualId ?? null;
-      if (!resolvedCustomerVisualId && customerId) {
+      let selectedCustomerId = customerId ?? null;
+      let selectedCustomerName = customerName ?? null;
+      let selectedCustomerVisualId = customerVisualId ?? null;
+      let selectedCustomerSaleDiscountPercentBp = customerSaleDiscountPercentBp ?? null;
+
+      if (!selectedCustomerId) {
+        const defaultCustomer = await resolveGeneralCustomerFromDb();
+        if (!defaultCustomer?.localId) {
+          Alert.alert(
+            'Cliente requerido',
+            'No se encontró el cliente "Cliente general". Sin ese cliente no se puede guardar la cotización.'
+          );
+          return;
+        }
+        selectedCustomerId = defaultCustomer.localId;
+        selectedCustomerName = defaultCustomer.name || GENERIC_CUSTOMER_DISPLAY_NAME;
+        selectedCustomerVisualId = defaultCustomer.visualId ?? GENERIC_CUSTOMER_VISUAL_ID;
+        selectedCustomerSaleDiscountPercentBp = defaultCustomer.saleDiscountPercentBp ?? null;
+        setCustomer(
+          selectedCustomerId,
+          selectedCustomerName,
+          selectedCustomerVisualId,
+          selectedCustomerSaleDiscountPercentBp
+        );
+      }
+
+      if (!selectedCustomerVisualId && selectedCustomerId) {
         const customerRow = await db.queryFirst<{ visual_id?: number | null; data?: string | null }>(
           'SELECT visual_id, data FROM customers WHERE local_id = ? OR server_id = ? LIMIT 1',
-          [customerId, customerId]
+          [selectedCustomerId, selectedCustomerId]
         );
-        resolvedCustomerVisualId =
+        selectedCustomerVisualId =
           normalizeCustomerVisualId(customerRow?.visual_id) ??
           parseCustomerVisualIdFromData(customerRow?.data) ??
           null;
@@ -374,9 +406,9 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
         localId,
         id: editingQuoteServerId || undefined,
         quoteCode: localQuoteCode,
-        customerId: customerId ?? null,
-        customerVisualId: resolvedCustomerVisualId,
-        customerName: customerName ?? null,
+        customerId: selectedCustomerId,
+        customerVisualId: selectedCustomerVisualId,
+        customerName: selectedCustomerName,
         items,
         subtotalCents: quoteTotals.subtotalCents,
         itbisCents: quoteTotals.itbisCents,
@@ -466,7 +498,10 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
       const printResult = await printQuoteTicketDirect({
         quoteCode: localQuoteCode,
         createdAt: quoteData.createdAt,
-        customerName: formatCustomerLabel(quoteData.customerName || 'Cliente general', quoteData.customerVisualId),
+        customerName: formatCustomerLabel(
+          quoteData.customerName || GENERIC_CUSTOMER_DISPLAY_NAME,
+          quoteData.customerVisualId
+        ),
         totalCents: quoteData.totalCents,
         salePricesIncludeItbis: quoteData.salePricesIncludeItbis,
         discountPercentBp: resolvedDiscountPercentBp,
@@ -594,7 +629,7 @@ export function QuoteCartScreen({ navigation, route }: QuoteCartScreenProps) {
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Cliente:</Text>
             <Button mode="text" onPress={() => navigation.navigate('SelectQuoteCustomer')}>
-              {formatCustomerLabel(customerName || 'Cliente general', customerVisualId)}
+              {formatCustomerLabel(customerName || GENERIC_CUSTOMER_DISPLAY_NAME, customerVisualId)}
             </Button>
           </View>
 

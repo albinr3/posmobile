@@ -12,7 +12,13 @@ import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { syncService } from '../../services/sync/SyncService';
 import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
-import { customerMatchesQuery, formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import {
+  customerMatchesQuery,
+  formatCustomerLabel,
+  isGenericCustomerLabel,
+  normalizeCustomerVisualId,
+  parseCustomerVisualIdFromData,
+} from '../../utils/customerLabels';
 
 interface CreateReturnScreenProps {
   navigation: any;
@@ -606,9 +612,10 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
 
         const customerIds = new Set(ids.map((value) => String(value).trim()).filter(Boolean));
         const selectedCustomerNameNormalized = String(selectedCustomer.name || '').trim().toLowerCase();
-        const selectedCustomerIsGeneral =
-          selectedCustomerNameNormalized === 'cliente general' ||
-          selectedCustomerNameNormalized === 'general';
+        const selectedCustomerIsGeneral = isGenericCustomerLabel(
+          selectedCustomer.name,
+          selectedCustomer.visualId
+        );
         const rows = await db.query<any>(
           `SELECT local_id, server_id, invoice_code, customer_id, total_cents, status, created_at, data
            FROM sales

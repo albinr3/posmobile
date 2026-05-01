@@ -13,6 +13,7 @@ import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
+import { formatCustomerLabel, GENERIC_CUSTOMER_DISPLAY_NAME } from '../../utils/customerLabels';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -184,7 +185,7 @@ const buildReceiptHtml = (params: {
           <div class="sep">
             <div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div>
             <div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div>
-            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName || '(General) Cliente general')}</div>
+            <div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(formatCustomerLabel(customerName || GENERIC_CUSTOMER_DISPLAY_NAME))}</div>
             <div style="margin-top:4px;"><strong>Tipo de venta:</strong> ${escapeHtml(saleTypeLabel)}</div>
             <div style="margin-top:4px;"><strong>Método de pago:</strong> ${escapeHtml(paymentSummary || '-')}</div>
           </div>
@@ -362,12 +363,12 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
             <Text style={styles.value}>{formatDateTime(displayCreatedAt)}</Text>
           </View>
 
-          {sale.customerName && (
-            <View style={styles.infoRow}>
-              <Text style={styles.label}>Cliente:</Text>
-              <Text style={styles.value}>{sale.customerName}</Text>
-            </View>
-          )}
+          <View style={styles.infoRow}>
+            <Text style={styles.label}>Cliente:</Text>
+            <Text style={styles.value}>
+              {formatCustomerLabel(sale.customerName || GENERIC_CUSTOMER_DISPLAY_NAME, sale.customerVisualId)}
+            </Text>
+          </View>
 
           <View style={styles.infoRow}>
             <Text style={styles.label}>Método de Pago:</Text>
