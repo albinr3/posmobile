@@ -6,12 +6,14 @@ interface CartExtraState {
   transferBankName: string | null;
   paymentSplits: SalePaymentSplit[];
   shippingCents: number;
+  applyLegalTip: boolean;
   editingSaleLocalId: string | null;
   editingInvoiceCode: string | null;
   setPaymentMethod: (method: string) => void;
   setTransferBankName: (bankName: string | null) => void;
   setPaymentSplits: (splits: SalePaymentSplit[]) => void;
   setShippingCents: (shippingCents: number) => void;
+  setApplyLegalTip: (value: boolean) => void;
   loadInvoiceForEdit: (params: {
     items: SaleItem[];
     customerId: string | null;
@@ -21,6 +23,7 @@ interface CartExtraState {
     transferBankName?: string | null;
     paymentSplits?: SalePaymentSplit[];
     shippingCents?: number;
+    applyLegalTip?: boolean;
     customerSaleDiscountPercentBp?: number | null;
     discountPercentBp?: number | null;
     discountWasManual?: boolean;
@@ -37,6 +40,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
   transferBankName: null,
   paymentSplits: [],
   shippingCents: 0,
+  applyLegalTip: true,
   editingSaleLocalId: null,
   editingInvoiceCode: null,
 
@@ -57,6 +61,10 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     set({ shippingCents: nextShippingCents });
   },
 
+  setApplyLegalTip: (value: boolean) => {
+    set({ applyLegalTip: value === true });
+  },
+
   loadInvoiceForEdit: ({
     items,
     customerId,
@@ -66,6 +74,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     transferBankName,
     paymentSplits,
     shippingCents,
+    applyLegalTip,
     customerSaleDiscountPercentBp,
     discountPercentBp,
     discountWasManual,
@@ -81,6 +90,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       transferBankName: transferBankName || null,
       paymentSplits: Array.isArray(paymentSplits) ? paymentSplits : [],
       shippingCents: Number.isFinite(shippingCents) ? Math.max(0, Math.round(shippingCents || 0)) : 0,
+      applyLegalTip: applyLegalTip === true,
       customerSaleDiscountPercentBp: Number.isFinite(Number(customerSaleDiscountPercentBp))
         ? Math.max(0, Math.min(10000, Math.round(Number(customerSaleDiscountPercentBp))))
         : null,
@@ -110,6 +120,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       transferBankName: null,
       paymentSplits: [],
       shippingCents: 0,
+      applyLegalTip: true,
       customerSaleDiscountPercentBp: null,
       discountPercentBp: null,
       discountWasManual: false,

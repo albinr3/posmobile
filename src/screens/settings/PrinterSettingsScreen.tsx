@@ -63,6 +63,9 @@ type CompanySettingsResponse = {
   salePricesIncludeItbis?: boolean | null;
   preciosIncluyenItbis?: boolean | null;
   precioVentaIncluyeItbis?: boolean | null;
+  legalTipEnabled?: boolean | null;
+  propinaLegalEnabled?: boolean | null;
+  habilitarPropinaLegal?: boolean | null;
   salesSettings?: Record<string, unknown> | null;
 };
 
@@ -144,13 +147,15 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   const [defaultViewMode, setDefaultViewMode] = useState<'list' | 'grid'>('list');
   const [showItbisOnReceipts, setShowItbisOnReceipts] = useState(true);
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
+  const [legalTipEnabled, setLegalTipEnabled] = useState(false);
   const [defaultProfitMargin, setDefaultProfitMargin] = useState('30.00');
   const [savingSalesSettings, setSavingSalesSettings] = useState(false);
 
-  const persistSalesSettingsLocally = async (overrides?: Partial<{ defaultViewMode: 'list' | 'grid'; showItbisOnReceipts: boolean; salePricesIncludeItbis: boolean }>) => {
+  const persistSalesSettingsLocally = async (overrides?: Partial<{ defaultViewMode: 'list' | 'grid'; showItbisOnReceipts: boolean; salePricesIncludeItbis: boolean; legalTipEnabled: boolean }>) => {
     const resolvedDefaultViewMode = overrides?.defaultViewMode ?? defaultViewMode;
     const resolvedShowItbisOnReceipts = overrides?.showItbisOnReceipts ?? showItbisOnReceipts;
     const resolvedSalePricesIncludeItbis = overrides?.salePricesIncludeItbis ?? salePricesIncludeItbis;
+    const resolvedLegalTipEnabled = overrides?.legalTipEnabled ?? legalTipEnabled;
     const parsedMargin = Number.parseFloat(defaultProfitMargin || '0');
     const marginBp = Math.round((Number.isFinite(parsedMargin) ? parsedMargin : 0) * 100);
     await setSalesSettings({
@@ -158,6 +163,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       showItbisOnReceipts: resolvedShowItbisOnReceipts,
       defaultProfitMarginBp: Math.max(0, marginBp),
       salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+      legalTipEnabled: resolvedLegalTipEnabled,
     });
   };
 
@@ -233,6 +239,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       setDefaultViewMode(normalizedSalesSettings.defaultViewMode);
       setShowItbisOnReceipts(normalizedSalesSettings.showItbisOnReceipts);
       setSalePricesIncludeItbis(normalizedSalesSettings.salePricesIncludeItbis);
+      setLegalTipEnabled(normalizedSalesSettings.legalTipEnabled);
       setDefaultProfitMargin((normalizedSalesSettings.defaultProfitMarginBp / 100).toFixed(2));
       await setSalesSettings(normalizedSalesSettings);
     } catch (error) {
@@ -286,6 +293,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         defaultViewMode,
         showItbisOnReceipts,
         salePricesIncludeItbis,
+        legalTipEnabled,
         preciosVentaIncluyenItbis: salePricesIncludeItbis,
         defaultProfitMarginBp: Math.max(0, marginBp),
         company: {
@@ -323,6 +331,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         showItbisOnReceipts,
         defaultProfitMarginBp: marginBpFromForm,
         salePricesIncludeItbis,
+        legalTipEnabled,
       });
       setCompanySettingsSuccess('Configuración guardada.');
     } catch (error) {
@@ -343,6 +352,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
       defaultViewMode: 'list' | 'grid';
       showItbisOnReceipts: boolean;
       salePricesIncludeItbis: boolean;
+      legalTipEnabled: boolean;
       defaultProfitMargin: string;
     }>;
     silent?: boolean;
@@ -351,6 +361,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
     const resolvedDefaultViewMode = options?.overrides?.defaultViewMode ?? defaultViewMode;
     const resolvedShowItbisOnReceipts = options?.overrides?.showItbisOnReceipts ?? showItbisOnReceipts;
     const resolvedSalePricesIncludeItbis = options?.overrides?.salePricesIncludeItbis ?? salePricesIncludeItbis;
+    const resolvedLegalTipEnabled = options?.overrides?.legalTipEnabled ?? legalTipEnabled;
     const resolvedDefaultProfitMargin = options?.overrides?.defaultProfitMargin ?? defaultProfitMargin;
 
     try {
@@ -391,6 +402,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         defaultViewMode: resolvedDefaultViewMode,
         showItbisOnReceipts: resolvedShowItbisOnReceipts,
         salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+        legalTipEnabled: resolvedLegalTipEnabled,
         preciosVentaIncluyenItbis: resolvedSalePricesIncludeItbis,
         defaultProfitMarginBp: Math.max(0, marginBp),
         company: {
@@ -425,11 +437,13 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         defaultViewMode: resolvedDefaultViewMode,
         showItbisOnReceipts: resolvedShowItbisOnReceipts,
         salePricesIncludeItbis: resolvedSalePricesIncludeItbis,
+        legalTipEnabled: resolvedLegalTipEnabled,
         defaultProfitMarginBp: marginBp,
       });
       setDefaultViewMode(normalizedSalesSettings.defaultViewMode);
       setShowItbisOnReceipts(normalizedSalesSettings.showItbisOnReceipts);
       setSalePricesIncludeItbis(normalizedSalesSettings.salePricesIncludeItbis);
+      setLegalTipEnabled(normalizedSalesSettings.legalTipEnabled);
       setDefaultProfitMargin((normalizedSalesSettings.defaultProfitMarginBp / 100).toFixed(2));
       await setSalesSettings(normalizedSalesSettings);
       await cacheCompanySettingsSnapshot(normalizeCompanySettings(API_URL, response.data));
@@ -1014,6 +1028,22 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
                 setSalePricesIncludeItbis(value);
                 void persistSalesSettingsLocally({ salePricesIncludeItbis: value });
                 void saveSalesSettings({ overrides: { salePricesIncludeItbis: value }, silent: true });
+              }}
+              color={ui.colors.primary}
+            />
+          </View>
+
+          <View style={styles.saleSwitchCard}>
+            <View style={styles.saleSwitchMeta}>
+              <Text style={styles.saleSwitchTitle}>Habilitar propina legal (10%)</Text>
+              <Text style={styles.saleSwitchHint}>Permite activar/desactivar propina legal por factura.</Text>
+            </View>
+            <Switch
+              value={legalTipEnabled}
+              onValueChange={(value) => {
+                setLegalTipEnabled(value);
+                void persistSalesSettingsLocally({ legalTipEnabled: value });
+                void saveSalesSettings({ overrides: { legalTipEnabled: value }, silent: true });
               }}
               color={ui.colors.primary}
             />

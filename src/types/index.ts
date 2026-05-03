@@ -49,6 +49,11 @@ export interface Sale {
   subtotalCents?: number;
   itbisCents?: number;
   shippingCents?: number;
+  applyLegalTip?: boolean;
+  legalTipApplied?: boolean;
+  legalTipPercentBp?: number;
+  legalTipBaseCents?: number;
+  legalTipCents?: number;
   discountSource?: DocumentDiscountSource;
   discountPercentBp?: number;
   discountSubtotalCents?: number;

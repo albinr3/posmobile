@@ -16,6 +16,7 @@ import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
+import { calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/legalTip';
 
 interface POSScreenProps {
   navigation: any;
@@ -131,6 +132,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
+  const [legalTipEnabled, setLegalTipEnabled] = useState(false);
   const [saleOptionsExpanded, setSaleOptionsExpanded] = useState(false);
   const insets = useSafeAreaInsets();
   const hydratedEditSaleRef = useRef<string | null>(null);
@@ -157,6 +159,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     setPaymentSplits,
     shippingCents,
     discountPercentBp,
+    applyLegalTip,
     paymentMethod,
     items,
     loadInvoiceForEdit,
@@ -174,6 +177,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         const salesSettings = await getSalesSettings();
         if (mounted) {
           setSalePricesIncludeItbis(salesSettings.salePricesIncludeItbis !== false);
+          setLegalTipEnabled(salesSettings.legalTipEnabled === true);
         }
         const savedViewMode = await AsyncStorage.getItem(VIEW_MODE_STORAGE_KEY);
         if (!mounted) return;
@@ -355,6 +359,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           }
         }
         const normalizedDiscountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
+        const resolvedApplyLegalTip = normalizeApplyLegalTip(parsedData, false);
         loadInvoiceForEdit({
           items: resolvedItems,
           customerId: resolvedCustomerId,
@@ -366,6 +371,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           paymentMethod: resolvedPaymentMethod,
           transferBankName: resolvedTransferBankName,
           paymentSplits: resolvedPaymentMethod === 'DIVIDIR_PAGO' ? resolvedPaymentSplits : [],
+          applyLegalTip: resolvedApplyLegalTip,
           shippingCents: Number(
             parsedData?.shippingCents ??
             parsedData?.fleteCents ??
@@ -454,8 +460,8 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   }, [products, searchQuery, scanExactSkuQuery]);
 
   const cartTotals = useMemo(
-    () =>
-      calcDocumentTotalsByTaxMode({
+    () => {
+      const documentTotals = calcDocumentTotalsByTaxMode({
         items: items.map((item) => ({
           quantity: item.quantity,
           priceCents: item.priceCents,
@@ -464,8 +470,18 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         shippingCents,
         salePricesIncludeItbis,
         discountPercentBp: normalizeDiscountPercentBp(discountPercentBp ?? 0),
-      }),
-    [discountPercentBp, items, shippingCents, salePricesIncludeItbis]
+      });
+      const legalTipCents =
+        legalTipEnabled && applyLegalTip
+          ? calculateLegalTipCents(documentTotals.subtotalCents)
+          : 0;
+      return {
+        ...documentTotals,
+        legalTipCents,
+        totalCents: documentTotals.totalCents + legalTipCents,
+      };
+    },
+    [applyLegalTip, discountPercentBp, items, legalTipEnabled, shippingCents, salePricesIncludeItbis]
   );
 
   const cartQuantityByProduct = useMemo(() => {

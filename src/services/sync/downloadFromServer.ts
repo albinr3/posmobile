@@ -3,6 +3,7 @@ import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
 import { GENERIC_CUSTOMER_DISPLAY_NAME, normalizeCustomerVisualId } from '../../utils/customerLabels';
 import { normalizeDiscountPercentBp } from '../../utils/tax';
+import { normalizeApplyLegalTip, resolveLegalTipSummary } from '../../utils/legalTip';
 
 const DETAIL_FETCH_BATCH_SIZE = 8;
 const DOWNLOAD_TIMEOUT_MS = 30000;
@@ -509,6 +510,20 @@ export async function downloadFromServer(options: {
 
       const saleDetail = saleDetailsById.get(saleId) || null;
       const localSale = localSalesByServerId.get(saleId) || null;
+      const legalTipSource = {
+        applyLegalTip: saleDetail?.applyLegalTip ?? sale?.applyLegalTip ?? localSale?.applyLegalTip,
+        cobrarPropinaLegal: saleDetail?.cobrarPropinaLegal ?? sale?.cobrarPropinaLegal ?? localSale?.cobrarPropinaLegal,
+        incluirPropinaLegal: saleDetail?.incluirPropinaLegal ?? sale?.incluirPropinaLegal ?? localSale?.incluirPropinaLegal,
+        legalTipApplied: saleDetail?.legalTipApplied ?? sale?.legalTipApplied ?? localSale?.legalTipApplied,
+        legalTipPercentBp: saleDetail?.legalTipPercentBp ?? sale?.legalTipPercentBp ?? localSale?.legalTipPercentBp,
+        legalTipBaseCents: saleDetail?.legalTipBaseCents ?? sale?.legalTipBaseCents ?? localSale?.legalTipBaseCents,
+        legalTipCents: saleDetail?.legalTipCents ?? sale?.legalTipCents ?? localSale?.legalTipCents,
+      };
+      const legalTipSummary = resolveLegalTipSummary(
+        legalTipSource,
+        Number(saleDetail?.subtotalCents ?? sale?.subtotalCents ?? localSale?.subtotalCents ?? 0)
+      );
+      const applyLegalTip = normalizeApplyLegalTip(legalTipSource, false);
 
       const customerId = saleDetail?.customerId || sale?.customerId || localSale?.customerId || null;
       const customerName = saleDetail?.customerName || sale?.customerName || localSale?.customerName || null;
@@ -611,6 +626,11 @@ export async function downloadFromServer(options: {
           localSale?.discountTotalCents ??
           0
         ),
+        applyLegalTip,
+        legalTipApplied: legalTipSummary.legalTipApplied,
+        legalTipPercentBp: legalTipSummary.legalTipPercentBp,
+        legalTipBaseCents: legalTipSummary.legalTipBaseCents,
+        legalTipCents: legalTipSummary.legalTipCents,
         totalCents: Number(saleDetail?.totalCents || sale?.totalCents || localSale?.totalCents || 0),
         status,
         cancelledAt: cancelledAtRaw,

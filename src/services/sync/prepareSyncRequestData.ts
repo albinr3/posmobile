@@ -3,6 +3,7 @@ import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, normalizeCategoryIdForApi, summarizeError } from './syncShared';
 import { inferProductKind, inferProductUnit } from '../../utils/productUnits';
 import { normalizeDiscountPercentBp } from '../../utils/tax';
+import { normalizeApplyLegalTip } from '../../utils/legalTip';
 
 export async function prepareSyncRequestData(
   entityType: string,
@@ -144,6 +145,7 @@ export async function prepareSyncRequestData(
       const saleShippingCents = Number.isFinite(Number(rawSaleShippingCents))
         ? Math.max(0, Math.round(Number(rawSaleShippingCents)))
         : 0;
+      const applyLegalTip = normalizeApplyLegalTip(data, false);
 
       return {
         customerId: resolvedCustomerId,
@@ -155,6 +157,7 @@ export async function prepareSyncRequestData(
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
         shippingCents: saleShippingCents,
+        applyLegalTip,
         discountMode: data.discountMode === 'MANUAL' ? 'MANUAL' : 'AUTO',
         manualDiscountPercentBp:
           data.discountMode === 'MANUAL' || (data.manualDiscountPercentBp !== undefined && data.manualDiscountPercentBp !== null)

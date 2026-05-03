@@ -1,10 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { normalizeLegalTipEnabled } from '../../utils/legalTip';
 
 export type SalesSettings = {
   defaultViewMode: 'list' | 'grid';
   showItbisOnReceipts: boolean;
   defaultProfitMarginBp: number;
   salePricesIncludeItbis: boolean;
+  legalTipEnabled: boolean;
 };
 
 const SALES_SETTINGS_KEY = 'movopos_sales_settings_v1';
@@ -14,6 +16,7 @@ const FALLBACK_SETTINGS: SalesSettings = {
   showItbisOnReceipts: true,
   defaultProfitMarginBp: 3000,
   salePricesIncludeItbis: true,
+  legalTipEnabled: false,
 };
 
 function normalizeMarginBp(value: unknown): number {
@@ -37,6 +40,7 @@ export function normalizeSalesSettings(raw: any): SalesSettings {
         : typeof raw?.preciosVentaIncluyenItbis === 'boolean'
           ? raw.preciosVentaIncluyenItbis
           : true,
+    legalTipEnabled: normalizeLegalTipEnabled(raw, false),
   };
 }
 

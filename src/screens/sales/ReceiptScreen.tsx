@@ -14,6 +14,7 @@ import { formatProductQty } from '../../utils/productUnits';
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, GENERIC_CUSTOMER_DISPLAY_NAME } from '../../utils/customerLabels';
+import { LEGAL_TIP_PERCENT_BP, resolveLegalTipSummary } from '../../utils/legalTip';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -73,6 +74,19 @@ const resolveSaleShippingCents = (saleData: any): number => {
   return 0;
 };
 
+const resolveSaleLegalTip = (saleData: any): { legalTipPercentBp: number; legalTipCents: number } => {
+  const fallbackBaseCents = Number(saleData?.legalTipBaseCents ?? saleData?.subtotalCents ?? 0);
+  const summary = resolveLegalTipSummary(saleData, fallbackBaseCents);
+  return {
+    legalTipPercentBp: Number.isFinite(Number(summary.legalTipPercentBp))
+      ? Math.max(0, Math.round(Number(summary.legalTipPercentBp)))
+      : LEGAL_TIP_PERCENT_BP,
+    legalTipCents: Number.isFinite(Number(summary.legalTipCents))
+      ? Math.max(0, Math.round(Number(summary.legalTipCents)))
+      : 0,
+  };
+};
+
 const buildReceiptHtml = (params: {
   invoiceCode: string;
   createdAt: number;
@@ -88,6 +102,8 @@ const buildReceiptHtml = (params: {
   salePricesIncludeItbis?: boolean;
   discountPercentBp?: number | null;
   discountTotalCents?: number;
+  legalTipPercentBp?: number;
+  legalTipCents?: number;
 }) => {
   const {
     invoiceCode,
@@ -103,6 +119,8 @@ const buildReceiptHtml = (params: {
     showItbisBreakdown,
     discountPercentBp,
     discountTotalCents,
+    legalTipPercentBp,
+    legalTipCents,
   } = params;
 
   const itemsRows = (items || [])
@@ -144,14 +162,24 @@ const buildReceiptHtml = (params: {
   const discountRow = resolvedDiscountTotalCents > 0
     ? `<div class="row"><span>Descuento (${(resolvedDiscountPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>-${formatCurrency(resolvedDiscountTotalCents)}</span></div>`
     : '';
+  const resolvedLegalTipPercentBp = Number.isFinite(Number(legalTipPercentBp))
+    ? Math.max(0, Math.round(Number(legalTipPercentBp)))
+    : LEGAL_TIP_PERCENT_BP;
+  const resolvedLegalTipCents = Number.isFinite(Number(legalTipCents))
+    ? Math.max(0, Math.round(Number(legalTipCents)))
+    : 0;
+  const legalTipRow = resolvedLegalTipCents > 0
+    ? `<div class="row"><span>Propina legal (${(resolvedLegalTipPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>${formatCurrency(resolvedLegalTipCents)}</span></div>`
+    : '';
   const taxRows = showItbisBreakdown
     ? `
           <div class="row"><span>Subtotal</span><span>${formatCurrency(totals.subtotalCents)}</span></div>
           <div class="row"><span>ITBIS (${salePricesIncludeItbis ? 'incluido' : 'no incluido'})</span><span>${formatCurrency(totals.itbisCents)}</span></div>
           ${discountRow}
           ${shippingRow}
+          ${legalTipRow}
       `
-    : `${discountRow}${shippingRow}`;
+    : `${discountRow}${shippingRow}${legalTipRow}`;
   const saleTypeLabel = paymentMethod === 'CREDITO' ? 'Crédito' : 'Contado';
   const paymentSummary = paymentMethod === 'DIVIDIR_PAGO'
     ? (paymentSplits || []).map((split) => `${formatPaymentWithBank(split.method, split.transferBankName)} ${formatCurrency(split.amountCents)}`).join(' + ')
@@ -241,6 +269,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
     if (!sale) return;
     const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
     const createdAt = resolveSaleCreatedAt(sale?.created_at, sale);
+    const legalTip = resolveSaleLegalTip(sale);
     const html = buildReceiptHtml({
       invoiceCode: displayInvoiceCode,
       createdAt,
@@ -256,6 +285,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
       discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
       discountTotalCents: Number(sale.discountTotalCents || 0),
+      legalTipPercentBp: legalTip.legalTipPercentBp,
+      legalTipCents: legalTip.legalTipCents,
     });
 
     try {
@@ -286,6 +317,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
 
     const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
     const createdAt = resolveSaleCreatedAt(sale?.created_at, sale);
+    const legalTip = resolveSaleLegalTip(sale);
     const html = buildReceiptHtml({
       invoiceCode: displayInvoiceCode,
       createdAt,
@@ -301,6 +333,8 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
       discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
       discountTotalCents: Number(sale.discountTotalCents || 0),
+      legalTipPercentBp: legalTip.legalTipPercentBp,
+      legalTipCents: legalTip.legalTipCents,
     });
 
     try {
@@ -340,6 +374,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
 
   const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
   const displayCreatedAt = resolveSaleCreatedAt(sale?.created_at, sale);
+  const saleLegalTip = resolveSaleLegalTip(sale);
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
@@ -409,6 +444,15 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
                 Descuento ({(normalizeDiscountPercentBp(sale.discountPercentBp ?? 0) / 100).toFixed(2).replace(/\.?0+$/, '')}%):
               </Text>
               <Text style={styles.value}>-{formatCurrency(Number(sale.discountTotalCents || 0))}</Text>
+            </View>
+          ) : null}
+
+          {saleLegalTip.legalTipCents > 0 ? (
+            <View style={styles.infoRow}>
+              <Text style={styles.label}>
+                Propina legal ({(saleLegalTip.legalTipPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%):
+              </Text>
+              <Text style={styles.value}>{formatCurrency(saleLegalTip.legalTipCents)}</Text>
             </View>
           ) : null}
 

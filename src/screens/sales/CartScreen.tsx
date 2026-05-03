@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
+import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
@@ -22,6 +22,7 @@ import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackServic
 import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { resolveGeneralCustomerFromDb } from '../../utils/generalCustomer';
+import { LEGAL_TIP_PERCENT_BP, calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/legalTip';
 import {
   formatCustomerLabel,
   GENERIC_CUSTOMER_DISPLAY_NAME,
@@ -88,6 +89,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setPaymentSplits,
     shippingCents,
     setShippingCents,
+    applyLegalTip,
+    setApplyLegalTip,
     clear,
     editingSaleLocalId,
     editingInvoiceCode,
@@ -106,6 +109,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [discountDraft, setDiscountDraft] = useState('');
   const [discountError, setDiscountError] = useState<string | null>(null);
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
+  const [legalTipEnabled, setLegalTipEnabled] = useState(false);
   const { setCustomer } = useCartStore();
   const { subUser } = useAuthStore();
   const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
@@ -290,15 +294,24 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       let active = true;
       getSalesSettings()
         .then((settings) => {
-          if (active) setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
+          if (!active) return;
+          setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
+          const nextLegalTipEnabled = settings.legalTipEnabled === true;
+          setLegalTipEnabled(nextLegalTipEnabled);
+          if (!nextLegalTipEnabled) {
+            setApplyLegalTip(false);
+          }
         })
         .catch(() => {
-          if (active) setSalePricesIncludeItbis(true);
+          if (!active) return;
+          setSalePricesIncludeItbis(true);
+          setLegalTipEnabled(false);
+          setApplyLegalTip(false);
         });
       return () => {
         active = false;
       };
-    }, [])
+    }, [setApplyLegalTip])
   );
 
   useFocusEffect(
@@ -313,6 +326,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           if (typeof parsed?.salePricesIncludeItbis === 'boolean') {
             setSalePricesIncludeItbis(parsed.salePricesIncludeItbis);
           }
+          setApplyLegalTip(normalizeApplyLegalTip(parsed, false));
           setShippingCents(Number(
             parsed?.shippingCents ??
             parsed?.fleteCents ??
@@ -328,12 +342,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       return () => {
         active = false;
       };
-    }, [editingSaleLocalId])
+    }, [editingSaleLocalId, setApplyLegalTip])
   );
 
   const cartTotals = useMemo(
-    () =>
-      calcDocumentTotalsByTaxMode({
+    () => {
+      const documentTotals = calcDocumentTotalsByTaxMode({
         items: items.map((item) => ({
           quantity: item.quantity,
           priceCents: item.priceCents,
@@ -342,8 +356,22 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         shippingCents,
         salePricesIncludeItbis,
         discountPercentBp: appliedDiscountPercentBp,
-      }),
-    [items, shippingCents, salePricesIncludeItbis, appliedDiscountPercentBp]
+      });
+      const legalTipBaseCents = documentTotals.subtotalCents;
+      const legalTipCents =
+        legalTipEnabled && applyLegalTip
+          ? calculateLegalTipCents(legalTipBaseCents, LEGAL_TIP_PERCENT_BP)
+          : 0;
+      return {
+        ...documentTotals,
+        legalTipBaseCents,
+        legalTipPercentBp: LEGAL_TIP_PERCENT_BP,
+        legalTipApplied: legalTipEnabled && applyLegalTip && legalTipCents > 0,
+        legalTipCents,
+        totalCents: documentTotals.totalCents + legalTipCents,
+      };
+    },
+    [items, shippingCents, salePricesIncludeItbis, appliedDiscountPercentBp, legalTipEnabled, applyLegalTip]
   );
 
   useEffect(() => {
@@ -578,6 +606,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           : 'NONE';
     const resolvedDiscountMode = discountWasManual ? 'MANUAL' : 'AUTO';
     const resolvedManualDiscountPercentBp = discountWasManual ? resolvedDiscountPercentBp : undefined;
+    const resolvedApplyLegalTip = legalTipEnabled && applyLegalTip;
+    const resolvedLegalTipPercentBp = LEGAL_TIP_PERCENT_BP;
+    const resolvedLegalTipBaseCents = cartTotals.legalTipBaseCents;
+    const resolvedLegalTipCents = resolvedApplyLegalTip ? cartTotals.legalTipCents : 0;
     let creditDueDate: number | null = null;
     let selectedCustomerId = customerId;
     let selectedCustomerName = customerName;
@@ -742,6 +774,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         discountSource: resolvedDiscountSource,
         discountMode: resolvedDiscountMode,
         manualDiscountPercentBp: resolvedManualDiscountPercentBp,
+        applyLegalTip: resolvedApplyLegalTip,
+        legalTipApplied: resolvedApplyLegalTip && resolvedLegalTipCents > 0,
+        legalTipPercentBp: resolvedLegalTipPercentBp,
+        legalTipBaseCents: resolvedLegalTipBaseCents,
+        legalTipCents: resolvedLegalTipCents,
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
         paymentMethod,
@@ -786,6 +823,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           discountPercentBp: resolvedDiscountPercentBp,
         });
+        const documentLegalTipBaseCents = documentTotals.subtotalCents;
+        const documentLegalTipCents = resolvedApplyLegalTip
+          ? calculateLegalTipCents(documentLegalTipBaseCents, resolvedLegalTipPercentBp)
+          : 0;
+        const documentTotalCents = documentTotals.totalCents + documentLegalTipCents;
         const documentItems = items.map((item) => ({
           productId: item.productId,
           productName: item.productName,
@@ -838,14 +880,19 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           discountSource: resolvedDiscountSource,
           discountMode: resolvedDiscountMode,
           manualDiscountPercentBp: resolvedManualDiscountPercentBp,
-          totalCents: documentTotals.totalCents,
+          applyLegalTip: resolvedApplyLegalTip,
+          legalTipApplied: resolvedApplyLegalTip && documentLegalTipCents > 0,
+          legalTipPercentBp: resolvedLegalTipPercentBp,
+          legalTipBaseCents: documentLegalTipBaseCents,
+          legalTipCents: documentLegalTipCents,
+          totalCents: documentTotalCents,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           editedAt: now,
         };
 
         await db.update('sales', editingSaleLocalId, {
           customer_id: selectedCustomerId,
-          total_cents: documentTotals.totalCents,
+          total_cents: documentTotalCents,
           status: 'completed',
           synced: 0,
           data: JSON.stringify(updatedData),
@@ -859,7 +906,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             customerId: selectedCustomerId,
             customerName: selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
             customerVisualId: selectedCustomerVisualId ?? null,
-            totalCents: documentTotals.totalCents,
+            totalCents: documentTotalCents,
             dueDate: creditDueDate,
           });
         } else {
@@ -876,6 +923,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
           discountMode: resolvedDiscountMode,
           manualDiscountPercentBp: resolvedManualDiscountPercentBp,
+          applyLegalTip: resolvedApplyLegalTip,
           createdAt,
           soldAt: createdAt,
           items: items.map((item) => ({
@@ -909,6 +957,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           discountSource: resolvedDiscountSource,
           discountMode: resolvedDiscountMode,
           manualDiscountPercentBp: resolvedManualDiscountPercentBp,
+          applyLegalTip: resolvedApplyLegalTip,
+          legalTipApplied: resolvedApplyLegalTip && resolvedLegalTipCents > 0,
+          legalTipPercentBp: resolvedLegalTipPercentBp,
+          legalTipBaseCents: resolvedLegalTipBaseCents,
+          legalTipCents: resolvedLegalTipCents,
           totalCents: cartTotals.totalCents,
           salePricesIncludeItbis,
           paymentMethod,
@@ -973,6 +1026,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
         discountPercentBp: resolvedDiscountPercentBp,
         discountTotalCents: cartTotals.discountTotalCents,
+        applyLegalTip: resolvedApplyLegalTip,
+        legalTipPercentBp: resolvedLegalTipPercentBp,
+        legalTipBaseCents: resolvedLegalTipBaseCents,
+        legalTipCents: resolvedLegalTipCents,
         shippingCents,
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
@@ -1156,6 +1213,16 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             {!canApplyDiscounts ? (
               <Text style={styles.discountReadonlyHint}>No tienes permiso para modificar descuentos.</Text>
             ) : null}
+            {legalTipEnabled ? (
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Aplicar propina legal (10%):</Text>
+                <Switch
+                  value={applyLegalTip}
+                  onValueChange={setApplyLegalTip}
+                  color={ui.colors.primary}
+                />
+              </View>
+            ) : null}
 
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Método de Pago:</Text>
@@ -1256,6 +1323,21 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               </Text>
               <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.itbisCents)}</Text>
             </View>
+            {legalTipEnabled && applyLegalTip && cartTotals.legalTipCents > 0 ? (
+              <View style={styles.summaryRow}>
+                <View style={styles.legalTipLabelWrap}>
+                  <Text style={styles.summaryLabel}>Propina legal (10%):</Text>
+                  <IconButton
+                    icon="close-circle"
+                    size={18}
+                    iconColor={ui.colors.danger}
+                    style={styles.legalTipCloseButton}
+                    onPress={() => setApplyLegalTip(false)}
+                  />
+                </View>
+                <Text style={styles.summaryLabel}>{formatCurrency(cartTotals.legalTipCents)}</Text>
+              </View>
+            ) : null}
 
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total:</Text>
@@ -1712,6 +1794,15 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 14,
     color: ui.colors.textMuted,
+  },
+  legalTipLabelWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexShrink: 1,
+  },
+  legalTipCloseButton: {
+    margin: 0,
+    marginLeft: 2,
   },
   summaryDiscountValue: {
     fontSize: 14,

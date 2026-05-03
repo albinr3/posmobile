@@ -65,6 +65,10 @@ export interface SaleTicketPayload {
   discountPercentBp?: number | null;
   discountTotalCents?: number;
   shippingCents?: number;
+  applyLegalTip?: boolean;
+  legalTipPercentBp?: number;
+  legalTipBaseCents?: number;
+  legalTipCents?: number;
   totalCents: number;
   items: TicketItem[];
 }
@@ -212,6 +216,17 @@ export const buildSaleTicketText = (
   }
   if (Number(payload.shippingCents || 0) > 0) {
     lines.push(formatColumns('FLETE', formatCurrency(Number(payload.shippingCents || 0)), width));
+  }
+  const legalTipCents = Math.max(0, Math.round(Number(payload.legalTipCents || 0)));
+  const legalTipPercentBp = Math.max(0, Math.round(Number(payload.legalTipPercentBp || 1000)));
+  if (legalTipCents > 0) {
+    lines.push(
+      formatColumns(
+        `PROPINA LEGAL (${(legalTipPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)`,
+        formatCurrency(legalTipCents),
+        width
+      )
+    );
   }
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
   lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
