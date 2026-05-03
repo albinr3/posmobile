@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { AppState, View, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { Text, Icon, Menu } from 'react-native-paper';
 import { useNavigation, DrawerActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 import { ui } from '../theme/ui';
+import { setSalesSettingsFromCompanyPayload } from '../services/settings/salesSettings';
 
 type BillingStateResponse = {
   status: string;
@@ -44,10 +45,18 @@ type CompanyHeaderData = {
   logoUrl: string | null;
 };
 
+type CompanySettingsCacheEntry = {
+  fetchedAt: number;
+  data: CompanySettingsResponse | null;
+};
+
 const BILLING_STATE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const BILLING_STATE_STORAGE_PREFIX = 'movopos_billing_state_v1:';
+const COMPANY_SETTINGS_CACHE_TTL_MS = 5 * 60 * 1000;
 const billingStateCache = new Map<string, BillingStateCacheEntry>();
 const billingStateInFlight = new Map<string, Promise<BillingStateResponse | null>>();
+const companySettingsCache = new Map<string, CompanySettingsCacheEntry>();
+const companySettingsInFlight = new Map<string, Promise<CompanySettingsResponse | null>>();
 
 function normalizeCompanySettings(apiUrl: string, payload: CompanySettingsResponse | null | undefined): CompanyHeaderData {
   const rawLogo = payload?.company?.logo ?? payload?.logoUrl ?? null;
@@ -224,8 +233,18 @@ export function AppTopHeader() {
 
   useEffect(() => {
     let mounted = true;
+    const cacheKey = accountId || subUserToken || 'default';
+    const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
 
-    const loadCompanySettings = async () => {
+    const applyCompanyPayload = async (payload: CompanySettingsResponse | null) => {
+      await setSalesSettingsFromCompanyPayload(payload || null);
+      if (!mounted || !payload) return;
+      setCompanyData(normalizeCompanySettings(API_URL, payload));
+      setLogoLoadError(false);
+    };
+
+    const loadCompanySettings = async (forceRefresh = false) => {
+      let ownsInFlightEntry = false;
       try {
         if (!subUserToken) {
           if (mounted) {
@@ -235,25 +254,51 @@ export function AppTopHeader() {
           return;
         }
 
+        if (!forceRefresh) {
+          const now = Date.now();
+          const cached = companySettingsCache.get(cacheKey);
+          if (cached && now - cached.fetchedAt < COMPANY_SETTINGS_CACHE_TTL_MS) {
+            await applyCompanyPayload(cached.data);
+            return;
+          }
+        }
+
+        const existingRequest = companySettingsInFlight.get(cacheKey);
+        if (existingRequest) {
+          const existingPayload = await existingRequest;
+          await applyCompanyPayload(existingPayload);
+          return;
+        }
+
         const online = await hasInternetConnection();
-        if (!online) return;
+        if (!online) {
+          const cached = companySettingsCache.get(cacheKey);
+          if (cached) {
+            await applyCompanyPayload(cached.data);
+          }
+          return;
+        }
 
         const clerkToken = await getTokenRef.current();
         if (!clerkToken) return;
 
-        const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
-        const response = await axios.get(`${API_URL}/api/company-settings`, {
-          headers: {
-            Authorization: `Bearer ${clerkToken}`,
-            'X-Clerk-Authorization': `Bearer ${clerkToken}`,
-            'X-SubUser-Token': subUserToken,
-            ...(accountId ? { 'X-Account-Id': accountId } : {}),
-          },
-        });
+        const requestPromise = (async (): Promise<CompanySettingsResponse | null> => {
+          const response = await axios.get(`${API_URL}/api/company-settings`, {
+            headers: {
+              Authorization: `Bearer ${clerkToken}`,
+              'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+              'X-SubUser-Token': subUserToken,
+              ...(accountId ? { 'X-Account-Id': accountId } : {}),
+            },
+          });
+          return (response?.data || null) as CompanySettingsResponse | null;
+        })();
 
-        if (!mounted) return;
-        setCompanyData(normalizeCompanySettings(API_URL, response.data));
-        setLogoLoadError(false);
+        companySettingsInFlight.set(cacheKey, requestPromise);
+        ownsInFlightEntry = true;
+        const freshPayload = await requestPromise;
+        companySettingsCache.set(cacheKey, { fetchedAt: Date.now(), data: freshPayload });
+        await applyCompanyPayload(freshPayload);
       } catch (error) {
         if (!mounted) return;
         if (axios.isAxiosError(error)) {
@@ -269,14 +314,26 @@ export function AppTopHeader() {
         } else {
           console.warn('No se pudo cargar informacion de empresa.');
         }
+      } finally {
+        if (ownsInFlightEntry) {
+          companySettingsInFlight.delete(cacheKey);
+        }
       }
     };
 
-    loadCompanySettings();
+    void loadCompanySettings();
+
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void loadCompanySettings();
+      }
+    });
+
     return () => {
       mounted = false;
+      appStateSubscription.remove();
     };
-  }, [accountId, subUserToken]);
+  }, [accountId, subUserToken, setSubUser]);
 
   const billingBanner = useMemo(() => {
     if (!billingState) return null;

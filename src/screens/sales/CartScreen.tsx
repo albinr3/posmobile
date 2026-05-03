@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon, Switch } from 'react-native-paper';
+import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
@@ -19,7 +19,7 @@ import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { autoPrintSaleTicket } from '../../services/printing/thermalPrinterService';
 import { playSaleSuccessSound } from '../../services/feedback/saleFeedbackService';
-import { getSalesSettings } from '../../services/settings/salesSettings';
+import { getSalesSettings, subscribeSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { resolveGeneralCustomerFromDb } from '../../utils/generalCustomer';
 import { LEGAL_TIP_PERCENT_BP, calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/legalTip';
@@ -271,6 +271,19 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setDiscountDraft(nextDraft);
     setDiscountError(null);
   }, [discountPercentBp, customerId, customerSaleDiscountPercentBp]);
+
+  useEffect(() => {
+    const unsubscribe = subscribeSalesSettings((settings) => {
+      setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
+      const nextLegalTipEnabled = settings.legalTipEnabled === true;
+      setLegalTipEnabled(nextLegalTipEnabled);
+      if (!nextLegalTipEnabled) {
+        setApplyLegalTip(false);
+      }
+    });
+
+    return unsubscribe;
+  }, [setApplyLegalTip]);
 
   const applyPriceChange = () => {
     const cartItem = items.find(i => i.lineId === priceDialogLineId);
@@ -1213,17 +1226,6 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             {!canApplyDiscounts ? (
               <Text style={styles.discountReadonlyHint}>No tienes permiso para modificar descuentos.</Text>
             ) : null}
-            {legalTipEnabled ? (
-              <View style={styles.summaryRow}>
-                <Text style={styles.summaryLabel}>Aplicar propina legal (10%):</Text>
-                <Switch
-                  value={applyLegalTip}
-                  onValueChange={setApplyLegalTip}
-                  color={ui.colors.primary}
-                />
-              </View>
-            ) : null}
-
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Método de Pago:</Text>
               <Menu

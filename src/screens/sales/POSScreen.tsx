@@ -13,7 +13,7 @@ import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
-import { getSalesSettings } from '../../services/settings/salesSettings';
+import { getSalesSettings, subscribeSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, normalizeCustomerVisualId, parseCustomerVisualIdFromData } from '../../utils/customerLabels';
 import { calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/legalTip';
@@ -196,6 +196,15 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     return () => {
       mounted = false;
     };
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeSalesSettings((settings) => {
+      setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
+      setLegalTipEnabled(settings.legalTipEnabled === true);
+    });
+
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
