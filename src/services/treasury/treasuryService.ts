@@ -88,6 +88,21 @@ function isCashAccountByNameAndType(name: string, type: string): boolean {
   return normalizeAccountName(name) === normalizeAccountName(DEFAULT_CASH_ACCOUNT_NAME) && type === 'CAJA';
 }
 
+function pickCanonicalCashAccount(accounts: TreasuryAccount[]): TreasuryAccount | null {
+  const cashAccounts = accounts.filter((account) => isCashAccountByNameAndType(account.name, account.type));
+  if (cashAccounts.length === 0) return null;
+  const sorted = [...cashAccounts].sort((a, b) => {
+    const aServer = a.serverId ? 0 : 1;
+    const bServer = b.serverId ? 0 : 1;
+    if (aServer !== bServer) return aServer - bServer;
+    const aActive = a.isActive ? 0 : 1;
+    const bActive = b.isActive ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    return a.createdAt - b.createdAt;
+  });
+  return sorted[0] || null;
+}
+
 function formatTransferReference(transferId: string): string {
   return `TR-${String(transferId || '').slice(-8).toUpperCase()}`;
 }
@@ -251,7 +266,15 @@ export async function listTreasuryAccounts(includeInactive = true): Promise<Trea
      ${includeInactive ? '' : 'WHERE is_active = 1'}
      ORDER BY is_active DESC, name COLLATE NOCASE ASC`
   );
-  return rows.map(mapTreasuryAccountRow);
+  const accounts = rows.map(mapTreasuryAccountRow);
+  const canonicalCash = pickCanonicalCashAccount(accounts);
+  if (!canonicalCash) return accounts;
+
+  // Mostrar solo la caja efectiva canónica para evitar duplicados visuales.
+  return accounts.filter(
+    (account) =>
+      !isCashAccountByNameAndType(account.name, account.type) || account.localId === canonicalCash.localId
+  );
 }
 
 export async function createTreasuryAccount(input: {
@@ -527,6 +550,37 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     accountByLookupId.set(account.localId, account);
     if (account.serverId) accountByLookupId.set(account.serverId, account);
   }
+
+  const allCashRows = await db.query<any>(
+    `SELECT local_id, server_id, name, type, is_active, created_at, updated_at, synced, data
+     FROM treasury_accounts
+     WHERE type = 'CAJA'
+       AND lower(name) = lower(?)
+     ORDER BY is_active DESC, created_at ASC`,
+    [DEFAULT_CASH_ACCOUNT_NAME]
+  );
+  const allCashAccounts = allCashRows.map(mapTreasuryAccountRow);
+  const canonicalCash = pickCanonicalCashAccount(allCashAccounts);
+  const cashAliasToCanonicalLocalId = new Map<string, string>();
+  if (canonicalCash) {
+    for (const account of allCashAccounts) {
+      if (account.localId === canonicalCash.localId) continue;
+      cashAliasToCanonicalLocalId.set(account.localId, canonicalCash.localId);
+      if (account.serverId) {
+        cashAliasToCanonicalLocalId.set(account.serverId, canonicalCash.localId);
+      }
+    }
+  }
+
+  const resolveAccountByAnyId = (rawId: string): TreasuryAccount | null => {
+    const lookup = String(rawId || '').trim();
+    if (!lookup) return null;
+    const direct = accountByLookupId.get(lookup);
+    if (direct) return direct;
+    const canonicalLocalId = cashAliasToCanonicalLocalId.get(lookup);
+    if (!canonicalLocalId) return null;
+    return accountByLookupId.get(canonicalLocalId) || null;
+  };
   const movements: TreasuryMovement[] = [];
 
   const openingRows = await db.query<any>(
@@ -538,7 +592,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
   );
   for (const row of openingRows) {
     const accountId = String(row.treasury_account_id || '');
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const amountCents = Number(row.amount_cents || 0);
     const occurredAt = Number(row.effective_at || row.created_at || Date.now());
@@ -569,7 +623,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
       for (const split of paymentSplits) {
         const accountId = String(split?.treasuryAccountId || '').trim();
         if (!accountId) continue;
-        const account = accountByLookupId.get(accountId);
+        const account = resolveAccountByAnyId(accountId);
         if (!account) continue;
         const amountCents = Math.round(Number(split?.amountCents || 0));
         if (amountCents <= 0) continue;
@@ -598,7 +652,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
 
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const amountCents = Math.round(Number(parsed.totalCents || row.total_cents || 0));
     if (amountCents <= 0) continue;
@@ -629,7 +683,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancel === true || parsed.cancelledAt) continue;
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.paidAt ?? parsed.createdAt);
     if (occurredAt > toMs) continue;
@@ -662,7 +716,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancelledAt) continue;
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.purchasedAt ?? row.purchased_at);
     if (occurredAt > toMs) continue;
@@ -687,7 +741,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     const parsed = parseJsonSafe<any>(row.data) || {};
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.expenseDate ?? row.expense_date);
     if (occurredAt > toMs) continue;
@@ -713,7 +767,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancelledAt) continue;
     const accountId = String(parsed.refundTreasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountByLookupId.get(accountId);
+    const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.returnedAt ?? row.returned_at);
     if (occurredAt > toMs) continue;
@@ -752,8 +806,8 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
   for (const row of transferRows) {
     const fromAccountId = String(row.from_treasury_account_id || '');
     const toAccountId = String(row.to_treasury_account_id || '');
-    const fromAccount = accountByLookupId.get(fromAccountId);
-    const toAccount = accountByLookupId.get(toAccountId);
+    const fromAccount = resolveAccountByAnyId(fromAccountId);
+    const toAccount = resolveAccountByAnyId(toAccountId);
     if (!fromAccount || !toAccount) continue;
 
     const amountCents = Math.max(0, Math.round(Number(row.amount_cents || 0)));
