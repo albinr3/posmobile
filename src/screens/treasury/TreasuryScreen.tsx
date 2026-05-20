@@ -4,8 +4,10 @@ import { Button, Divider, Menu, Modal, Portal, Surface, Text, TextInput } from '
 import { useFocusEffect } from '@react-navigation/native';
 import NetInfo from '@react-native-community/netinfo';
 import { useAuth } from '@clerk/clerk-expo';
+import axios from 'axios';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { ui } from '../../theme/ui';
+import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import {
   createTreasuryAccount,
   createTreasuryTransfer,
@@ -20,6 +22,7 @@ import { TreasuryAccount, TreasuryMovement } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { useTreasuryUIStore } from '../../store/treasuryUIStore';
 import { useAuthStore } from '../../store/authStore';
+import { API_URL } from '../../services/sync/syncShared';
 
 type TransferDraft = {
   fromTreasuryAccountId: string;
@@ -65,6 +68,8 @@ export function TreasuryScreen() {
   const [accountNumber, setAccountNumber] = useState('');
   const [accountOpeningAmount, setAccountOpeningAmount] = useState('');
   const [typeMenuVisible, setTypeMenuVisible] = useState(false);
+  const [bankMenuVisible, setBankMenuVisible] = useState(false);
+  const [bankOptions, setBankOptions] = useState<string[]>(DOMINICAN_BANKS);
 
   const [reverseModalVisible, setReverseModalVisible] = useState(false);
   const [transferIdToReverse, setTransferIdToReverse] = useState<string | null>(null);
@@ -74,9 +79,32 @@ export function TreasuryScreen() {
   const consumeCreateAccountModalRequest = useTreasuryUIStore((state) => state.consumeCreateAccountModalRequest);
   const setLastCreatedAccountId = useTreasuryUIStore((state) => state.setLastCreatedAccountId);
 
+  const loadBankOptions = useCallback(async () => {
+    try {
+      const clerkToken = await getTokenRef.current();
+      if (!clerkToken) return;
+      const response = await axios.get(`${API_URL}/api/meta/dominican-banks`, {
+        headers: {
+          Authorization: `Bearer ${clerkToken}`,
+          'X-Clerk-Authorization': `Bearer ${clerkToken}`,
+        },
+      });
+      const rows = Array.isArray(response?.data?.data) ? response.data.data : [];
+      const normalized = rows
+        .map((item: any) => String(item || '').trim())
+        .filter((item: string) => !!item);
+      if (normalized.length > 0) {
+        setBankOptions(normalized);
+      }
+    } catch (error) {
+      console.warn('[TreasuryScreen] No se pudo cargar bancos desde API, usando fallback local.', error);
+    }
+  }, []);
+
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
+      await loadBankOptions();
       const [dashboard, accountList] = await Promise.all([
         getTreasuryDashboard({ fromMs: 0, toMs: Date.now() }),
         listTreasuryAccounts(true),
@@ -104,7 +132,7 @@ export function TreasuryScreen() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [loadBankOptions]);
 
   useFocusEffect(
     useCallback(() => {
@@ -452,15 +480,27 @@ export function TreasuryScreen() {
           </Menu>
           {accountType === 'BANCO' ? (
             <>
-              <TextInput
-                label="Banco"
-                mode="outlined"
-                value={accountBankName}
-                onChangeText={setAccountBankName}
-                style={styles.input}
-                outlineColor={ui.colors.border}
-                activeOutlineColor={ui.colors.primary}
-              />
+              <Text style={styles.fieldLabel}>Banco</Text>
+              <Menu
+                visible={bankMenuVisible}
+                onDismiss={() => setBankMenuVisible(false)}
+                anchor={
+                  <Button mode="outlined" onPress={() => setBankMenuVisible(true)}>
+                    {accountBankName || 'Seleccionar banco'}
+                  </Button>
+                }
+              >
+                {bankOptions.map((bankName) => (
+                  <Menu.Item
+                    key={bankName}
+                    onPress={() => {
+                      setAccountBankName(bankName);
+                      setBankMenuVisible(false);
+                    }}
+                    title={bankName}
+                  />
+                ))}
+              </Menu>
               <TextInput
                 label="Número de cuenta (opcional)"
                 mode="outlined"

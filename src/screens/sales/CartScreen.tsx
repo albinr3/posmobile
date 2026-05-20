@@ -1472,13 +1472,13 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             </View>
 
             {(paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && (
-              <View style={styles.selectorBlock}>
+              <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Cuenta de tesorería:</Text>
                 <Menu
                   visible={treasuryAccountMenuVisible}
                   onDismiss={() => setTreasuryAccountMenuVisible(false)}
                   anchor={
-                    <Button mode="text" onPress={() => setTreasuryAccountMenuVisible(true)}>
+                    <Button mode="text" compact onPress={() => setTreasuryAccountMenuVisible(true)}>
                       {findTreasuryAccountById(treasuryAccountsByMethod, treasuryAccountId)?.name || 'Seleccionar cuenta'}
                     </Button>
                   }
@@ -1499,9 +1499,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             )}
 
             {paymentMethod === 'TRANSFERENCIA' && (
-              <View style={styles.selectorBlock}>
+              <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Banco:</Text>
-                <Text style={styles.summaryLabel}>
+                <Text style={[styles.summaryLabel, styles.summaryValue]}>
                   {findTreasuryAccountById(treasuryAccounts, treasuryAccountId)
                     ? getAccountTransferBankName(findTreasuryAccountById(treasuryAccounts, treasuryAccountId) as TreasuryAccount)
                     : transferBankName || 'Seleccionar cuenta banco'}
@@ -2056,6 +2056,10 @@ const styles = StyleSheet.create({
   summaryLabel: {
     fontSize: 14,
     color: ui.colors.textMuted,
+  },
+  summaryValue: {
+    textAlign: 'right',
+    flexShrink: 1,
   },
   legalTipLabelWrap: {
     flexDirection: 'row',
