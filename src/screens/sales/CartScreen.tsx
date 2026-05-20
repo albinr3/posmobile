@@ -12,8 +12,7 @@ import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
 import { getBottomSafeInset } from '../../utils/safeArea';
-import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
-import { SalePaymentSplit } from '../../types';
+import { SalePaymentSplit, TreasuryAccount } from '../../types';
 import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
@@ -23,6 +22,9 @@ import { getSalesSettings, subscribeSalesSettings } from '../../services/setting
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { resolveGeneralCustomerFromDb } from '../../utils/generalCustomer';
 import { LEGAL_TIP_PERCENT_BP, calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/legalTip';
+import { listTreasuryAccounts, getAccountTransferBankName } from '../../services/treasury/treasuryService';
+import { TREASURY_CREATE_ACCOUNT_SENTINEL, filterTreasuryAccountsByMethod, findTreasuryAccountById } from '../../utils/treasury';
+import { useTreasuryUIStore } from '../../store/treasuryUIStore';
 import {
   formatCustomerLabel,
   GENERIC_CUSTOMER_DISPLAY_NAME,
@@ -66,6 +68,8 @@ const parseDiscountPercentInput = (rawInput: string): { valueBp: number | null; 
   return { valueBp: Math.round(parsed * 100), error: null };
 };
 
+const normalizeMethod = (value: unknown): string => String(value || '').trim().toUpperCase();
+
 export function CartScreen({ navigation, route }: CartScreenProps) {
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
@@ -85,6 +89,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setPaymentMethod,
     transferBankName,
     setTransferBankName,
+    treasuryAccountId,
+    setTreasuryAccountId,
     paymentSplits,
     setPaymentSplits,
     shippingCents,
@@ -99,10 +105,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [loading, setLoading] = useState(false);
   const completingSaleRef = useRef(false);
   const [menuVisible, setMenuVisible] = useState(false);
-  const [transferBankMenuVisible, setTransferBankMenuVisible] = useState(false);
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
   const [splitMethodMenuIndex, setSplitMethodMenuIndex] = useState<number | null>(null);
-  const [splitBankMenuIndex, setSplitBankMenuIndex] = useState<number | null>(null);
+  const [treasuryAccountMenuVisible, setTreasuryAccountMenuVisible] = useState(false);
+  const [splitTreasuryMenuIndex, setSplitTreasuryMenuIndex] = useState<number | null>(null);
   const [shippingModalVisible, setShippingModalVisible] = useState(false);
   const [shippingDraft, setShippingDraft] = useState('');
   const [shippingError, setShippingError] = useState<string | null>(null);
@@ -112,6 +118,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [legalTipEnabled, setLegalTipEnabled] = useState(false);
   const { setCustomer } = useCartStore();
   const { subUser } = useAuthStore();
+  const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
+  const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
+  const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
   const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
   const canApplyDiscounts = !!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN';
   const appliedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
@@ -284,6 +293,56 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
     return unsubscribe;
   }, [setApplyLegalTip]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const loadTreasuryAccounts = async () => {
+        try {
+          const rows = await listTreasuryAccounts(false);
+          if (!active) return;
+          setTreasuryAccounts(rows);
+          const createdAccountId = consumeLastCreatedAccountId();
+          if (createdAccountId) {
+            if (paymentMethod === 'DIVIDIR_PAGO') {
+              const nextSplits = Array.isArray(paymentSplits) ? [...paymentSplits] : [];
+              if (nextSplits.length > 0) {
+                const targetIndex =
+                  nextSplits.findIndex((split) => !split.treasuryAccountId) >= 0
+                    ? nextSplits.findIndex((split) => !split.treasuryAccountId)
+                    : nextSplits.length - 1;
+                nextSplits[targetIndex] = {
+                  ...nextSplits[targetIndex],
+                  treasuryAccountId: createdAccountId,
+                };
+                setPaymentSplits(nextSplits);
+              }
+            } else {
+              setTreasuryAccountId(createdAccountId);
+              const createdAccount = findTreasuryAccountById(rows, createdAccountId);
+              if (paymentMethod === 'TRANSFERENCIA' && createdAccount) {
+                setTransferBankName(getAccountTransferBankName(createdAccount));
+              }
+            }
+          }
+        } catch {
+          if (!active) return;
+          setTreasuryAccounts([]);
+        }
+      };
+      void loadTreasuryAccounts();
+      return () => {
+        active = false;
+      };
+    }, [
+      consumeLastCreatedAccountId,
+      paymentMethod,
+      paymentSplits,
+      setPaymentSplits,
+      setTransferBankName,
+      setTreasuryAccountId,
+    ])
+  );
 
   const applyPriceChange = () => {
     const cartItem = items.find(i => i.lineId === priceDialogLineId);
@@ -560,11 +619,30 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     ],
     []
   );
+  const treasuryAccountsByMethod = useMemo(
+    () => filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod),
+    [paymentMethod, treasuryAccounts]
+  );
 
   const handlePaymentMethodSelect = (nextMethod: string) => {
     setPaymentMethod(nextMethod);
     if (nextMethod !== 'TRANSFERENCIA') {
       setTransferBankName(null);
+    }
+    if (nextMethod === 'EFECTIVO' || nextMethod === 'TRANSFERENCIA') {
+      const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), nextMethod);
+      const currentAccount = findTreasuryAccountById(allowed, treasuryAccountId);
+      if (!currentAccount) {
+        setTreasuryAccountId(allowed[0]?.localId || null);
+      }
+      if (nextMethod === 'TRANSFERENCIA') {
+        const selected = currentAccount || allowed[0] || null;
+        if (selected) {
+          setTransferBankName(getAccountTransferBankName(selected));
+        }
+      }
+    } else {
+      setTreasuryAccountId(null);
     }
     if (nextMethod !== 'DIVIDIR_PAGO') {
       setPaymentSplits([]);
@@ -573,7 +651,16 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   };
 
   const addPaymentSplit = () => {
-    setPaymentSplits([...paymentSplits, { method: 'EFECTIVO', amountCents: 0, transferBankName: null }]);
+    const defaultAccounts = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), 'EFECTIVO');
+    setPaymentSplits([
+      ...paymentSplits,
+      {
+        method: 'EFECTIVO',
+        amountCents: 0,
+        transferBankName: null,
+        treasuryAccountId: defaultAccounts[0]?.localId || null,
+      },
+    ]);
   };
 
   const updatePaymentSplit = (index: number, patch: Partial<SalePaymentSplit>) => {
@@ -584,6 +671,18 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         if (nextSplit.method !== 'TRANSFERENCIA') {
           nextSplit.transferBankName = null;
         }
+        if (patch.method) {
+          const allowed = filterTreasuryAccountsByMethod(
+            treasuryAccounts.filter((account) => account.isActive),
+            patch.method
+          );
+          const selected = findTreasuryAccountById(allowed, nextSplit.treasuryAccountId);
+          nextSplit.treasuryAccountId = selected?.localId || allowed[0]?.localId || null;
+          if (patch.method === 'TRANSFERENCIA') {
+            const transferAccount = selected || allowed[0] || null;
+            nextSplit.transferBankName = transferAccount ? getAccountTransferBankName(transferAccount) : null;
+          }
+        }
         return nextSplit;
       })
     );
@@ -591,6 +690,45 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   const removePaymentSplit = (index: number) => {
     setPaymentSplits(paymentSplits.filter((_, splitIndex) => splitIndex !== index));
+  };
+
+  const handleMainTreasuryAccountSelect = (nextValue: string) => {
+    if (nextValue === TREASURY_CREATE_ACCOUNT_SENTINEL) {
+      requestCreateAccountModal(paymentMethod === 'EFECTIVO' ? 'CAJA' : paymentMethod === 'TRANSFERENCIA' ? 'BANCO' : null);
+      navigation.navigate('TreasuryMenu', { screen: 'Treasury' });
+      setTreasuryAccountMenuVisible(false);
+      return;
+    }
+    const selected = findTreasuryAccountById(treasuryAccountsByMethod, nextValue);
+    setTreasuryAccountId(selected?.localId || null);
+    if (paymentMethod === 'TRANSFERENCIA' && selected) {
+      setTransferBankName(getAccountTransferBankName(selected));
+    }
+    setTreasuryAccountMenuVisible(false);
+  };
+
+  const handleSplitTreasuryAccountSelect = (index: number, nextValue: string) => {
+    if (nextValue === TREASURY_CREATE_ACCOUNT_SENTINEL) {
+      const split = paymentSplits[index];
+      const preferredType = split?.method === 'EFECTIVO' ? 'CAJA' : split?.method === 'TRANSFERENCIA' ? 'BANCO' : null;
+      requestCreateAccountModal(preferredType);
+      navigation.navigate('TreasuryMenu', { screen: 'Treasury' });
+      setSplitTreasuryMenuIndex(null);
+      return;
+    }
+    updatePaymentSplit(index, { treasuryAccountId: nextValue });
+    const split = paymentSplits[index];
+    if (split?.method === 'TRANSFERENCIA') {
+      const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), 'TRANSFERENCIA');
+      const selected = findTreasuryAccountById(allowed, nextValue);
+      if (selected) {
+        updatePaymentSplit(index, {
+          treasuryAccountId: selected.localId,
+          transferBankName: getAccountTransferBankName(selected),
+        });
+      }
+    }
+    setSplitTreasuryMenuIndex(null);
   };
 
   const totalSplitCents = useMemo(
@@ -722,8 +860,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
     }
 
-    if (paymentMethod === 'TRANSFERENCIA' && !transferBankName) {
-      Alert.alert('Banco requerido', 'Debes seleccionar el banco de la transferencia.');
+    if ((paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && !treasuryAccountId) {
+      Alert.alert('Cuenta requerida', 'Debes seleccionar una cuenta de tesorería.');
       return;
     }
 
@@ -736,11 +874,13 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         Alert.alert('Pago dividido', 'La suma de los pagos debe ser igual al total de la venta.');
         return;
       }
-      const invalidTransferSplit = paymentSplits.find(
-        (split) => split.method === 'TRANSFERENCIA' && !split.transferBankName
+      const invalidTreasurySplit = paymentSplits.find(
+        (split) =>
+          (split.method === 'EFECTIVO' || split.method === 'TRANSFERENCIA') &&
+          !String(split.treasuryAccountId || '').trim()
       );
-      if (invalidTransferSplit) {
-        Alert.alert('Pago dividido', 'Cada transferencia debe tener un banco seleccionado.');
+      if (invalidTreasurySplit) {
+        Alert.alert('Pago dividido', 'Cada línea en efectivo/transferencia debe tener cuenta de tesorería.');
         return;
       }
       const invalidAmountSplit = paymentSplits.find((split) => !Number.isFinite(split.amountCents) || split.amountCents <= 0);
@@ -755,6 +895,30 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       const now = Date.now();
       let createdAt = now;
       let resolvedInvoiceCode = invoiceCode;
+      const selectedMainAccount = findTreasuryAccountById(treasuryAccounts, treasuryAccountId);
+      const resolvedMainTransferBankName =
+        paymentMethod === 'TRANSFERENCIA'
+          ? selectedMainAccount
+            ? getAccountTransferBankName(selectedMainAccount)
+            : transferBankName
+          : null;
+      const normalizedPaymentSplits =
+        paymentMethod === 'DIVIDIR_PAGO'
+          ? paymentSplits.map((split) => {
+              const splitMethod = normalizeMethod(split.method);
+              const splitAccount = findTreasuryAccountById(treasuryAccounts, split.treasuryAccountId);
+              return {
+                ...split,
+                treasuryAccountId: splitAccount?.localId || split.treasuryAccountId || null,
+                transferBankName:
+                  splitMethod === 'TRANSFERENCIA'
+                    ? splitAccount
+                      ? getAccountTransferBankName(splitAccount)
+                      : split.transferBankName || null
+                    : null,
+              };
+            })
+          : [];
 
       const basePayload = {
         customerId: selectedCustomerId,
@@ -795,8 +959,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         totalCents: cartTotals.totalCents,
         salePricesIncludeItbis,
         paymentMethod,
-        transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
-        paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+        treasuryAccountId: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
+        transferBankName: resolvedMainTransferBankName,
+        paymentSplits: normalizedPaymentSplits,
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         shippingCents,
         status: 'completed',
@@ -905,6 +1070,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
         await db.update('sales', editingSaleLocalId, {
           customer_id: selectedCustomerId,
+          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
           total_cents: documentTotalCents,
           status: 'completed',
           synced: 0,
@@ -932,8 +1098,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           customerVisualId: selectedCustomerVisualId ?? null,
           type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
           paymentMethod,
-          transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
-          paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+          treasuryAccountId: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
+          transferBankName: resolvedMainTransferBankName,
+          paymentSplits: normalizedPaymentSplits,
           discountMode: resolvedDiscountMode,
           manualDiscountPercentBp: resolvedManualDiscountPercentBp,
           applyLegalTip: resolvedApplyLegalTip,
@@ -990,6 +1157,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           local_id: localId,
           invoice_code: invoiceCode,
           customer_id: selectedCustomerId,
+          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
           total_cents: cartTotals.totalCents,
           status: 'completed',
           created_at: now,
@@ -1033,8 +1201,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           selectedCustomerVisualId
         ),
         paymentMethod,
-        transferBankName,
-        paymentSplits: paymentMethod === 'DIVIDIR_PAGO' ? paymentSplits : [],
+        transferBankName: resolvedMainTransferBankName,
+        paymentSplits: normalizedPaymentSplits,
         type: paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO',
         dueDate: paymentMethod === 'CREDITO' ? creditDueDate : null,
         discountPercentBp: resolvedDiscountPercentBp,
@@ -1249,29 +1417,41 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               </Menu>
             </View>
 
-            {paymentMethod === 'TRANSFERENCIA' && (
+            {(paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && (
               <View style={styles.selectorBlock}>
-                <Text style={styles.summaryLabel}>Banco:</Text>
+                <Text style={styles.summaryLabel}>Cuenta de tesorería:</Text>
                 <Menu
-                  visible={transferBankMenuVisible}
-                  onDismiss={() => setTransferBankMenuVisible(false)}
+                  visible={treasuryAccountMenuVisible}
+                  onDismiss={() => setTreasuryAccountMenuVisible(false)}
                   anchor={
-                    <Button mode="text" onPress={() => setTransferBankMenuVisible(true)}>
-                      {transferBankName || 'Seleccionar banco'}
+                    <Button mode="text" onPress={() => setTreasuryAccountMenuVisible(true)}>
+                      {findTreasuryAccountById(treasuryAccountsByMethod, treasuryAccountId)?.name || 'Seleccionar cuenta'}
                     </Button>
                   }
                 >
-                  {DOMINICAN_BANKS.map((bankName) => (
+                  {treasuryAccountsByMethod.map((account) => (
                     <Menu.Item
-                      key={bankName}
-                      onPress={() => {
-                        setTransferBankName(bankName);
-                        setTransferBankMenuVisible(false);
-                      }}
-                      title={bankName}
+                      key={account.localId}
+                      onPress={() => handleMainTreasuryAccountSelect(account.localId)}
+                      title={account.name}
                     />
                   ))}
+                  <Menu.Item
+                    onPress={() => handleMainTreasuryAccountSelect(TREASURY_CREATE_ACCOUNT_SENTINEL)}
+                    title="+ Crear nueva cuenta"
+                  />
                 </Menu>
+              </View>
+            )}
+
+            {paymentMethod === 'TRANSFERENCIA' && (
+              <View style={styles.selectorBlock}>
+                <Text style={styles.summaryLabel}>Banco:</Text>
+                <Text style={styles.summaryLabel}>
+                  {findTreasuryAccountById(treasuryAccounts, treasuryAccountId)
+                    ? getAccountTransferBankName(findTreasuryAccountById(treasuryAccounts, treasuryAccountId) as TreasuryAccount)
+                    : transferBankName || 'Seleccionar cuenta banco'}
+                </Text>
               </View>
             )}
 
@@ -1435,29 +1615,55 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
                   ))}
                 </Menu>
 
-                {split.method === 'TRANSFERENCIA' ? (
+                {(split.method === 'EFECTIVO' || split.method === 'TRANSFERENCIA') ? (
                   <>
-                    <Text style={[styles.summaryLabel, styles.fieldTopMargin]}>Banco</Text>
+                    <Text style={[styles.summaryLabel, styles.fieldTopMargin]}>Cuenta de tesorería</Text>
                     <Menu
-                      visible={splitBankMenuIndex === index}
-                      onDismiss={() => setSplitBankMenuIndex(null)}
+                      visible={splitTreasuryMenuIndex === index}
+                      onDismiss={() => setSplitTreasuryMenuIndex(null)}
                       anchor={
-                        <Button mode="outlined" onPress={() => setSplitBankMenuIndex(index)}>
-                          {split.transferBankName || 'Seleccionar banco'}
+                        <Button mode="outlined" onPress={() => setSplitTreasuryMenuIndex(index)}>
+                          {findTreasuryAccountById(
+                            filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), split.method),
+                            split.treasuryAccountId
+                          )?.name || 'Seleccionar cuenta'}
                         </Button>
                       }
                     >
-                      {DOMINICAN_BANKS.map((bankName) => (
+                      {filterTreasuryAccountsByMethod(
+                        treasuryAccounts.filter((account) => account.isActive),
+                        split.method
+                      ).map((account) => (
                         <Menu.Item
-                          key={`${bankName}-${index}`}
-                          onPress={() => {
-                            updatePaymentSplit(index, { transferBankName: bankName });
-                            setSplitBankMenuIndex(null);
-                          }}
-                          title={bankName}
+                          key={`${account.localId}-${index}`}
+                          onPress={() => handleSplitTreasuryAccountSelect(index, account.localId)}
+                          title={account.name}
                         />
                       ))}
+                      <Menu.Item
+                        onPress={() => handleSplitTreasuryAccountSelect(index, TREASURY_CREATE_ACCOUNT_SENTINEL)}
+                        title="+ Crear nueva cuenta"
+                      />
                     </Menu>
+                  </>
+                ) : null}
+
+                {split.method === 'TRANSFERENCIA' ? (
+                  <>
+                    <Text style={[styles.summaryLabel, styles.fieldTopMargin]}>Banco</Text>
+                    <Text style={styles.summaryLabel}>
+                      {findTreasuryAccountById(
+                        filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), split.method),
+                        split.treasuryAccountId
+                      )
+                        ? getAccountTransferBankName(
+                            findTreasuryAccountById(
+                              filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), split.method),
+                              split.treasuryAccountId
+                            ) as TreasuryAccount
+                          )
+                        : split.transferBankName || 'Seleccionar cuenta banco'}
+                    </Text>
                   </>
                 ) : null}
 

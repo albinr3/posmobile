@@ -86,7 +86,9 @@ const normalizeEditTransferBankName = (parsedData: any, paymentMethod: string): 
   return rawBank || null;
 };
 
-const normalizeEditPaymentSplits = (parsedData: any): Array<{ method: string; amountCents: number; transferBankName: string | null }> => {
+const normalizeEditPaymentSplits = (
+  parsedData: any
+): Array<{ method: string; amountCents: number; transferBankName: string | null; treasuryAccountId: string | null }> => {
   const sourceSplits = Array.isArray(parsedData?.paymentSplits)
     ? parsedData.paymentSplits
     : Array.isArray(parsedData?.splits)
@@ -115,13 +117,15 @@ const normalizeEditPaymentSplits = (parsedData: any): Array<{ method: string; am
         normalizedMethod === 'TRANSFERENCIA'
           ? String(split?.transferBankName ?? split?.bankName ?? split?.bank ?? '').trim() || null
           : null;
+      const treasuryAccountId = split?.treasuryAccountId ? String(split.treasuryAccountId).trim() || null : null;
       return {
         method: normalizedMethod,
         amountCents: normalizedAmountCents,
         transferBankName,
+        treasuryAccountId,
       };
     })
-    .filter((split: { method: string; amountCents: number; transferBankName: string | null }) => split.amountCents > 0);
+    .filter((split: { method: string; amountCents: number; transferBankName: string | null; treasuryAccountId: string | null }) => split.amountCents > 0);
 };
 
 export function POSScreen({ navigation, route }: POSScreenProps) {
@@ -334,6 +338,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         const resolvedPaymentMethod = normalizeEditPaymentMethod(parsedData);
         const resolvedPaymentSplits = normalizeEditPaymentSplits(parsedData);
         const resolvedTransferBankName = normalizeEditTransferBankName(parsedData, resolvedPaymentMethod);
+        const resolvedTreasuryAccountId = parsedData?.treasuryAccountId ? String(parsedData.treasuryAccountId).trim() || null : null;
         const resolvedCustomerId = String(sale.customer_id || parsedData?.customerId || '').trim() || null;
         let resolvedCustomerVisualId =
           normalizeCustomerVisualId(parsedData?.customerVisualId) ??
@@ -379,6 +384,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           discountWasManual: String(parsedData?.discountSource || '').toUpperCase() === 'MANUAL',
           paymentMethod: resolvedPaymentMethod,
           transferBankName: resolvedTransferBankName,
+          treasuryAccountId: resolvedTreasuryAccountId,
           paymentSplits: resolvedPaymentMethod === 'DIVIDIR_PAGO' ? resolvedPaymentSplits : [],
           applyLegalTip: resolvedApplyLegalTip,
           shippingCents: Number(

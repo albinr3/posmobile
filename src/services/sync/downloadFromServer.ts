@@ -575,12 +575,18 @@ export async function downloadFromServer(options: {
         customerVisualId,
         customerName,
         paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || localSale?.paymentMethod || 'EFECTIVO'),
+        treasuryAccountId:
+          (saleDetail?.treasuryAccountId ? String(saleDetail.treasuryAccountId).trim() : '') ||
+          (sale?.treasuryAccountId ? String(sale.treasuryAccountId).trim() : '') ||
+          (localSale?.treasuryAccountId ? String(localSale.treasuryAccountId).trim() : '') ||
+          null,
         transferBankName: saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null,
         paymentSplits: Array.isArray(saleDetail?.paymentSplits)
           ? saleDetail.paymentSplits.map((split: any) => ({
               method: String(split?.method || 'EFECTIVO'),
               amountCents: Number(split?.amountCents || 0),
               transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
+              treasuryAccountId: split?.treasuryAccountId ? String(split.treasuryAccountId) : null,
             }))
           : Array.isArray(localSale?.paymentSplits)
             ? localSale.paymentSplits
@@ -634,12 +640,18 @@ export async function downloadFromServer(options: {
         totalCents: Number(saleDetail?.totalCents || sale?.totalCents || localSale?.totalCents || 0),
         status,
         cancelledAt: cancelledAtRaw,
+        cancellationReason:
+          saleDetail?.cancellationReason ||
+          sale?.cancellationReason ||
+          localSale?.cancellationReason ||
+          null,
         createdAt,
       };
 
       const saleRow = {
         invoice_code: saleData.invoiceCode,
         customer_id: customerId,
+        treasury_account_id: saleData.treasuryAccountId,
         total_cents: saleData.totalCents,
         status,
         created_at: createdAt,
@@ -697,6 +709,8 @@ export async function downloadFromServer(options: {
         itbisCents: Number(ret?.itbisCents || 0),
         salePricesIncludeItbis:
           typeof ret?.salePricesIncludeItbis === 'boolean' ? Boolean(ret.salePricesIncludeItbis) : true,
+        refundMethod: ret?.refundMethod ? String(ret.refundMethod) : null,
+        refundTreasuryAccountId: ret?.refundTreasuryAccountId ? String(ret.refundTreasuryAccountId) : null,
         notes: ret?.notes ? String(ret.notes) : null,
         returnedAt: returnedAtMs,
         cancelledAt: cancelledAtMs,
@@ -709,6 +723,8 @@ export async function downloadFromServer(options: {
         sale_local_id: saleLocalId,
         sale_server_id: saleServerId,
         total_cents: returnData.totalCents,
+        refund_method: returnData.refundMethod,
+        refund_treasury_account_id: returnData.refundTreasuryAccountId,
         notes: returnData.notes,
         returned_at: returnedAtMs,
         cancelled_at: cancelledAtMs,
@@ -944,6 +960,11 @@ export async function downloadFromServer(options: {
       for (const purchase of purchases) {
       const purchaseId = String(purchase?.id || '');
       if (!purchaseId) continue;
+      const existingPurchaseRow = await db.queryFirst<{ data?: string }>(
+        'SELECT data FROM purchases WHERE server_id = ? LIMIT 1',
+        [purchaseId]
+      );
+      const localPurchase = parseJsonSafe(existingPurchaseRow?.data);
 
       const purchasedAtMs =
         purchase?.purchasedAt && !Number.isNaN(new Date(purchase.purchasedAt).getTime())
@@ -988,6 +1009,14 @@ export async function downloadFromServer(options: {
         cancelledAt: cancelledAtMs,
         itemsCount: Number(purchase?.itemsCount || normalizedItems.length),
         items: normalizedItems,
+        paymentMethod:
+          (purchase?.paymentMethod ? String(purchase.paymentMethod).trim().toUpperCase() : '') ||
+          (localPurchase?.paymentMethod ? String(localPurchase.paymentMethod).trim().toUpperCase() : '') ||
+          'EFECTIVO',
+        treasuryAccountId:
+          (purchase?.treasuryAccountId ? String(purchase.treasuryAccountId).trim() : '') ||
+          (localPurchase?.treasuryAccountId ? String(localPurchase.treasuryAccountId).trim() : '') ||
+          null,
         updateProductCost: true,
         updateProductPrice: true,
       };
@@ -995,6 +1024,7 @@ export async function downloadFromServer(options: {
       const purchaseRow = {
         supplier_name: purchaseData.supplierName || null,
         total_cents: purchaseData.totalCents,
+        treasury_account_id: purchaseData.treasuryAccountId,
         purchased_at: purchasedAtMs,
         cancelled_at: cancelledAtMs,
         synced: 1,
@@ -1284,17 +1314,20 @@ export async function downloadFromServer(options: {
         customerName: payment?.customer?.name ? String(payment.customer.name) : GENERIC_CUSTOMER_DISPLAY_NAME,
         amountCents: Number(payment?.amountCents || 0),
         method: String(payment?.method || 'EFECTIVO'),
+        treasuryAccountId: payment?.treasuryAccountId ? String(payment.treasuryAccountId) : null,
         transferBankName: payment?.transferBankName ? String(payment.transferBankName) : null,
         note: payment?.note || null,
         createdAt: paidAtMs,
         paidAt: paidAtMs,
         cancelledAt: cancelledAtMs,
+        cancellationReason: payment?.cancellationReason ? String(payment.cancellationReason) : null,
       };
 
       const paymentRow = {
         receipt_code: paymentData.receiptCode || `R-${serverPaymentId}`,
         amount_cents: paymentData.amountCents,
         ar_id: arLocalId,
+        treasury_account_id: paymentData.treasuryAccountId,
         synced: 1,
         data: JSON.stringify(paymentData),
       };
@@ -1337,6 +1370,11 @@ export async function downloadFromServer(options: {
       for (const expense of operatingExpenses) {
       const expenseId = String(expense?.id || '');
       if (!expenseId) continue;
+      const existingExpenseRow = await db.queryFirst<{ data?: string }>(
+        'SELECT data FROM operating_expenses WHERE server_id = ? LIMIT 1',
+        [expenseId]
+      );
+      const localExpense = parseJsonSafe(existingExpenseRow?.data);
       const expenseDateMs =
         expense?.expenseDate && !Number.isNaN(new Date(expense.expenseDate).getTime())
           ? new Date(expense.expenseDate).getTime()
@@ -1346,6 +1384,14 @@ export async function downloadFromServer(options: {
         serverId: expenseId,
         description: String(expense?.description || ''),
         amountCents: Number(expense?.amountCents || 0),
+        paymentMethod:
+          (expense?.paymentMethod ? String(expense.paymentMethod).trim().toUpperCase() : '') ||
+          (localExpense?.paymentMethod ? String(localExpense.paymentMethod).trim().toUpperCase() : '') ||
+          'EFECTIVO',
+        treasuryAccountId:
+          (expense?.treasuryAccountId ? String(expense.treasuryAccountId).trim() : '') ||
+          (localExpense?.treasuryAccountId ? String(localExpense.treasuryAccountId).trim() : '') ||
+          null,
         expenseDate: new Date(expenseDateMs).toISOString(),
         category: expense?.category ? String(expense.category) : null,
         notes: expense?.notes ? String(expense.notes) : null,
@@ -1362,6 +1408,8 @@ export async function downloadFromServer(options: {
       const expenseRow = {
         description: expenseData.description,
         amount_cents: expenseData.amountCents,
+        payment_method: expenseData.paymentMethod,
+        treasury_account_id: expenseData.treasuryAccountId,
         expense_date: expenseDateMs,
         category: expenseData.category,
         notes: expenseData.notes,

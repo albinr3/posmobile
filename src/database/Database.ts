@@ -474,6 +474,115 @@ class DatabaseService {
       );
     `);
 
+    // Tabla de cuentas de tesoreria
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS treasury_accounts (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        currency TEXT DEFAULT 'DOP',
+        bank_name TEXT,
+        account_number TEXT,
+        is_active INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    // Tabla de saldos iniciales de tesoreria
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS treasury_opening_balances (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        treasury_account_id TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        effective_at INTEGER NOT NULL,
+        note TEXT,
+        created_by_user_id TEXT,
+        created_at INTEGER NOT NULL,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    // Tabla de transferencias internas de tesoreria
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS treasury_transfers (
+        local_id TEXT PRIMARY KEY,
+        server_id TEXT UNIQUE,
+        account_id TEXT,
+        from_treasury_account_id TEXT NOT NULL,
+        to_treasury_account_id TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        transferred_at INTEGER NOT NULL,
+        note TEXT,
+        created_by_user_id TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        reverses_transfer_id TEXT UNIQUE,
+        reversed_by_user_id TEXT,
+        reversed_at INTEGER,
+        reverse_reason TEXT,
+        created_at INTEGER NOT NULL,
+        synced INTEGER DEFAULT 0,
+        data TEXT NOT NULL
+      );
+    `);
+
+    const saleColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(sales);');
+    const hasSaleTreasuryAccountId = saleColumns.some((column) => column.name === 'treasury_account_id');
+    if (!hasSaleTreasuryAccountId) {
+      await this.db.execAsync(`
+        ALTER TABLE sales ADD COLUMN treasury_account_id TEXT;
+      `);
+    }
+
+    const paymentColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(payments);');
+    const hasPaymentTreasuryAccountId = paymentColumns.some((column) => column.name === 'treasury_account_id');
+    if (!hasPaymentTreasuryAccountId) {
+      await this.db.execAsync(`
+        ALTER TABLE payments ADD COLUMN treasury_account_id TEXT;
+      `);
+    }
+
+    const purchaseColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(purchases);');
+    const hasPurchaseTreasuryAccountId = purchaseColumns.some((column) => column.name === 'treasury_account_id');
+    if (!hasPurchaseTreasuryAccountId) {
+      await this.db.execAsync(`
+        ALTER TABLE purchases ADD COLUMN treasury_account_id TEXT;
+      `);
+    }
+
+    const operatingExpenseColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(operating_expenses);');
+    const hasOperatingExpensePaymentMethod = operatingExpenseColumns.some((column) => column.name === 'payment_method');
+    if (!hasOperatingExpensePaymentMethod) {
+      await this.db.execAsync(`
+        ALTER TABLE operating_expenses ADD COLUMN payment_method TEXT;
+      `);
+    }
+    const hasOperatingExpenseTreasuryAccountId = operatingExpenseColumns.some((column) => column.name === 'treasury_account_id');
+    if (!hasOperatingExpenseTreasuryAccountId) {
+      await this.db.execAsync(`
+        ALTER TABLE operating_expenses ADD COLUMN treasury_account_id TEXT;
+      `);
+    }
+
+    const returnColumns = await this.db.getAllAsync<{ name: string }>('PRAGMA table_info(returns);');
+    const hasReturnRefundMethod = returnColumns.some((column) => column.name === 'refund_method');
+    if (!hasReturnRefundMethod) {
+      await this.db.execAsync(`
+        ALTER TABLE returns ADD COLUMN refund_method TEXT;
+      `);
+    }
+    const hasReturnRefundTreasuryAccountId = returnColumns.some((column) => column.name === 'refund_treasury_account_id');
+    if (!hasReturnRefundTreasuryAccountId) {
+      await this.db.execAsync(`
+        ALTER TABLE returns ADD COLUMN refund_treasury_account_id TEXT;
+      `);
+    }
+
     // Items de devolucion
     await this.db.execAsync(`
       CREATE TABLE IF NOT EXISTS return_items (
@@ -508,6 +617,15 @@ class DatabaseService {
       CREATE INDEX IF NOT EXISTS idx_operating_expenses_date ON operating_expenses(expense_date);
       CREATE INDEX IF NOT EXISTS idx_returns_returned_at ON returns(returned_at);
       CREATE INDEX IF NOT EXISTS idx_return_items_return_local_id ON return_items(return_local_id);
+      CREATE INDEX IF NOT EXISTS idx_treasury_accounts_active ON treasury_accounts(is_active, name);
+      CREATE INDEX IF NOT EXISTS idx_treasury_opening_balances_account ON treasury_opening_balances(treasury_account_id, effective_at);
+      CREATE INDEX IF NOT EXISTS idx_treasury_transfers_transferred_at ON treasury_transfers(transferred_at);
+      CREATE INDEX IF NOT EXISTS idx_treasury_transfers_accounts ON treasury_transfers(from_treasury_account_id, to_treasury_account_id);
+      CREATE INDEX IF NOT EXISTS idx_sales_treasury_account ON sales(treasury_account_id);
+      CREATE INDEX IF NOT EXISTS idx_payments_treasury_account ON payments(treasury_account_id);
+      CREATE INDEX IF NOT EXISTS idx_purchases_treasury_account ON purchases(treasury_account_id);
+      CREATE INDEX IF NOT EXISTS idx_operating_expenses_treasury_account ON operating_expenses(treasury_account_id);
+      CREATE INDEX IF NOT EXISTS idx_returns_refund_treasury_account ON returns(refund_treasury_account_id);
     `);
   }
 
@@ -689,6 +807,9 @@ class DatabaseService {
             DELETE FROM accounts_receivable;
             DELETE FROM returns;
             DELETE FROM return_items;
+            DELETE FROM treasury_transfers;
+            DELETE FROM treasury_opening_balances;
+            DELETE FROM treasury_accounts;
           `),
         'clearAllData'
       )

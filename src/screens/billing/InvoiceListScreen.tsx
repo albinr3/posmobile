@@ -1,6 +1,6 @@
 import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, Alert, TouchableOpacity, Share } from 'react-native';
-import { Searchbar, Text, Chip, Icon } from 'react-native-paper';
+import { Searchbar, Text, Chip, Icon, Portal, Dialog, Button, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
@@ -41,6 +41,7 @@ interface InvoiceListItem {
   legalTipPercentBp?: number;
   createdAt: number;
   synced: boolean;
+  cancellationReason?: string | null;
 }
 interface InvoiceListScreenProps {
   navigation: any;
@@ -161,6 +162,9 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showItbisBreakdown, setShowItbisBreakdown] = useState(true);
+  const [cancelDialogVisible, setCancelDialogVisible] = useState(false);
+  const [pendingCancelInvoice, setPendingCancelInvoice] = useState<InvoiceListItem | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState('');
   const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
   const isOnlineRef = useRef(isOnline);
@@ -276,6 +280,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           legalTipPercentBp: legalTip.legalTipPercentBp,
           createdAt: resolveSaleCreatedAt(row.created_at, parsedData),
           synced: row.synced === 1,
+          cancellationReason: parsedData?.cancellationReason ? String(parsedData.cancellationReason) : null,
         };
       });
       mapped.sort((a, b) => b.createdAt - a.createdAt);
@@ -645,6 +650,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     legalTipCents?: number;
     totalCents: number;
     cancelled: boolean;
+    cancellationReason?: string | null;
   }) => {
     const {
       paperSize,
@@ -662,6 +668,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       legalTipCents,
       totalCents,
       cancelled,
+      cancellationReason,
     } = params;
     const widthMm = paperSize === '80' ? 80 : 58;
     const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
@@ -711,7 +718,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       return `<div class="item"><div><strong>${escapeHtml(itemName)} | ${escapeHtml(itemReference)}</strong></div><div class="row"><span>${escapeHtml(formatProductQty(Number(item.quantity || item.qty || 0), item.unit))} x ${formatCurrency(Number(item.priceCents || item.unitPriceCents || 0))}</span><span><strong>${formatCurrency(lineTotalCents)}</strong></span></div></div>`;
     }).join('');
 
-    return `<html><head><meta charset="utf-8" /><style>@page { size: ${widthMm}mm auto; margin: 0; } body { font-family: Arial, sans-serif; margin: 0; color: #000; } .ticket { width: ${widthMm}mm; padding: 10px; font-size: ${paperSize === '80' ? 13 : 12}px; } .brand { text-align: center; margin-bottom: 6px; } .logo { height: 28px; width: auto; } .row { display: flex; justify-content: space-between; margin: 3px 0; gap: 8px; } .sep { border-top: 1px dashed #444; margin: 7px 0; } .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; } .total { font-size: ${paperSize === '80' ? 17 : 15}px; font-weight: 800; margin-top: 6px; } .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }</style></head><body><div class="ticket"><div class="brand">${logoDataUri ? `<img src="${logoDataUri}" class="logo" />` : '<div style="font-weight:800;">MOVOpos</div>'}</div><div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div><div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div><div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:4px;"><strong>Método:</strong> ${escapeHtml(paymentMethodLabel)}</div><div class="sep"></div><div>${itemsRows}</div>${taxRows}<div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}</div></body></html>`;
+    const cancellationReasonLine = cancelled
+      ? `<div style="margin-top:6px;font-size:11px;"><strong>Motivo:</strong> ${escapeHtml((cancellationReason || '').trim() || 'No especificado')}</div>`
+      : '';
+    return `<html><head><meta charset="utf-8" /><style>@page { size: ${widthMm}mm auto; margin: 0; } body { font-family: Arial, sans-serif; margin: 0; color: #000; } .ticket { width: ${widthMm}mm; padding: 10px; font-size: ${paperSize === '80' ? 13 : 12}px; } .brand { text-align: center; margin-bottom: 6px; } .logo { height: 28px; width: auto; } .row { display: flex; justify-content: space-between; margin: 3px 0; gap: 8px; } .sep { border-top: 1px dashed #444; margin: 7px 0; } .item { border-bottom: 1px dashed #d1d5db; padding-bottom: 6px; margin-bottom: 6px; } .total { font-size: ${paperSize === '80' ? 17 : 15}px; font-weight: 800; margin-top: 6px; } .cancelled { color: #dc2626; font-weight: 800; text-align: center; margin-top: 7px; }</style></head><body><div class="ticket"><div class="brand">${logoDataUri ? `<img src="${logoDataUri}" class="logo" />` : '<div style="font-weight:800;">MOVOpos</div>'}</div><div class="row"><span>Factura:</span><span><strong>${escapeHtml(invoiceCode)}</strong></span></div><div class="row"><span>Fecha:</span><span>${escapeHtml(formatDateTime(createdAt))}</span></div><div style="margin-top:4px;"><strong>Cliente:</strong> ${escapeHtml(customerName)}</div><div style="margin-top:4px;"><strong>Método:</strong> ${escapeHtml(paymentMethodLabel)}</div><div class="sep"></div><div>${itemsRows}</div>${taxRows}<div class="row total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}${cancellationReasonLine}</div></body></html>`;
   };
 
   const buildLetterInvoiceHtml = (params: {
@@ -736,6 +746,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     legalTipCents?: number;
     totalCents: number;
     cancelled: boolean;
+    cancellationReason?: string | null;
   }) => {
     const {
       logoDataUri,
@@ -759,6 +770,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       legalTipCents,
       totalCents,
       cancelled,
+      cancellationReason,
     } = params;
     const resolvedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
     const totals = calcDocumentTotalsByTaxMode({
@@ -828,7 +840,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     const legalTipRow = resolvedLegalTipCents > 0
       ? `<div class="totals-row"><span>Propina legal (${(resolvedLegalTipPercentBp / 100).toFixed(2).replace(/\.?0+$/, '')}%)</span><span>${formatCurrency(resolvedLegalTipCents)}</span></div>`
       : '';
-    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div>${customerAddress ? `<div style="margin-top:6px;"><strong>Dirección:</strong> ${escapeHtml(customerAddress)}</div>` : ''}<div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${splitPaymentHtml}${creditInfoHtml}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}${discountRow}${shippingCents > 0 ? `<div class="totals-row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>` : ''}${legalTipRow}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
+    const cancellationReasonHtml = cancelled
+      ? `<div style="margin-top:8px;"><strong>Motivo:</strong> ${escapeHtml((cancellationReason || '').trim() || 'No especificado')}</div>`
+      : '';
+    return `<html><head><meta charset="utf-8" /><style>@page { size: letter; margin: 16mm 12mm; } body { font-family: Arial, sans-serif; margin: 0; color: #111827; font-size: 12px; } .invoice { width: 100%; } .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; } .company { display: flex; align-items: flex-start; gap: 12px; } .logo-wrap { max-height: 72px; overflow: hidden; } .logo { height: 72px; width: auto; object-fit: contain; } .company-name { font-size: 22px; font-weight: 800; color: #111827; } .doc-title { font-size: 28px; font-weight: 800; color: #111827; text-align: right; } .box { margin-top: 18px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .muted { color: #4B5563; } table { width: 100%; border-collapse: collapse; margin-top: 16px; } th, td { border-bottom: 1px solid #E5E7EB; padding: 8px 6px; font-size: 12px; vertical-align: top; } th { text-align: left; color: #374151; font-weight: 700; } .totals { margin-top: 16px; display: flex; justify-content: flex-end; } .totals-box { width: 320px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 12px; } .totals-row { display: flex; justify-content: space-between; margin-top: 4px; } .totals-total { margin-top: 10px; border-top: 1px solid #111827; padding-top: 8px; font-size: 16px; font-weight: 800; } .cancelled { margin-top: 10px; border: 2px solid #DC2626; background: #FEF2F2; color: #B91C1C; padding: 8px; text-align: center; font-weight: 800; } .thanks { margin-top: 16px; font-weight: 700; color: #374151; } .signature { margin-top: 42px; text-align: center; } .signature-line { width: 280px; border-top: 1px solid #111827; margin: 0 auto 6px; }</style></head><body><div class="invoice">${cancelled ? '<div class="cancelled">FACTURA CANCELADA</div>' : ''}${cancellationReasonHtml}<div class="top"><div class="company">${logoSource ? `<div class="logo-wrap"><img src="${escapeHtml(logoSource)}" class="logo" /></div>` : ''}<div><div class="company-name">${escapeHtml(company.name || 'MOVOpos')}</div>${company.address ? `<div class="muted">${escapeHtml(company.address)}</div>` : ''}${company.phone ? `<div class="muted">Tel: ${escapeHtml(company.phone)}</div>` : ''}</div></div><div><div class="doc-title">FACTURA</div><div style="margin-top:6px;"><div><strong>No:</strong> ${escapeHtml(invoiceCode)}</div><div><strong>Fecha:</strong> ${escapeHtml(formatDateTime(createdAt))}</div></div></div></div><div class="box"><div><strong>Cliente:</strong> ${escapeHtml(customerName)}</div>${customerAddress ? `<div style="margin-top:6px;"><strong>Dirección:</strong> ${escapeHtml(customerAddress)}</div>` : ''}<div style="margin-top:6px;"><strong>Tipo de venta:</strong> ${saleType === 'CREDITO' ? 'Credito' : 'Contado'}</div>${splitPaymentHtml}${creditInfoHtml}</div><table><thead><tr><th>Código</th><th>Descripción</th><th>Referencia</th><th style="text-align:right;">Cant.</th><th style="text-align:right;">Precio</th><th style="text-align:right;">Importe</th></tr></thead><tbody>${itemRows}</tbody></table><div class="totals"><div class="totals-box"><div class="totals-row"><span>Subtotal</span><span>${formatCurrency(showItbisBreakdown ? totals.subtotalCents : (totals.subtotalCents + totals.itbisCents))}</span></div>${showItbisBreakdown ? `<div class="totals-row"><span>${escapeHtml(itbisLabel)}</span><span>${formatCurrency(totals.itbisCents)}</span></div>` : ''}${discountRow}${shippingCents > 0 ? `<div class="totals-row"><span>Flete</span><span>${formatCurrency(shippingCents)}</span></div>` : ''}${legalTipRow}<div class="totals-row totals-total"><span>Total</span><span>${formatCurrency(totalCents)}</span></div></div></div><div class="thanks">Gracias por su compra</div>${saleType === 'CREDITO' ? '<div class="signature"><div class="signature-line"></div><div>Firma del cliente</div></div>' : ''}</div></body></html>`;
   };
 
   const handlePrintInvoice = async (invoice: InvoiceListItem) => {
@@ -881,6 +896,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         discountPercentBp,
       }).subtotalCents;
       const legalTip = resolveInvoiceLegalTip(parsedData, legalTipFallbackBaseCents);
+      const cancellationReason = parsedData?.cancellationReason ? String(parsedData.cancellationReason) : null;
       const shippingCents = resolveInvoiceShippingCents({
         parsedData,
         items,
@@ -918,6 +934,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           legalTipCents: legalTip.legalTipCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+          cancellationReason,
         });
         await Print.printAsync({ html });
         return;
@@ -1104,6 +1121,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           legalTipCents: legalTip.legalTipCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+          cancellationReason: parsedData?.cancellationReason ? String(parsedData.cancellationReason) : null,
         })
         : buildThermalInvoiceHtml({
           paperSize: paperSize === '80' ? '80' : '58',
@@ -1121,6 +1139,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           legalTipCents: legalTip.legalTipCents,
           totalCents,
           cancelled: String(row.status || '').toLowerCase() === 'cancelled',
+          cancellationReason: parsedData?.cancellationReason ? String(parsedData.cancellationReason) : null,
         });
 
       const pdf = await Print.printToFileAsync({ html });
@@ -1173,107 +1192,116 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
     }
   };
 
+  const performInvoiceCancellation = async (invoice: InvoiceListItem, cancellationReason: string) => {
+    const normalizedReason = cancellationReason.trim();
+    if (!normalizedReason) {
+      Alert.alert('Motivo requerido', 'Debes indicar un motivo para cancelar la factura.');
+      return;
+    }
+    try {
+      const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
+      if (!row) {
+        Alert.alert('Factura', 'No se encontró la factura.');
+        return;
+      }
+
+      let parsedData: any = null;
+      try {
+        parsedData = row.data ? JSON.parse(row.data) : null;
+      } catch {
+        parsedData = null;
+      }
+
+      const cancelledAt = Date.now();
+      const updatedData = {
+        ...(parsedData || {}),
+        status: 'cancelled',
+        cancel: true,
+        cancelledAt,
+        cancellationReason: normalizedReason,
+      };
+
+      const saleInvoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '');
+      const saleServerId = row.server_id ? String(row.server_id) : null;
+
+      const saleItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
+      for (const item of saleItems) {
+        const quantity = Number(item?.quantity ?? item?.qty ?? 0);
+        if (!Number.isFinite(quantity) || quantity <= 0) continue;
+        const localProductId = await resolveLocalProductId(String(item?.productId || ''));
+        if (!localProductId) continue;
+        await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [quantity, localProductId]);
+      }
+
+      await db.update('sales', invoice.localId, {
+        status: 'cancelled',
+        data: JSON.stringify(updatedData),
+        synced: 0,
+      });
+
+      const arRows = await db.query<any>(
+        `SELECT local_id, total_cents, data
+         FROM accounts_receivable
+         WHERE status IN ('PENDIENTE', 'PARCIAL')`
+      );
+
+      for (const arRow of arRows) {
+        let arData: any = null;
+        try {
+          arData = arRow.data ? JSON.parse(arRow.data) : null;
+        } catch {
+          arData = null;
+        }
+
+        const arInvoiceCode = String(arData?.sale?.invoiceCode || arData?.invoiceCode || '');
+        const arSaleServerId = arData?.sale?.id ? String(arData.sale.id) : null;
+        const matchesInvoice = saleInvoiceCode && arInvoiceCode && arInvoiceCode === saleInvoiceCode;
+        const matchesSaleId = !!(saleServerId && arSaleServerId && arSaleServerId === saleServerId);
+
+        if (!matchesInvoice && !matchesSaleId) continue;
+
+        const totalCents = Number(arRow.total_cents || arData?.totalCents || 0);
+        const updatedArData = {
+          ...(arData || {}),
+          status: 'PAGADO',
+          balanceCents: 0,
+          paidCents: totalCents,
+          cancelledBySale: true,
+          cancelledAt,
+        };
+
+        await db.update('accounts_receivable', String(arRow.local_id), {
+          status: 'PAGADO',
+          balance_cents: 0,
+          paid_cents: totalCents,
+          synced: 0,
+          data: JSON.stringify(updatedArData),
+        });
+      }
+
+      await queueSaleUpdateBestEffort(invoice.localId, {
+        ...updatedData,
+        cancellationReason: normalizedReason,
+        cancelReason: normalizedReason,
+        reason: normalizedReason,
+      });
+
+      await loadInvoices();
+      Alert.alert('Factura', 'Factura cancelada.');
+    } catch (error) {
+      console.error('Error cancelando factura:', error);
+      Alert.alert('Error', 'No se pudo cancelar la factura.');
+    }
+  };
+
   const handleCancelInvoice = (invoice: InvoiceListItem) => {
     if (invoice.status === 'cancelled') {
       Alert.alert('Factura', 'Esta factura ya está cancelada.');
       return;
     }
-    Alert.alert('Cancelar factura', `¿Seguro que deseas cancelar ${invoice.invoiceCode}?`, [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Sí, cancelar',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
-            if (!row) {
-              Alert.alert('Factura', 'No se encontró la factura.');
-              return;
-            }
-
-            let parsedData: any = null;
-            try {
-              parsedData = row.data ? JSON.parse(row.data) : null;
-            } catch {
-              parsedData = null;
-            }
-
-            const updatedData = {
-              ...(parsedData || {}),
-              status: 'cancelled',
-              cancel: true,
-              cancelledAt: Date.now(),
-            };
-
-            const saleInvoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '');
-            const saleServerId = row.server_id ? String(row.server_id) : null;
-
-            const saleItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
-            for (const item of saleItems) {
-              const quantity = Number(item?.quantity ?? item?.qty ?? 0);
-              if (!Number.isFinite(quantity) || quantity <= 0) continue;
-              const localProductId = await resolveLocalProductId(String(item?.productId || ''));
-              if (!localProductId) continue;
-              await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [quantity, localProductId]);
-            }
-
-            await db.update('sales', invoice.localId, {
-              status: 'cancelled',
-              data: JSON.stringify(updatedData),
-              synced: 0,
-            });
-
-            const arRows = await db.query<any>(
-              `SELECT local_id, total_cents, data
-               FROM accounts_receivable
-               WHERE status IN ('PENDIENTE', 'PARCIAL')`
-            );
-
-            for (const arRow of arRows) {
-              let arData: any = null;
-              try {
-                arData = arRow.data ? JSON.parse(arRow.data) : null;
-              } catch {
-                arData = null;
-              }
-
-              const arInvoiceCode = String(arData?.sale?.invoiceCode || arData?.invoiceCode || '');
-              const arSaleServerId = arData?.sale?.id ? String(arData.sale.id) : null;
-              const matchesInvoice = saleInvoiceCode && arInvoiceCode && arInvoiceCode === saleInvoiceCode;
-              const matchesSaleId = !!(saleServerId && arSaleServerId && arSaleServerId === saleServerId);
-
-              if (!matchesInvoice && !matchesSaleId) continue;
-
-              const totalCents = Number(arRow.total_cents || arData?.totalCents || 0);
-              const updatedArData = {
-                ...(arData || {}),
-                status: 'PAGADO',
-                balanceCents: 0,
-                paidCents: totalCents,
-                cancelledBySale: true,
-                cancelledAt: Date.now(),
-              };
-
-              await db.update('accounts_receivable', String(arRow.local_id), {
-                status: 'PAGADO',
-                balance_cents: 0,
-                paid_cents: totalCents,
-                synced: 0,
-                data: JSON.stringify(updatedArData),
-              });
-            }
-
-            await queueSaleUpdateBestEffort(invoice.localId, updatedData);
-
-            await loadInvoices();
-            Alert.alert('Factura', 'Factura cancelada.');
-          } catch (error) {
-            console.error('Error cancelando factura:', error);
-            Alert.alert('Error', 'No se pudo cancelar la factura.');
-          }
-        },
-      },
-    ]);
+    setPendingCancelInvoice(invoice);
+    setCancelReasonInput('');
+    setCancelDialogVisible(true);
   };
 
   const getStatusChipStyle = (status: string) => {
@@ -1299,6 +1327,9 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
         </Text>
       ) : null}
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
+      {item.status === 'cancelled' ? (
+        <Text style={styles.meta}>Motivo: {(item.cancellationReason || '').trim() || 'No especificado'}</Text>
+      ) : null}
 
       <View style={styles.footerRow}>
         {item.synced ? (
@@ -1407,6 +1438,40 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
           </View>
         }
       />
+      <Portal>
+        <Dialog visible={cancelDialogVisible} onDismiss={() => setCancelDialogVisible(false)}>
+          <Dialog.Title>Cancelar factura</Dialog.Title>
+          <Dialog.Content>
+            <Text variant="bodyMedium" style={{ marginBottom: 10 }}>
+              Indica el motivo de cancelación.
+            </Text>
+            <TextInput
+              mode="outlined"
+              label="Motivo"
+              value={cancelReasonInput}
+              onChangeText={setCancelReasonInput}
+              multiline
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setCancelDialogVisible(false)}>Cerrar</Button>
+            <Button
+              onPress={async () => {
+                const target = pendingCancelInvoice;
+                const reason = cancelReasonInput.trim();
+                if (!reason) {
+                  Alert.alert('Motivo requerido', 'Debes indicar un motivo para cancelar la factura.');
+                  return;
+                }
+                setCancelDialogVisible(false);
+                if (target) await performInvoiceCancellation(target, reason);
+              }}
+            >
+              Confirmar
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </SafeAreaView>
   );
 }

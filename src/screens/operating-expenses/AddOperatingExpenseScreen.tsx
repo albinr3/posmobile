@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, Alert } from 'react-native';
-import { TextInput, Button, Text, Surface } from 'react-native-paper';
+import { TextInput, Button, Text, Surface, Menu } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
@@ -8,6 +8,10 @@ import { syncService } from '../../services/sync/SyncService';
 import { useAuthStore } from '../../store/authStore';
 import { generateLocalId, formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { listTreasuryAccounts } from '../../services/treasury/treasuryService';
+import { TreasuryAccount } from '../../types';
+import { filterTreasuryAccountsByMethod, findTreasuryAccountById } from '../../utils/treasury';
+import { useTreasuryUIStore } from '../../store/treasuryUIStore';
 
 interface AddOperatingExpenseScreenProps {
   navigation: any;
@@ -39,9 +43,16 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
   const [expenseDate, setExpenseDate] = useState(toIsoDate(null));
   const [category, setCategory] = useState('');
   const [notes, setNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'EFECTIVO' | 'TRANSFERENCIA' | 'TARJETA' | 'OTRO'>('EFECTIVO');
+  const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
+  const [treasuryAccountId, setTreasuryAccountId] = useState<string | null>(null);
+  const [paymentMethodMenuVisible, setPaymentMethodMenuVisible] = useState(false);
+  const [treasuryMenuVisible, setTreasuryMenuVisible] = useState(false);
   const [serverId, setServerId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingExpense, setLoadingExpense] = useState(isEditing);
+  const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
+  const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
 
   const amountCentsPreview = useMemo(() => toCents(amount), [amount]);
 
@@ -70,6 +81,9 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
         setExpenseDate(toIsoDate(dateIso));
         setCategory(parsed?.category ?? row.category ?? '');
         setNotes(parsed?.notes ?? row.notes ?? '');
+        const parsedMethod = String(parsed?.paymentMethod || row.payment_method || 'EFECTIVO').toUpperCase();
+        setPaymentMethod(parsedMethod === 'TRANSFERENCIA' ? 'TRANSFERENCIA' : parsedMethod === 'TARJETA' ? 'TARJETA' : parsedMethod === 'OTRO' ? 'OTRO' : 'EFECTIVO');
+        setTreasuryAccountId(parsed?.treasuryAccountId ? String(parsed.treasuryAccountId) : row.treasury_account_id ? String(row.treasury_account_id) : null);
         setServerId(row.server_id ? String(row.server_id) : null);
       } catch (error) {
         console.error('Error cargando gasto operativo:', error);
@@ -80,6 +94,34 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
     };
     loadExpense();
   }, [expenseLocalId, navigation]);
+
+  useEffect(() => {
+    const loadTreasury = async () => {
+      try {
+        const rows = await listTreasuryAccounts(false);
+        setTreasuryAccounts(rows);
+      } catch {
+        setTreasuryAccounts([]);
+      }
+    };
+    void loadTreasury();
+  }, []);
+
+  useEffect(() => {
+    const created = consumeLastCreatedAccountId();
+    if (created) {
+      setTreasuryAccountId(created);
+    }
+  }, [consumeLastCreatedAccountId]);
+
+  useEffect(() => {
+    if (!treasuryAccounts.length) return;
+    const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod);
+    const selected = findTreasuryAccountById(allowed, treasuryAccountId);
+    if (!selected) {
+      setTreasuryAccountId(allowed[0]?.localId || null);
+    }
+  }, [paymentMethod, treasuryAccountId, treasuryAccounts]);
 
   const validate = () => {
     if (!description.trim()) {
@@ -96,6 +138,10 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
       Alert.alert('Validación', 'La fecha no es válida (usa formato YYYY-MM-DD).');
       return false;
     }
+    if ((paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && !treasuryAccountId) {
+      Alert.alert('Validación', 'Debes seleccionar una cuenta de tesorería.');
+      return false;
+    }
     return true;
   };
 
@@ -110,6 +156,8 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
         description: description.trim(),
         amountCents: toCents(amount),
         expenseDate: new Date(expenseDateMs).toISOString(),
+        paymentMethod,
+        treasuryAccountId: treasuryAccountId || null,
         category: category.trim() || null,
         notes: notes.trim() || null,
         user: subUser
@@ -126,6 +174,8 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
         expense_date: expenseDateMs,
         category: payload.category,
         notes: payload.notes,
+        payment_method: payload.paymentMethod,
+        treasury_account_id: payload.treasuryAccountId,
         synced: 0,
         data: JSON.stringify({
           ...payload,
@@ -204,6 +254,64 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
             activeOutlineColor={ui.colors.primary}
             placeholder="2026-02-18"
           />
+
+          <Text style={styles.summaryLabel}>Método de pago</Text>
+          <Menu
+            visible={paymentMethodMenuVisible}
+            onDismiss={() => setPaymentMethodMenuVisible(false)}
+            anchor={
+              <Button mode="outlined" onPress={() => setPaymentMethodMenuVisible(true)} textColor={ui.colors.primary}>
+                {paymentMethod}
+              </Button>
+            }
+          >
+            {['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'OTRO'].map((method) => (
+              <Menu.Item
+                key={method}
+                onPress={() => {
+                  setPaymentMethod(method as any);
+                  setPaymentMethodMenuVisible(false);
+                }}
+                title={method}
+              />
+            ))}
+          </Menu>
+
+          <Text style={[styles.summaryLabel, { marginTop: 10 }]}>Cuenta de tesorería</Text>
+          <Menu
+            visible={treasuryMenuVisible}
+            onDismiss={() => setTreasuryMenuVisible(false)}
+            anchor={
+              <Button mode="outlined" onPress={() => setTreasuryMenuVisible(true)} textColor={ui.colors.primary}>
+                {findTreasuryAccountById(
+                  filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod),
+                  treasuryAccountId
+                )?.name || 'Seleccionar cuenta'}
+              </Button>
+            }
+          >
+            {filterTreasuryAccountsByMethod(
+              treasuryAccounts.filter((account) => account.isActive),
+              paymentMethod
+            ).map((account) => (
+              <Menu.Item
+                key={account.localId}
+                onPress={() => {
+                  setTreasuryAccountId(account.localId);
+                  setTreasuryMenuVisible(false);
+                }}
+                title={account.name}
+              />
+            ))}
+            <Menu.Item
+              onPress={() => {
+                requestCreateAccountModal(paymentMethod === 'EFECTIVO' ? 'CAJA' : paymentMethod === 'TRANSFERENCIA' ? 'BANCO' : null);
+                setTreasuryMenuVisible(false);
+                navigation.navigate('TreasuryMenu', { screen: 'Treasury' });
+              }}
+              title="+ Crear nueva cuenta"
+            />
+          </Menu>
 
           <TextInput
             label="Categoría (opcional)"
@@ -284,6 +392,11 @@ const styles = StyleSheet.create({
     color: ui.colors.textMuted,
     fontSize: 12,
     marginBottom: 10,
+  },
+  summaryLabel: {
+    color: ui.colors.textMuted,
+    fontSize: 13,
+    marginBottom: 6,
   },
   stickyFooter: {
     paddingBottom: 2,

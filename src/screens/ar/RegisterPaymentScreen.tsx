@@ -6,10 +6,13 @@ import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId, generateReceiptCode, formatCurrency } from '../../utils/helpers';
-import { AccountReceivable } from '../../types';
+import { AccountReceivable, TreasuryAccount } from '../../types';
 import { ui } from '../../theme/ui';
 import { DOMINICAN_BANKS } from '../../constants/dominicanBanks';
 import { hasConnectedPrinter, printPaymentReceiptDirect } from '../../services/printing/thermalPrinterService';
+import { listTreasuryAccounts, getAccountTransferBankName } from '../../services/treasury/treasuryService';
+import { filterTreasuryAccountsByMethod, findTreasuryAccountById } from '../../utils/treasury';
+import { useTreasuryUIStore } from '../../store/treasuryUIStore';
 import {
   formatCustomerLabel,
   GENERIC_CUSTOMER_DISPLAY_NAME,
@@ -39,6 +42,11 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
   const [reference, setReference] = useState('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
+  const [treasuryAccountId, setTreasuryAccountId] = useState<string | null>(null);
+  const [treasuryMenuVisible, setTreasuryMenuVisible] = useState(false);
+  const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
+  const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
 
   const paymentOptions = [
     { value: 'EFECTIVO', label: 'Efectivo', icon: 'cash' },
@@ -49,7 +57,23 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
   useEffect(() => {
     loadARItems();
+    loadTreasuryAccounts();
   }, []);
+
+  useEffect(() => {
+    const created = consumeLastCreatedAccountId();
+    if (!created) return;
+    setTreasuryAccountId(created);
+  }, [consumeLastCreatedAccountId]);
+
+  const loadTreasuryAccounts = async () => {
+    try {
+      const rows = await listTreasuryAccounts(false);
+      setTreasuryAccounts(rows);
+    } catch {
+      setTreasuryAccounts([]);
+    }
+  };
 
   const loadARItems = async () => {
     if (!targetArIds.length) return;
@@ -86,6 +110,18 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
   const firstItem = arItems[0] || null;
   const totalPendingCents = arItems.reduce((sum, item) => sum + item.balanceCents, 0);
 
+  useEffect(() => {
+    if (!treasuryAccounts.length) return;
+    const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod);
+    const selected = findTreasuryAccountById(allowed, treasuryAccountId);
+    if (!selected) {
+      setTreasuryAccountId(allowed[0]?.localId || null);
+      if (paymentMethod === 'TRANSFERENCIA' && allowed[0]) {
+        setTransferBankName(getAccountTransferBankName(allowed[0]));
+      }
+    }
+  }, [paymentMethod, treasuryAccountId, treasuryAccounts]);
+
   const getInvoiceCode = (item: AccountReceivable): string | null => {
     try {
       const parsed = item?.data ? JSON.parse(item.data) : null;
@@ -116,6 +152,11 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
     if (paymentMethod === 'TRANSFERENCIA' && !transferBankName) {
       Alert.alert('Error', 'Debes seleccionar el banco de la transferencia');
+      return;
+    }
+
+    if ((paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && !treasuryAccountId) {
+      Alert.alert('Error', 'Debes seleccionar cuenta de tesorería');
       return;
     }
 
@@ -162,6 +203,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           invoiceCode,
           amountCents: appliedCents,
           paymentMethod,
+          treasuryAccountId: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
           reference: reference.trim() || null,
           notes: notes.trim() || null,
@@ -177,6 +219,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           amount_cents: appliedCents,
           ar_id: item.localId,
           synced: 0,
+          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
           data: JSON.stringify(paymentDataWithBalance),
         });
 
@@ -197,6 +240,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
             arIds: sortedItems.map((item) => item.localId),
             amountCents: appliedTotal,
             method: paymentMethod,
+            treasuryAccountId: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
             transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
             note: notes.trim() || null,
             localPaymentIds: createdLocalPaymentIds,
@@ -218,6 +262,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           invoiceCode: getInvoiceCode(item),
           amountCents: appliedTotal,
           paymentMethod,
+          treasuryAccountId: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
           transferBankName: paymentMethod === 'TRANSFERENCIA' ? transferBankName : null,
           reference: reference.trim() || null,
           notes: notes.trim() || null,
@@ -351,6 +396,15 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
                     if (option.value !== 'TRANSFERENCIA') {
                       setTransferBankName(null);
                     }
+                    const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), option.value);
+                    const selected = findTreasuryAccountById(allowed, treasuryAccountId);
+                    setTreasuryAccountId(selected?.localId || allowed[0]?.localId || null);
+                    if (option.value === 'TRANSFERENCIA') {
+                      const transferAccount = selected || allowed[0] || null;
+                      if (transferAccount) {
+                        setTransferBankName(getAccountTransferBankName(transferAccount));
+                      }
+                    }
                   }}
                   activeOpacity={0.9}
                 >
@@ -362,6 +416,49 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
               );
             })}
           </View>
+
+          {(paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && (
+            <View style={styles.bankSelectorWrap}>
+              <Text style={styles.summaryLabel}>Cuenta de tesorería</Text>
+              <Menu
+                visible={treasuryMenuVisible}
+                onDismiss={() => setTreasuryMenuVisible(false)}
+                anchor={
+                  <Button mode="outlined" onPress={() => setTreasuryMenuVisible(true)} textColor={ui.colors.primary}>
+                    {findTreasuryAccountById(
+                      filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod),
+                      treasuryAccountId
+                    )?.name || 'Seleccionar cuenta'}
+                  </Button>
+                }
+              >
+                {filterTreasuryAccountsByMethod(
+                  treasuryAccounts.filter((account) => account.isActive),
+                  paymentMethod
+                ).map((account) => (
+                  <Menu.Item
+                    key={account.localId}
+                    onPress={() => {
+                      setTreasuryAccountId(account.localId);
+                      if (paymentMethod === 'TRANSFERENCIA') {
+                        setTransferBankName(getAccountTransferBankName(account));
+                      }
+                      setTreasuryMenuVisible(false);
+                    }}
+                    title={account.name}
+                  />
+                ))}
+                <Menu.Item
+                  onPress={() => {
+                    requestCreateAccountModal(paymentMethod === 'EFECTIVO' ? 'CAJA' : 'BANCO');
+                    setTreasuryMenuVisible(false);
+                    navigation.navigate('TreasuryMenu', { screen: 'Treasury' });
+                  }}
+                  title="+ Crear nueva cuenta"
+                />
+              </Menu>
+            </View>
+          )}
 
           {paymentMethod === 'TRANSFERENCIA' && (
             <View style={styles.bankSelectorWrap}>

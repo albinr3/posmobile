@@ -4,6 +4,7 @@ import { BaseCartState, createCartStore } from './createCartStore';
 interface CartExtraState {
   paymentMethod: string;
   transferBankName: string | null;
+  treasuryAccountId: string | null;
   paymentSplits: SalePaymentSplit[];
   shippingCents: number;
   applyLegalTip: boolean;
@@ -11,6 +12,7 @@ interface CartExtraState {
   editingInvoiceCode: string | null;
   setPaymentMethod: (method: string) => void;
   setTransferBankName: (bankName: string | null) => void;
+  setTreasuryAccountId: (accountId: string | null) => void;
   setPaymentSplits: (splits: SalePaymentSplit[]) => void;
   setShippingCents: (shippingCents: number) => void;
   setApplyLegalTip: (value: boolean) => void;
@@ -21,6 +23,7 @@ interface CartExtraState {
     customerVisualId?: number | null;
     paymentMethod: string;
     transferBankName?: string | null;
+    treasuryAccountId?: string | null;
     paymentSplits?: SalePaymentSplit[];
     shippingCents?: number;
     applyLegalTip?: boolean;
@@ -38,6 +41,7 @@ type CartState = BaseCartState & CartExtraState;
 export const useCartStore = createCartStore<CartExtraState>((set) => ({
   paymentMethod: 'EFECTIVO',
   transferBankName: null,
+  treasuryAccountId: null,
   paymentSplits: [],
   shippingCents: 0,
   applyLegalTip: true,
@@ -50,6 +54,10 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
 
   setTransferBankName: (bankName: string | null) => {
     set({ transferBankName: bankName });
+  },
+
+  setTreasuryAccountId: (accountId: string | null) => {
+    set({ treasuryAccountId: accountId ? String(accountId) : null });
   },
 
   setPaymentSplits: (splits: SalePaymentSplit[]) => {
@@ -72,6 +80,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     customerVisualId,
     paymentMethod,
     transferBankName,
+    treasuryAccountId,
     paymentSplits,
     shippingCents,
     applyLegalTip,
@@ -88,6 +97,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       customerVisualId: customerVisualId ?? null,
       paymentMethod: paymentMethod || 'EFECTIVO',
       transferBankName: transferBankName || null,
+      treasuryAccountId: treasuryAccountId || null,
       paymentSplits: Array.isArray(paymentSplits) ? paymentSplits : [],
       shippingCents: Number.isFinite(shippingCents) ? Math.max(0, Math.round(shippingCents || 0)) : 0,
       applyLegalTip: applyLegalTip === true,
@@ -118,6 +128,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       customerVisualId: null,
       paymentMethod: 'EFECTIVO',
       transferBankName: null,
+      treasuryAccountId: null,
       paymentSplits: [],
       shippingCents: 0,
       applyLegalTip: true,

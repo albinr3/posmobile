@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert, Text as RNText, Share } from 'react-native';
-import { Searchbar, Text, Icon, TextInput } from 'react-native-paper';
+import { Searchbar, Text, Icon, TextInput, Portal, Dialog, Button } from 'react-native-paper';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -46,6 +46,7 @@ interface PaymentReceiptItem {
   createdAt: number;
   balanceAfterCents?: number | null;
   cancelledAt?: number | null;
+  cancellationReason?: string | null;
   arId?: string | null;
   batchItems?: PaymentReceiptItem[];
 }
@@ -71,6 +72,9 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
   }, []);
   const [startDate, setStartDate] = useState<string>(todayIso);
   const [endDate, setEndDate] = useState<string>(todayIso);
+  const [cancelDialogVisible, setCancelDialogVisible] = useState(false);
+  const [pendingCancelReceipt, setPendingCancelReceipt] = useState<PaymentReceiptItem | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState('');
   const { isOnline } = useSyncStore();
   const { runFullSyncIfAuthenticated } = useSyncAuth();
   const loadReceiptsRef = useRef<(() => Promise<void>) | null>(null);
@@ -136,13 +140,14 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
           ? Number(parsed.balanceAfterCents)
           : fallbackBalanceAfterCents,
         cancelledAt: parsed?.cancelledAt ? Number(parsed.cancelledAt) : null,
+        cancellationReason: parsed?.cancellationReason ? String(parsed.cancellationReason) : null,
         arId: row.ar_id ? String(row.ar_id) : null,
       } as PaymentReceiptItem;
     });
     return mapped.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, []);
 
-  const applyLocalCancelledState = useCallback(async (item: PaymentReceiptItem, cancelledAt: number) => {
+  const applyLocalCancelledState = useCallback(async (item: PaymentReceiptItem, cancelledAt: number, cancellationReason: string) => {
     const localPayment = item.localId
       ? { local_id: item.localId }
       : await db.queryFirst<{ local_id?: string }>(
@@ -173,6 +178,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
         status: 'cancelled',
         cancel: true,
         cancelledAt,
+        cancellationReason,
       }),
     });
 
@@ -443,6 +449,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
               <div class="row"><span class="label">Factura(s)</span><span class="value">${escapeHtml(item.invoiceCode || '-')}</span></div>
               <div class="row"><span class="label">Método principal</span><span class="value">${escapeHtml(paymentLabel || '-')}</span></div>
               <div class="row"><span class="label">Referencia</span><span class="value">${escapeHtml(item.reference || '-')}</span></div>
+              ${item.cancelledAt ? `<div class="row"><span class="label">Motivo cancelación</span><span class="value">${escapeHtml((item.cancellationReason || '').trim() || 'No especificado')}</span></div>` : ''}
               <div class="row"><span class="label">Balance</span><span class="value">${item.balanceAfterCents !== null && item.balanceAfterCents !== undefined ? escapeHtml(formatCurrency(item.balanceAfterCents)) : '-'}</span></div>
             </div>
 
@@ -499,52 +506,56 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
     }
   };
 
+  const performReceiptCancellation = async (item: PaymentReceiptItem, cancellationReason: string) => {
+    const normalizedReason = cancellationReason.trim();
+    if (!normalizedReason) {
+      Alert.alert('Motivo requerido', 'Debes indicar un motivo para cancelar el recibo.');
+      return;
+    }
+    try {
+      const cancelledAt = Date.now();
+      const serverPaymentId = item.serverId || null;
+      if (!serverPaymentId) {
+        Alert.alert('Sync', 'No se puede cancelar: el recibo aun no tiene id de servidor.');
+        return;
+      }
+      const localPaymentId = await applyLocalCancelledState(item, cancelledAt, normalizedReason);
+      await syncService.queueOperation(
+        'payment',
+        'update',
+        {
+          id: serverPaymentId,
+          cancel: true,
+          status: 'cancelled',
+          cancelledAt,
+          cancellationReason: normalizedReason,
+          cancelReason: normalizedReason,
+          reason: normalizedReason,
+        },
+        localPaymentId || `payment_${serverPaymentId}`
+      );
+
+      Alert.alert(
+        'Recibo',
+        isOnline
+          ? 'Recibo cancelado localmente. Se sincronizara en segundo plano.'
+          : 'Recibo marcado para cancelacion. Se sincronizara cuando haya internet.'
+      );
+      await loadReceipts();
+    } catch (error) {
+      console.error('Error cancelando recibo de pago:', error);
+      Alert.alert('Error', 'No se pudo cancelar el recibo.');
+    }
+  };
+
   const handleCancelReceipt = (item: PaymentReceiptItem) => {
     if (item.cancelledAt) {
       Alert.alert('Recibo', 'Este recibo ya está cancelado.');
       return;
     }
-
-    Alert.alert('Cancelar recibo', `¿Seguro que deseas cancelar ${item.receiptCode}?`, [
-      { text: 'No', style: 'cancel' },
-      {
-        text: 'Sí, cancelar',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            const cancelledAt = Date.now();
-            const serverPaymentId = item.serverId || null;
-            if (!serverPaymentId) {
-              Alert.alert('Sync', 'No se puede cancelar: el recibo aun no tiene id de servidor.');
-              return;
-            }
-            const localPaymentId = await applyLocalCancelledState(item, cancelledAt);
-            await syncService.queueOperation(
-              'payment',
-              'update',
-              {
-                id: serverPaymentId,
-                cancel: true,
-                status: 'cancelled',
-                cancelledAt,
-              },
-              localPaymentId || `payment_${serverPaymentId}`
-            );
-
-            Alert.alert(
-              'Recibo',
-              isOnline
-                ? 'Recibo cancelado localmente. Se sincronizara en segundo plano.'
-                : 'Recibo marcado para cancelacion. Se sincronizara cuando haya internet.'
-            );
-            await loadReceipts();
-          } catch (error) {
-            console.error('Error cancelando recibo de pago:', error);
-            Alert.alert('Error', 'No se pudo cancelar el recibo.');
-          }
-        },
-      },
-    ]);
+    setPendingCancelReceipt(item);
+    setCancelReasonInput('');
+    setCancelDialogVisible(true);
   };
 
   const renderReceipt = ({ item }: { item: PaymentReceiptItem }) => (
@@ -564,6 +575,9 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       <Text style={styles.meta}>Factura: {item.invoiceCode || '-'}</Text>
       <Text style={styles.meta}>Fecha: {formatDateTime(item.createdAt)}</Text>
       <Text style={styles.meta}>Método: {formatPaymentWithBank(item.paymentMethod, item.transferBankName)}</Text>
+      {item.cancelledAt ? (
+        <Text style={styles.meta}>Motivo: {(item.cancellationReason || '').trim() || 'No especificado'}</Text>
+      ) : null}
       {item.batchItems && item.batchItems.length > 1 ? (
         <View style={styles.breakdownWrap}>
           {item.batchItems.map((batchItem) => (
@@ -648,6 +662,40 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
           </View>
         }
       />
+      <Portal>
+        <Dialog visible={cancelDialogVisible} onDismiss={() => setCancelDialogVisible(false)}>
+          <Dialog.Title>Cancelar recibo</Dialog.Title>
+          <Dialog.Content>
+            <Text variant="bodyMedium" style={{ marginBottom: 10 }}>
+              Indica el motivo de cancelación.
+            </Text>
+            <TextInput
+              mode="outlined"
+              label="Motivo"
+              value={cancelReasonInput}
+              onChangeText={setCancelReasonInput}
+              multiline
+            />
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setCancelDialogVisible(false)}>Cerrar</Button>
+            <Button
+              onPress={async () => {
+                const target = pendingCancelReceipt;
+                const reason = cancelReasonInput.trim();
+                if (!reason) {
+                  Alert.alert('Motivo requerido', 'Debes indicar un motivo para cancelar el recibo.');
+                  return;
+                }
+                setCancelDialogVisible(false);
+                if (target) await performReceiptCancellation(target, reason);
+              }}
+            >
+              Confirmar
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </SafeAreaView>
   );
 }

@@ -89,6 +89,7 @@ export interface Payment {
   customerId?: string;
   method: string;
   transferBankName?: string | null;
+  treasuryAccountId?: string | null;
   synced: boolean;
   data: string;
 }
@@ -97,6 +98,7 @@ export interface SalePaymentSplit {
   method: string;
   amountCents: number;
   transferBankName?: string | null;
+  treasuryAccountId?: string | null;
 }
 
 export interface AccountReceivable {
@@ -133,4 +135,81 @@ export interface User {
   name: string;
   companyId: string;
   role: string;
+}
+
+export type TreasuryAccountType = 'CAJA' | 'BANCO';
+export type TreasuryTransferStatus = 'ACTIVE' | 'REVERSED';
+export type TreasuryMovementSource =
+  | 'OPENING_BALANCE'
+  | 'SALE_CASH'
+  | 'AR_PAYMENT'
+  | 'PURCHASE'
+  | 'OPERATING_EXPENSE'
+  | 'CASH_RETURN'
+  | 'TREASURY_TRANSFER';
+export type TreasuryMovementDirection = 'IN' | 'OUT';
+
+export interface TreasuryAccount {
+  localId: string;
+  serverId?: string | null;
+  name: string;
+  type: TreasuryAccountType;
+  currency: string;
+  bankName?: string | null;
+  accountNumber?: string | null;
+  isActive: boolean;
+  createdAt: number;
+  updatedAt: number;
+  synced: boolean;
+  data: string;
+}
+
+export interface TreasuryOpeningBalance {
+  localId: string;
+  serverId?: string | null;
+  treasuryAccountId: string;
+  amountCents: number;
+  effectiveAt: number;
+  note?: string | null;
+  createdByUserId?: string | null;
+  createdAt: number;
+  synced: boolean;
+  data: string;
+}
+
+export interface TreasuryTransfer {
+  localId: string;
+  serverId?: string | null;
+  accountId?: string | null;
+  fromTreasuryAccountId: string;
+  toTreasuryAccountId: string;
+  amountCents: number;
+  transferredAt: number;
+  note?: string | null;
+  createdByUserId?: string | null;
+  status: TreasuryTransferStatus;
+  reversesTransferId?: string | null;
+  reversedByUserId?: string | null;
+  reversedAt?: number | null;
+  reverseReason?: string | null;
+  createdAt: number;
+  synced: boolean;
+  data: string;
+}
+
+export interface TreasuryMovement {
+  id: string;
+  source: TreasuryMovementSource;
+  direction: TreasuryMovementDirection;
+  amountCents: number;
+  occurredAt: number;
+  method: string | null;
+  treasuryAccountId: string;
+  treasuryAccountName: string;
+  reference: string;
+  note?: string | null;
+  transferId?: string;
+  transferStatus?: TreasuryTransferStatus | null;
+  transferTrace?: string | null;
+  canReverseTransfer?: boolean;
 }

@@ -62,10 +62,19 @@ export async function prepareSyncRequestData(
         Boolean(data?.cancelledAt);
 
       if (action === 'update' && cancelRequested) {
+        const cancellationReason = String(
+          data?.cancellationReason ||
+          data?.cancelReason ||
+          data?.reason ||
+          ''
+        ).trim();
         return {
           status: 'cancelled',
           cancel: true,
           cancelledAt: data?.cancelledAt || Date.now(),
+          cancellationReason,
+          cancelReason: cancellationReason,
+          reason: cancellationReason,
         };
       }
 
@@ -151,8 +160,16 @@ export async function prepareSyncRequestData(
         customerId: resolvedCustomerId,
         type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
         paymentMethod: data.paymentMethod || null,
+        treasuryAccountId: data.treasuryAccountId || null,
         transferBankName: data.transferBankName || null,
-        paymentSplits: Array.isArray(data.paymentSplits) ? data.paymentSplits : undefined,
+        paymentSplits: Array.isArray(data.paymentSplits)
+          ? data.paymentSplits.map((split: any) => ({
+              method: split?.method || null,
+              amountCents: Number(split?.amountCents || 0),
+              transferBankName: split?.transferBankName || null,
+              treasuryAccountId: split?.treasuryAccountId || null,
+            }))
+          : undefined,
         salePricesIncludeItbis:
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
@@ -174,9 +191,18 @@ export async function prepareSyncRequestData(
           String(data?.status || '').toLowerCase() === 'cancelled' ||
           Boolean(data?.cancelledAt));
       if (cancelRequested) {
+        const cancellationReason = String(
+          data?.cancellationReason ||
+          data?.cancelReason ||
+          data?.reason ||
+          ''
+        ).trim();
         return {
           cancel: true,
           cancelledAt: data?.cancelledAt || Date.now(),
+          cancellationReason,
+          cancelReason: cancellationReason,
+          reason: cancellationReason,
         };
       }
 
@@ -192,6 +218,7 @@ export async function prepareSyncRequestData(
         arId: resolvedArId,
         amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
         method: data.method || data.paymentMethod,
+        treasuryAccountId: data.treasuryAccountId || null,
         transferBankName: data.transferBankName || null,
         note: data.note || data.notes || null,
       };
@@ -217,6 +244,7 @@ export async function prepareSyncRequestData(
         arIds: resolvedArIds,
         amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
         method: data.method || data.paymentMethod,
+        treasuryAccountId: data.treasuryAccountId || null,
         transferBankName: data.transferBankName || null,
         note: data.note || data.notes || null,
       };
@@ -276,6 +304,8 @@ export async function prepareSyncRequestData(
       return {
         supplierId: resolvedSupplierId,
         supplierName: data?.supplierName ? String(data.supplierName).trim() : null,
+        paymentMethod: data?.paymentMethod ? String(data.paymentMethod).trim().toUpperCase() : null,
+        treasuryAccountId: data?.treasuryAccountId ? String(data.treasuryAccountId).trim() : null,
         notes: data?.notes ? String(data.notes).trim() : null,
         updateProductCost: data?.updateProductCost !== false,
         updateProductPrice: data?.updateProductPrice !== false,
@@ -369,6 +399,8 @@ export async function prepareSyncRequestData(
           description: String(data?.description || '').trim(),
           amountCents: Number(data?.amountCents || 0),
           expenseDate,
+          paymentMethod: data?.paymentMethod ? String(data.paymentMethod).trim().toUpperCase() : 'EFECTIVO',
+          treasuryAccountId: data?.treasuryAccountId ? String(data.treasuryAccountId).trim() : null,
           category: data?.category ? String(data.category).trim() : null,
           notes: data?.notes ? String(data.notes).trim() : null,
         };
@@ -580,6 +612,8 @@ export async function prepareSyncRequestData(
           salePricesIncludeItbis:
             typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
           items: returnItems,
+          refundMethod: data?.refundMethod ? String(data.refundMethod).trim().toUpperCase() : undefined,
+          refundTreasuryAccountId: data?.refundTreasuryAccountId ? String(data.refundTreasuryAccountId).trim() : undefined,
           notes: data?.notes ? String(data.notes).trim() : null,
         };
       }

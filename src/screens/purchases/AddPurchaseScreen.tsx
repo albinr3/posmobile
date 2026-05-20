@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, ScrollView, Alert, TouchableOpacity } from 'react-native';
 import { TextInput, Button, Text, Menu, Icon, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -11,6 +11,10 @@ import { syncService } from '../../services/sync/SyncService';
 import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { getSalesSettings } from '../../services/settings/salesSettings';
+import { listTreasuryAccounts } from '../../services/treasury/treasuryService';
+import { TreasuryAccount } from '../../types';
+import { filterTreasuryAccountsByMethod, findTreasuryAccountById } from '../../utils/treasury';
+import { useTreasuryUIStore } from '../../store/treasuryUIStore';
 
 interface AddPurchaseScreenProps {
   navigation: any;
@@ -237,6 +241,11 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const [suppliers, setSuppliers] = useState<SupplierOption[]>([]);
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [supplierMenuVisible, setSupplierMenuVisible] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<'EFECTIVO' | 'TRANSFERENCIA' | 'TARJETA' | 'OTRO'>('EFECTIVO');
+  const [paymentMethodMenuVisible, setPaymentMethodMenuVisible] = useState(false);
+  const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
+  const [treasuryAccountId, setTreasuryAccountId] = useState<string | null>(null);
+  const [treasuryMenuVisible, setTreasuryMenuVisible] = useState(false);
   const [productSearchQuery, setProductSearchQuery] = useState('');
   const [persistedLocalId, setPersistedLocalId] = useState<string | null>(null);
   const [persistedServerId, setPersistedServerId] = useState<string | null>(null);
@@ -247,6 +256,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const { getToken } = useAuth();
   const { subUserToken, accountId } = useAuthStore();
   const { isOnline } = useSyncStore();
+  const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
+  const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
   const isOnlineRef = useRef(isOnline);
   const getTokenRef = useRef(getToken);
   const subUserTokenRef = useRef(subUserToken);
@@ -255,6 +266,22 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   getTokenRef.current = getToken;
   subUserTokenRef.current = subUserToken;
   accountIdRef.current = accountId;
+
+  useEffect(() => {
+    const created = consumeLastCreatedAccountId();
+    if (created) {
+      setTreasuryAccountId(created);
+    }
+  }, [consumeLastCreatedAccountId]);
+
+  useEffect(() => {
+    if (!treasuryAccounts.length) return;
+    const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod);
+    const selected = findTreasuryAccountById(allowed, treasuryAccountId);
+    if (!selected) {
+      setTreasuryAccountId(allowed[0]?.localId || null);
+    }
+  }, [paymentMethod, treasuryAccountId, treasuryAccounts]);
 
   const resolveLocalProductId = useCallback(
     (
@@ -361,6 +388,12 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
     setSuppliers(nextSuppliers);
     setProducts(nextProducts);
+    try {
+      const nextTreasuryAccounts = await listTreasuryAccounts(false);
+      setTreasuryAccounts(nextTreasuryAccounts);
+    } catch {
+      setTreasuryAccounts([]);
+    }
 
     return {
       suppliers: nextSuppliers,
@@ -414,6 +447,9 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       setSupplierId(matchedSupplier?.id || null);
       setSupplierName(matchedSupplier?.name || supplierNameFromPayload);
       setNotes(asString(parsed?.notes) || '');
+      const parsedPaymentMethod = String(parsed?.paymentMethod || 'EFECTIVO').toUpperCase();
+      setPaymentMethod(parsedPaymentMethod === 'TRANSFERENCIA' ? 'TRANSFERENCIA' : parsedPaymentMethod === 'TARJETA' ? 'TARJETA' : parsedPaymentMethod === 'OTRO' ? 'OTRO' : 'EFECTIVO');
+      setTreasuryAccountId(asString(parsed?.treasuryAccountId));
       setUpdateProductCost(asBoolean(parsed?.updateProductCost, true));
       setUpdateProductPrice(asBoolean(parsed?.updateProductPrice, true));
 
@@ -881,6 +917,11 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       return;
     }
 
+    if ((paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && !treasuryAccountId) {
+      Alert.alert('Error', 'Debes seleccionar una cuenta de tesorería.');
+      return;
+    }
+
     setLoading(true);
     try {
       const now = Date.now();
@@ -927,6 +968,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         supplierId: selectedSupplier.id,
         supplierServerId: selectedSupplier.serverId,
         supplierName: selectedSupplier.name,
+        paymentMethod,
+        treasuryAccountId: treasuryAccountId || null,
         notes: notes.trim() || null,
         totalCents: computedTotalCents,
         purchasedAt,
@@ -945,6 +988,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       const rowPatch = {
         server_id: serverId,
         supplier_name: selectedSupplier.name,
+        treasury_account_id: treasuryAccountId || null,
         total_cents: computedTotalCents,
         purchased_at: purchasedAt,
         cancelled_at: cancelledAt,
@@ -966,6 +1010,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         supplierId: selectedSupplier.id,
         supplierServerId: selectedSupplier.serverId,
         supplierName: selectedSupplier.name,
+        paymentMethod,
+        treasuryAccountId: treasuryAccountId || null,
         notes: notes.trim() || null,
         updateProductCost,
         updateProductPrice,
@@ -1084,6 +1130,68 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
                 }}
               />
             ))}
+          </Menu>
+
+          <Text style={styles.switchLabel}>Método de pago</Text>
+          <Menu
+            visible={paymentMethodMenuVisible}
+            onDismiss={() => setPaymentMethodMenuVisible(false)}
+            anchor={
+              <TouchableOpacity style={styles.selectLike} onPress={() => setPaymentMethodMenuVisible(true)}>
+                <Text style={styles.selectLikeText}>{paymentMethod}</Text>
+                <Icon source="chevron-down" size={18} color="#6B7280" />
+              </TouchableOpacity>
+            }
+          >
+            {['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'OTRO'].map((method) => (
+              <Menu.Item
+                key={method}
+                title={method}
+                onPress={() => {
+                  setPaymentMethod(method as any);
+                  setPaymentMethodMenuVisible(false);
+                }}
+              />
+            ))}
+          </Menu>
+
+          <Text style={styles.switchLabel}>Cuenta de tesorería</Text>
+          <Menu
+            visible={treasuryMenuVisible}
+            onDismiss={() => setTreasuryMenuVisible(false)}
+            anchor={
+              <TouchableOpacity style={styles.selectLike} onPress={() => setTreasuryMenuVisible(true)}>
+                <Text style={styles.selectLikeText}>
+                  {findTreasuryAccountById(
+                    filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), paymentMethod),
+                    treasuryAccountId
+                  )?.name || 'Seleccionar cuenta'}
+                </Text>
+                <Icon source="chevron-down" size={18} color="#6B7280" />
+              </TouchableOpacity>
+            }
+          >
+            {filterTreasuryAccountsByMethod(
+              treasuryAccounts.filter((account) => account.isActive),
+              paymentMethod
+            ).map((account) => (
+              <Menu.Item
+                key={account.localId}
+                title={account.name}
+                onPress={() => {
+                  setTreasuryAccountId(account.localId);
+                  setTreasuryMenuVisible(false);
+                }}
+              />
+            ))}
+            <Menu.Item
+              title="+ Crear nueva cuenta"
+              onPress={() => {
+                requestCreateAccountModal(paymentMethod === 'EFECTIVO' ? 'CAJA' : paymentMethod === 'TRANSFERENCIA' ? 'BANCO' : null);
+                setTreasuryMenuVisible(false);
+                navigation.navigate('TreasuryMenu', { screen: 'Treasury' });
+              }}
+            />
           </Menu>
 
           <TextInput

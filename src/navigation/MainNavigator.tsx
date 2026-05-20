@@ -58,6 +58,7 @@ import { CreateReturnScreen } from '../screens/returns/CreateReturnScreen';
 import { ReturnReceiptScreen } from '../screens/returns/ReturnReceiptScreen';
 import { InvoiceListScreen } from '../screens/billing/InvoiceListScreen';
 import { BillingPlansScreen } from '../screens/billing/BillingPlansScreen';
+import { TreasuryScreen } from '../screens/treasury/TreasuryScreen';
 
 const Drawer = createDrawerNavigator();
 const Tab = createBottomTabNavigator();
@@ -87,6 +88,7 @@ const DRAWER_ENTRIES = [
   { key: 'reports_menu', label: 'Reportes', icon: 'chart-box-outline' },
   { key: 'shipping_labels', label: 'Etiquetas de envío', icon: 'truck-outline' },
   { key: 'operating_expenses', label: 'Gastos operativos', icon: 'currency-usd' },
+  { key: 'treasury', label: 'Tesorería', icon: 'bank-outline' },
   { key: 'billing_plans', label: 'Planes y facturación', icon: 'wallet-outline' },
   { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
   { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
@@ -137,6 +139,7 @@ const CreateReturnScreenWithBoundary = withScreenBoundary(CreateReturnScreen, 'C
 const ReturnReceiptScreenWithBoundary = withScreenBoundary(ReturnReceiptScreen, 'ReturnReceiptScreen');
 const InvoiceListScreenWithBoundary = withScreenBoundary(InvoiceListScreen, 'InvoiceListScreen');
 const BillingPlansScreenWithBoundary = withScreenBoundary(BillingPlansScreen, 'BillingPlansScreen');
+const TreasuryScreenWithBoundary = withScreenBoundary(TreasuryScreen, 'TreasuryScreen');
 const DashboardScreenWithBoundary = withScreenBoundary(DashboardScreen, 'DashboardScreen');
 const DailyCloseScreenWithBoundary = withScreenBoundary(DailyCloseScreen, 'DailyCloseScreen');
 const ReportsMenuScreenWithBoundary = withScreenBoundary(ReportsMenuScreen, 'ReportsMenuScreen');
@@ -312,6 +315,14 @@ function ReportsStack() {
       <Stack.Screen name="ProfitReport" component={ProfitReportScreenWithBoundary} />
       <Stack.Screen name="InventoryReport" component={InventoryReportScreenWithBoundary} />
       <Stack.Screen name="OperatingExpensesReport" component={OperatingExpensesReportScreenWithBoundary} />
+    </Stack.Navigator>
+  );
+}
+
+function TreasuryStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="Treasury" component={TreasuryScreenWithBoundary} />
     </Stack.Navigator>
   );
 }
@@ -495,6 +506,10 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       (props.navigation as any).navigate('ARMenu', { screen: 'ARList' });
       return;
     }
+    if (key === 'treasury') {
+      (props.navigation as any).navigate('TreasuryMenu', { screen: 'Treasury' });
+      return;
+    }
     (props.navigation as any).navigate('FeaturePlaceholder', { title: label });
   };
 
@@ -579,7 +594,8 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'billing' && currentRoute === 'BillingMenu') ||
             (item.key === 'payment_receipts' && currentRoute === 'PaymentReceiptsMenu') ||
             (item.key === 'operating_expenses' && currentRoute === 'OperatingExpensesMenu') ||
-            (item.key === 'ar' && currentRoute === 'ARMenu');
+            (item.key === 'ar' && currentRoute === 'ARMenu') ||
+            (item.key === 'treasury' && currentRoute === 'TreasuryMenu');
 
           return (
             <TouchableOpacity
@@ -775,6 +791,7 @@ export function MainNavigator() {
           <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
           <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
           <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
+          <Drawer.Screen name="TreasuryMenu" component={TreasuryStack} options={{ title: 'Tesorería' }} />
           <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
           <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
           <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
