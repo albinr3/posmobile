@@ -77,9 +77,21 @@ export function TreasuryScreen() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [dashboard, accountList] = await Promise.all([getTreasuryDashboard(), listTreasuryAccounts(true)]);
+      const [dashboard, accountList] = await Promise.all([
+        getTreasuryDashboard({ fromMs: 0, toMs: Date.now() }),
+        listTreasuryAccounts(true),
+      ]);
       setMovements(dashboard.movements);
-      setTotals(dashboard.totals);
+      const accumulatedTotals = dashboard.accounts.reduce(
+        (acc, account) => {
+          acc.inCents += Number(account.inCents || 0);
+          acc.outCents += Number(account.outCents || 0);
+          acc.balanceCents += Number(account.balanceCents || 0);
+          return acc;
+        },
+        { inCents: 0, outCents: 0, balanceCents: 0 }
+      );
+      setTotals(accumulatedTotals);
       setAccounts(accountList);
       setAccountBalanceById(
         dashboard.accounts.reduce<Record<string, number>>((acc, account) => {
@@ -376,7 +388,7 @@ export function TreasuryScreen() {
         ) : null}
 
         <Surface style={styles.section}>
-          <Text style={styles.sectionTitle}>Últimos 10 movimientos del período</Text>
+          <Text style={styles.sectionTitle}>Últimos 10 movimientos</Text>
           {!recentMovements.length ? (
             <Text style={styles.emptyText}>No hay movimientos para este período</Text>
           ) : (
