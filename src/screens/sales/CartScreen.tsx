@@ -69,6 +69,10 @@ const parseDiscountPercentInput = (rawInput: string): { valueBp: number | null; 
 };
 
 const normalizeMethod = (value: unknown): string => String(value || '').trim().toUpperCase();
+const DEFAULT_CASH_ACCOUNT_NAME = 'caja efectivo';
+
+const normalizeAccountName = (value: unknown): string =>
+  String(value || '').trim().toLocaleLowerCase('es');
 
 export function CartScreen({ navigation, route }: CartScreenProps) {
   const insets = useSafeAreaInsets();
@@ -624,6 +628,54 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     [paymentMethod, treasuryAccounts]
   );
 
+  const pickDefaultTreasuryAccountByMethod = useCallback(
+    (method: string): TreasuryAccount | null => {
+      const allowed = filterTreasuryAccountsByMethod(
+        treasuryAccounts.filter((account) => account.isActive),
+        method
+      );
+      if (allowed.length === 0) return null;
+      if (normalizeMethod(method) !== 'EFECTIVO') return allowed[0] || null;
+
+      const candidates = allowed.filter(
+        (account) =>
+          account.type === 'CAJA' && normalizeAccountName(account.name) === DEFAULT_CASH_ACCOUNT_NAME
+      );
+      if (candidates.length === 0) return allowed[0] || null;
+      const sortedCandidates = [...candidates].sort((a, b) => {
+        const aServerRank = a.serverId ? 0 : 1;
+        const bServerRank = b.serverId ? 0 : 1;
+        if (aServerRank !== bServerRank) return aServerRank - bServerRank;
+        const aActiveRank = a.isActive ? 0 : 1;
+        const bActiveRank = b.isActive ? 0 : 1;
+        if (aActiveRank !== bActiveRank) return aActiveRank - bActiveRank;
+        return a.createdAt - b.createdAt;
+      });
+      return sortedCandidates[0] || null;
+    },
+    [treasuryAccounts]
+  );
+
+  useEffect(() => {
+    if (normalizeMethod(paymentMethod) !== 'EFECTIVO') return;
+    const allowed = filterTreasuryAccountsByMethod(
+      treasuryAccounts.filter((account) => account.isActive),
+      paymentMethod
+    );
+    const currentAccount = findTreasuryAccountById(allowed, treasuryAccountId);
+    if (currentAccount) return;
+    const preferred = pickDefaultTreasuryAccountByMethod('EFECTIVO');
+    if (preferred?.localId) {
+      setTreasuryAccountId(preferred.localId);
+    }
+  }, [
+    paymentMethod,
+    pickDefaultTreasuryAccountByMethod,
+    setTreasuryAccountId,
+    treasuryAccountId,
+    treasuryAccounts,
+  ]);
+
   const handlePaymentMethodSelect = (nextMethod: string) => {
     setPaymentMethod(nextMethod);
     if (nextMethod !== 'TRANSFERENCIA') {
@@ -632,11 +684,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     if (nextMethod === 'EFECTIVO' || nextMethod === 'TRANSFERENCIA') {
       const allowed = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), nextMethod);
       const currentAccount = findTreasuryAccountById(allowed, treasuryAccountId);
+      const preferred = pickDefaultTreasuryAccountByMethod(nextMethod);
       if (!currentAccount) {
-        setTreasuryAccountId(allowed[0]?.localId || null);
+        setTreasuryAccountId(preferred?.localId || null);
       }
       if (nextMethod === 'TRANSFERENCIA') {
-        const selected = currentAccount || allowed[0] || null;
+        const selected = currentAccount || preferred;
         if (selected) {
           setTransferBankName(getAccountTransferBankName(selected));
         }
@@ -651,14 +704,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   };
 
   const addPaymentSplit = () => {
-    const defaultAccounts = filterTreasuryAccountsByMethod(treasuryAccounts.filter((account) => account.isActive), 'EFECTIVO');
+    const defaultAccount = pickDefaultTreasuryAccountByMethod('EFECTIVO');
     setPaymentSplits([
       ...paymentSplits,
       {
         method: 'EFECTIVO',
         amountCents: 0,
         transferBankName: null,
-        treasuryAccountId: defaultAccounts[0]?.localId || null,
+        treasuryAccountId: defaultAccount?.localId || null,
       },
     ]);
   };
@@ -676,10 +729,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             treasuryAccounts.filter((account) => account.isActive),
             patch.method
           );
+          const preferred = pickDefaultTreasuryAccountByMethod(patch.method);
           const selected = findTreasuryAccountById(allowed, nextSplit.treasuryAccountId);
-          nextSplit.treasuryAccountId = selected?.localId || allowed[0]?.localId || null;
+          nextSplit.treasuryAccountId = selected?.localId || preferred?.localId || null;
           if (patch.method === 'TRANSFERENCIA') {
-            const transferAccount = selected || allowed[0] || null;
+            const transferAccount = selected || preferred;
             nextSplit.transferBankName = transferAccount ? getAccountTransferBankName(transferAccount) : null;
           }
         }

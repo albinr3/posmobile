@@ -2,6 +2,8 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { Button, Divider, Menu, Modal, Portal, Surface, Text, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
+import NetInfo from '@react-native-community/netinfo';
+import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { ui } from '../../theme/ui';
 import {
@@ -13,9 +15,11 @@ import {
   previewTreasuryTransfer,
   reverseTreasuryTransfer,
 } from '../../services/treasury/treasuryService';
+import { syncService } from '../../services/sync/SyncService';
 import { TreasuryAccount, TreasuryMovement } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { useTreasuryUIStore } from '../../store/treasuryUIStore';
+import { useAuthStore } from '../../store/authStore';
 
 type TransferDraft = {
   fromTreasuryAccountId: string;
@@ -36,9 +40,12 @@ function formatDateTime(valueMs: number): string {
 }
 
 export function TreasuryScreen() {
+  const { getToken } = useAuth();
+  const subUserToken = useAuthStore((state) => state.subUserToken);
   const [loading, setLoading] = useState(false);
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([]);
   const [movements, setMovements] = useState<TreasuryMovement[]>([]);
+  const [accountBalanceById, setAccountBalanceById] = useState<Record<string, number>>({});
   const [totals, setTotals] = useState({ inCents: 0, outCents: 0, balanceCents: 0 });
   const [transferDraft, setTransferDraft] = useState<TransferDraft>({
     fromTreasuryAccountId: '',
@@ -72,6 +79,12 @@ export function TreasuryScreen() {
       setMovements(dashboard.movements);
       setTotals(dashboard.totals);
       setAccounts(accountList);
+      setAccountBalanceById(
+        dashboard.accounts.reduce<Record<string, number>>((acc, account) => {
+          acc[account.id] = account.balanceCents;
+          return acc;
+        }, {})
+      );
     } catch (error: any) {
       Alert.alert('Tesorería', error?.message || 'No se pudo cargar tesorería');
     } finally {
@@ -81,13 +94,38 @@ export function TreasuryScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      void loadData();
+      let active = true;
+      const autoRefreshOnEnter = async () => {
+        await loadData();
+        if (!active || !subUserToken) return;
+        try {
+          const netInfo = await NetInfo.fetch();
+          const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+          if (!hasInternet || !active) return;
+
+          const clerkToken = await getToken();
+          if (!clerkToken || !active) return;
+
+          syncService.setTokenGetter(() => getToken());
+          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+        } catch (error) {
+          console.error('[TreasuryScreen] auto refresh on enter failed:', error);
+        }
+        if (!active) return;
+        await loadData();
+      };
+
+      void autoRefreshOnEnter();
       const openRequest = consumeCreateAccountModalRequest();
       if (openRequest.open) {
         setAccountType(openRequest.preferredType === 'CAJA' ? 'CAJA' : 'BANCO');
         setCreateModalVisible(true);
       }
-    }, [consumeCreateAccountModalRequest, loadData])
+      return () => {
+        active = false;
+      };
+    }, [consumeCreateAccountModalRequest, getToken, loadData, subUserToken])
   );
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.isActive), [accounts]);
@@ -223,11 +261,7 @@ export function TreasuryScreen() {
                 </Text>
               </View>
               <Text style={styles.balanceValue}>
-                {formatCurrency(
-                  movements
-                    .filter((movement) => movement.treasuryAccountId === account.localId)
-                    .reduce((sum, movement) => sum + (movement.direction === 'IN' ? movement.amountCents : -movement.amountCents), 0)
-                )}
+                {formatCurrency(accountBalanceById[account.localId] || 0)}
               </Text>
             </View>
           ))}
@@ -500,4 +534,3 @@ const styles = StyleSheet.create({
   modalTitle: { color: ui.colors.text, fontSize: 17, fontWeight: '800' },
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 12 },
 });
-
