@@ -617,6 +617,137 @@ export async function prepareSyncRequestData(
           notes: data?.notes ? String(data.notes).trim() : null,
         };
       }
+    case 'treasury_account':
+      {
+        if (action === 'delete') return {};
+        const name = String(data?.name || '').trim();
+        const type = String(data?.type || '').trim().toUpperCase();
+        if (!name) throw new Error('Cuenta de tesorería sin nombre');
+        if (type !== 'CAJA' && type !== 'BANCO') {
+          throw new Error('Tipo de cuenta de tesorería inválido');
+        }
+        return {
+          name,
+          type,
+          currency: String(data?.currency || 'DOP').trim() || 'DOP',
+          bankName: data?.bankName ? String(data.bankName).trim() : null,
+          accountNumber: data?.accountNumber ? String(data.accountNumber).trim() : null,
+          isActive: typeof data?.isActive === 'boolean' ? data.isActive : true,
+        };
+      }
+    case 'treasury_opening_balance':
+      {
+        if (action === 'delete') return {};
+        const rawAccountId = String(data?.treasuryAccountId || '').trim();
+        if (!rawAccountId) throw new Error('Saldo inicial sin cuenta de tesorería');
+        const account = await db.queryFirst<{ server_id?: string }>(
+          'SELECT server_id FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [rawAccountId, rawAccountId]
+        );
+        const treasuryAccountId = String(account?.server_id || '').trim();
+        if (!treasuryAccountId) {
+          throw new Error(`Cuenta de tesorería sin server_id: ${rawAccountId}`);
+        }
+
+        const amountCents = Number(data?.amountCents ?? data?.amount_cents ?? 0);
+        if (!Number.isInteger(amountCents)) {
+          throw new Error('Saldo inicial inválido para tesorería');
+        }
+
+        const effectiveAtRaw = data?.effectiveAt ?? data?.effectiveAtMs ?? data?.effective_at ?? data?.createdAt ?? Date.now();
+        const effectiveAtDate =
+          typeof effectiveAtRaw === 'number'
+            ? new Date(effectiveAtRaw)
+            : effectiveAtRaw instanceof Date
+              ? effectiveAtRaw
+              : new Date(String(effectiveAtRaw));
+        if (Number.isNaN(effectiveAtDate.getTime())) {
+          throw new Error('Fecha de saldo inicial inválida');
+        }
+
+        return {
+          treasuryAccountId,
+          amountCents,
+          effectiveAt: effectiveAtDate.toISOString(),
+          note: data?.note ? String(data.note).trim() : null,
+        };
+      }
+    case 'treasury_transfer':
+      {
+        if (action === 'delete') return {};
+        const rawFromId = String(data?.fromTreasuryAccountId || '').trim();
+        const rawToId = String(data?.toTreasuryAccountId || '').trim();
+        if (!rawFromId || !rawToId) throw new Error('Transferencia de tesorería incompleta');
+
+        const [fromAccount, toAccount] = await Promise.all([
+          db.queryFirst<{ server_id?: string }>(
+            'SELECT server_id FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [rawFromId, rawFromId]
+          ),
+          db.queryFirst<{ server_id?: string }>(
+            'SELECT server_id FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [rawToId, rawToId]
+          ),
+        ]);
+
+        const fromTreasuryAccountId = String(fromAccount?.server_id || '').trim();
+        const toTreasuryAccountId = String(toAccount?.server_id || '').trim();
+        if (!fromTreasuryAccountId) throw new Error(`Cuenta origen de tesorería sin server_id: ${rawFromId}`);
+        if (!toTreasuryAccountId) throw new Error(`Cuenta destino de tesorería sin server_id: ${rawToId}`);
+
+        const amountCents = Number(data?.amountCents ?? data?.amount_cents ?? 0);
+        if (!Number.isInteger(amountCents) || amountCents <= 0) {
+          throw new Error('Monto de transferencia de tesorería inválido');
+        }
+
+        const transferredAtRaw = data?.transferredAt ?? data?.transferredAtMs ?? data?.transferred_at ?? data?.createdAt ?? Date.now();
+        const transferredAtDate =
+          typeof transferredAtRaw === 'number'
+            ? new Date(transferredAtRaw)
+            : transferredAtRaw instanceof Date
+              ? transferredAtRaw
+              : new Date(String(transferredAtRaw));
+        if (Number.isNaN(transferredAtDate.getTime())) {
+          throw new Error('Fecha de transferencia de tesorería inválida');
+        }
+
+        return {
+          fromTreasuryAccountId,
+          toTreasuryAccountId,
+          amountCents,
+          transferredAt: transferredAtDate.toISOString(),
+          note: data?.note ? String(data.note).trim() : null,
+        };
+      }
+    case 'treasury_transfer_reverse':
+      {
+        if (action === 'delete') return {};
+        const rawTransferId = String(data?.transferId || '').trim();
+        if (!rawTransferId) throw new Error('Reverso de tesorería sin transferencia');
+        const transfer = await db.queryFirst<{ server_id?: string }>(
+          'SELECT server_id FROM treasury_transfers WHERE local_id = ? OR server_id = ? LIMIT 1',
+          [rawTransferId, rawTransferId]
+        );
+        const transferId = String(transfer?.server_id || '').trim();
+        if (!transferId) throw new Error(`Transferencia de tesorería sin server_id: ${rawTransferId}`);
+        const reason = String(data?.reason || '').trim();
+        if (!reason) throw new Error('Reverso de tesorería sin motivo');
+        const reversedAtRaw = data?.reversedAt ?? data?.reversedAtMs ?? data?.createdAt ?? Date.now();
+        const reversedAtDate =
+          typeof reversedAtRaw === 'number'
+            ? new Date(reversedAtRaw)
+            : reversedAtRaw instanceof Date
+              ? reversedAtRaw
+              : new Date(String(reversedAtRaw));
+        if (Number.isNaN(reversedAtDate.getTime())) {
+          throw new Error('Fecha de reverso de tesorería inválida');
+        }
+        return {
+          transferId,
+          reason,
+          reversedAt: reversedAtDate.toISOString(),
+        };
+      }
     default:
       return data;
   }

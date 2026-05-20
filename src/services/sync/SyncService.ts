@@ -611,6 +611,78 @@ class SyncService {
       return;
     }
 
+    if (item.action === 'create' && item.entity_type === 'treasury_transfer_reverse') {
+      const originalServerId =
+        response.data?.originalId ||
+        response.data?.data?.originalId ||
+        null;
+      const reverseServerId =
+        response.data?.reverseId ||
+        response.data?.data?.reverseId ||
+        response.data?.id ||
+        response.data?.data?.id ||
+        null;
+
+      const reverseLocalId = String(data?.reverseLocalId || '').trim();
+      if (reverseServerId && reverseLocalId) {
+        const reverseRow = await db.queryFirst<any>(
+          'SELECT data FROM treasury_transfers WHERE local_id = ? LIMIT 1',
+          [reverseLocalId]
+        );
+        let parsedReverseData: any = {};
+        try {
+          parsedReverseData = reverseRow?.data ? JSON.parse(reverseRow.data) : {};
+        } catch {
+          parsedReverseData = {};
+        }
+        await db.update(
+          'treasury_transfers',
+          reverseLocalId,
+          {
+            server_id: String(reverseServerId),
+            synced: 1,
+            data: JSON.stringify({
+              ...parsedReverseData,
+              id: String(reverseServerId),
+              serverId: String(reverseServerId),
+              ...(originalServerId ? { reversesTransferId: String(originalServerId) } : {}),
+            }),
+          },
+          'local_id'
+        );
+      }
+
+      const originalLocalId = String(item.entity_local_id || '').trim();
+      if (originalLocalId) {
+        const originalRow = await db.queryFirst<any>(
+          'SELECT data FROM treasury_transfers WHERE local_id = ? LIMIT 1',
+          [originalLocalId]
+        );
+        let parsedOriginalData: any = {};
+        try {
+          parsedOriginalData = originalRow?.data ? JSON.parse(originalRow.data) : {};
+        } catch {
+          parsedOriginalData = {};
+        }
+        await db.update(
+          'treasury_transfers',
+          originalLocalId,
+          {
+            ...(originalServerId ? { server_id: String(originalServerId) } : {}),
+            status: 'REVERSED',
+            synced: 1,
+            data: JSON.stringify({
+              ...parsedOriginalData,
+              ...(originalServerId ? { id: String(originalServerId), serverId: String(originalServerId) } : {}),
+              status: 'REVERSED',
+            }),
+          },
+          'local_id'
+        );
+      }
+      return;
+    }
+
     // Actualizar estado local después de sincronizar
     if (item.action === 'create') {
       const createdId =
@@ -731,6 +803,17 @@ class SyncService {
               }),
             }
           : {}),
+        ...(item.entity_type === 'treasury_account' ||
+        item.entity_type === 'treasury_opening_balance' ||
+        item.entity_type === 'treasury_transfer'
+          ? {
+              data: JSON.stringify({
+                ...(data || {}),
+                id: createdId,
+                serverId: createdId,
+              }),
+            }
+          : {}),
       }, 'local_id');
 
       if (item.entity_type === 'return') {
@@ -754,6 +837,12 @@ class SyncService {
         });
       }
       if (item.entity_type === 'purchase') {
+        updatePatch.data = JSON.stringify({
+          ...(data || {}),
+          ...(data?.id ? { serverId: data.id } : {}),
+        });
+      }
+      if (item.entity_type === 'treasury_account') {
         updatePatch.data = JSON.stringify({
           ...(data || {}),
           ...(data?.id ? { serverId: data.id } : {}),
@@ -1064,7 +1153,9 @@ class SyncService {
       (typeof error?.message === 'string' &&
         (error.message.includes('Producto sin server_id') ||
           error.message.includes('Item de venta sin server_id') ||
-          error.message.includes('Venta sin server_id para devolución'))) ||
+          error.message.includes('Venta sin server_id para devolución') ||
+          error.message.includes('Cuenta de tesorería sin server_id') ||
+          error.message.includes('Transferencia de tesorería sin server_id'))) ||
       (axios.isAxiosError(error) &&
         String(error.response?.data?.error || '').includes('Item de venta no encontrado'));
     if (dependencyError) {
@@ -1199,6 +1290,53 @@ class SyncService {
       );
     if (returnBusinessRejected) {
       await this.rejectReturnLocally(item, backendErrorRaw || 'Devolucion rechazada por backend');
+      return false;
+    }
+
+    const isTreasuryReverseCreate = item?.entity_type === 'treasury_transfer_reverse' && item?.action === 'create';
+    const treasuryReverseAlreadyApplied =
+      isTreasuryReverseCreate &&
+      axios.isAxiosError(error) &&
+      backendStatus === 400 &&
+      (backendErrorMessage.includes('ya fue reversada') || backendErrorMessage.includes('ya es reverso'));
+    if (treasuryReverseAlreadyApplied) {
+      const now = Date.now();
+      const payload = (() => {
+        try {
+          return item?.data ? JSON.parse(item.data) : {};
+        } catch {
+          return {};
+        }
+      })();
+      const reverseLocalId = String(payload?.reverseLocalId || '').trim();
+      const originalLocalId = String(item?.entity_local_id || '').trim();
+      if (reverseLocalId) {
+        await db.update(
+          'treasury_transfers',
+          reverseLocalId,
+          { synced: 1 },
+          'local_id'
+        );
+      }
+      if (originalLocalId) {
+        await db.update(
+          'treasury_transfers',
+          originalLocalId,
+          { synced: 1, status: 'REVERSED' },
+          'local_id'
+        );
+      }
+      await db.update(
+        'sync_queue',
+        item.id,
+        {
+          status: 'synced',
+          synced_at: now,
+          next_attempt_at: null,
+          last_error_code: null,
+        },
+        'id'
+      );
       return false;
     }
 
@@ -1489,6 +1627,10 @@ class SyncService {
       'payment_batch': 'payments/batch',
       'purchase': 'purchases',
       'operating_expense': 'operating-expenses',
+      'treasury_account': 'treasury/accounts',
+      'treasury_opening_balance': 'treasury/opening-balances',
+      'treasury_transfer': 'treasury/transfers',
+      'treasury_transfer_reverse': 'treasury/transfers/reverse',
     };
     return endpoints[entityType] || entityType;
   }
@@ -1506,6 +1648,10 @@ class SyncService {
       'payment_batch': 'payments',
       'purchase': 'purchases',
       'operating_expense': 'operating_expenses',
+      'treasury_account': 'treasury_accounts',
+      'treasury_opening_balance': 'treasury_opening_balances',
+      'treasury_transfer': 'treasury_transfers',
+      'treasury_transfer_reverse': 'treasury_transfers',
     };
     return tables[entityType] || entityType;
   }
@@ -1525,8 +1671,6 @@ class SyncService {
 }
 
 export const syncService = new SyncService();
-
-
 
 
 

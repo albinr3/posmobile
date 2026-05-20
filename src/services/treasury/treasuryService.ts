@@ -1,5 +1,6 @@
 import { db } from '../../database/Database';
 import { useAuthStore } from '../../store/authStore';
+import { syncService } from '../sync/SyncService';
 import {
   TreasuryAccount,
   TreasuryAccountType,
@@ -311,9 +312,28 @@ export async function createTreasuryAccount(input: {
     data: JSON.stringify(payload),
   });
 
+  await syncService.queueOperation(
+    'treasury_account',
+    'create',
+    {
+      ...payload,
+      id: null,
+    },
+    localId
+  );
+
   if (openingBalanceCents > 0) {
+    const openingLocalId = generateLocalId();
+    const openingPayload = {
+      localId: openingLocalId,
+      treasuryAccountId: localId,
+      amountCents: openingBalanceCents,
+      effectiveAt: Number(input.openingBalanceDateMs || now),
+      note: 'Saldo inicial al crear cuenta',
+      createdAt: now,
+    };
     await db.insert('treasury_opening_balances', {
-      local_id: generateLocalId(),
+      local_id: openingLocalId,
       server_id: null,
       treasury_account_id: localId,
       amount_cents: openingBalanceCents,
@@ -322,14 +342,14 @@ export async function createTreasuryAccount(input: {
       created_by_user_id: useAuthStore.getState().subUser?.id || null,
       created_at: now,
       synced: 0,
-      data: JSON.stringify({
-        treasuryAccountId: localId,
-        amountCents: openingBalanceCents,
-        effectiveAt: Number(input.openingBalanceDateMs || now),
-        note: 'Saldo inicial al crear cuenta',
-        createdAt: now,
-      }),
+      data: JSON.stringify(openingPayload),
     });
+    await syncService.queueOperation(
+      'treasury_opening_balance',
+      'create',
+      openingPayload,
+      openingLocalId
+    );
   }
 
   const created = await db.queryFirst<any>('SELECT * FROM treasury_accounts WHERE local_id = ? LIMIT 1', [localId]);
@@ -387,6 +407,52 @@ export async function updateTreasuryAccount(input: {
     data: JSON.stringify(nextPayload),
   });
 
+  if (row.server_id) {
+    await syncService.queueOperation(
+      'treasury_account',
+      'update',
+      {
+        ...nextPayload,
+        id: String(row.server_id),
+      },
+      String(row.local_id)
+    );
+  } else {
+    const pendingCreate = await db.queryFirst<{ id?: number }>(
+      `SELECT id
+       FROM sync_queue
+       WHERE entity_type = 'treasury_account'
+         AND entity_local_id = ?
+         AND action = 'create'
+         AND status IN ('pending', 'syncing')
+       LIMIT 1`,
+      [String(row.local_id)]
+    );
+    if (pendingCreate?.id) {
+      await db.update(
+        'sync_queue',
+        String(pendingCreate.id),
+        {
+          data: JSON.stringify({
+            ...nextPayload,
+            id: null,
+          }),
+        },
+        'id'
+      );
+    } else {
+      await syncService.queueOperation(
+        'treasury_account',
+        'create',
+        {
+          ...nextPayload,
+          id: null,
+        },
+        String(row.local_id)
+      );
+    }
+  }
+
   const updated = await db.queryFirst<any>('SELECT * FROM treasury_accounts WHERE local_id = ? LIMIT 1', [String(row.local_id)]);
   return mapTreasuryAccountRow(updated);
 }
@@ -411,8 +477,17 @@ export async function setCashOpeningBalance(input: {
   }
 
   const now = Date.now();
+  const openingLocalId = generateLocalId();
+  const openingPayload = {
+    localId: openingLocalId,
+    treasuryAccountId: String(account.local_id),
+    amountCents: Math.round(input.amountCents),
+    effectiveAt: Number(input.effectiveAtMs || now),
+    note: input.note ? String(input.note).trim() : null,
+    createdAt: now,
+  };
   await db.insert('treasury_opening_balances', {
-    local_id: generateLocalId(),
+    local_id: openingLocalId,
     server_id: null,
     treasury_account_id: String(account.local_id),
     amount_cents: Math.round(input.amountCents),
@@ -421,14 +496,14 @@ export async function setCashOpeningBalance(input: {
     created_by_user_id: useAuthStore.getState().subUser?.id || null,
     created_at: now,
     synced: 0,
-    data: JSON.stringify({
-      treasuryAccountId: String(account.local_id),
-      amountCents: Math.round(input.amountCents),
-      effectiveAt: Number(input.effectiveAtMs || now),
-      note: input.note ? String(input.note).trim() : null,
-      createdAt: now,
-    }),
+    data: JSON.stringify(openingPayload),
   });
+  await syncService.queueOperation(
+    'treasury_opening_balance',
+    'create',
+    openingPayload,
+    openingLocalId
+  );
 }
 
 type BalanceByAccountMap = Map<string, { inCents: number; outCents: number }>;
@@ -447,6 +522,11 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
   await ensureDefaultCashTreasuryAccount();
   const accounts = await listTreasuryAccounts(true);
   const accountById = new Map(accounts.map((account) => [account.localId, account]));
+  const accountByLookupId = new Map<string, TreasuryAccount>();
+  for (const account of accounts) {
+    accountByLookupId.set(account.localId, account);
+    if (account.serverId) accountByLookupId.set(account.serverId, account);
+  }
   const movements: TreasuryMovement[] = [];
 
   const openingRows = await db.query<any>(
@@ -458,7 +538,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
   );
   for (const row of openingRows) {
     const accountId = String(row.treasury_account_id || '');
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const amountCents = Number(row.amount_cents || 0);
     const occurredAt = Number(row.effective_at || row.created_at || Date.now());
@@ -489,7 +569,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
       for (const split of paymentSplits) {
         const accountId = String(split?.treasuryAccountId || '').trim();
         if (!accountId) continue;
-        const account = accountById.get(accountId);
+        const account = accountByLookupId.get(accountId);
         if (!account) continue;
         const amountCents = Math.round(Number(split?.amountCents || 0));
         if (amountCents <= 0) continue;
@@ -518,7 +598,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
 
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const amountCents = Math.round(Number(parsed.totalCents || row.total_cents || 0));
     if (amountCents <= 0) continue;
@@ -549,7 +629,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancel === true || parsed.cancelledAt) continue;
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.paidAt ?? parsed.createdAt);
     if (occurredAt > toMs) continue;
@@ -582,7 +662,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancelledAt) continue;
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.purchasedAt ?? row.purchased_at);
     if (occurredAt > toMs) continue;
@@ -607,7 +687,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     const parsed = parseJsonSafe<any>(row.data) || {};
     const accountId = String(parsed.treasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.expenseDate ?? row.expense_date);
     if (occurredAt > toMs) continue;
@@ -633,7 +713,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     if (parsed.cancelledAt) continue;
     const accountId = String(parsed.refundTreasuryAccountId || '').trim();
     if (!accountId) continue;
-    const account = accountById.get(accountId);
+    const account = accountByLookupId.get(accountId);
     if (!account) continue;
     const occurredAt = normalizeDateMs(parsed.returnedAt ?? row.returned_at);
     if (occurredAt > toMs) continue;
@@ -672,8 +752,8 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
   for (const row of transferRows) {
     const fromAccountId = String(row.from_treasury_account_id || '');
     const toAccountId = String(row.to_treasury_account_id || '');
-    const fromAccount = accountById.get(fromAccountId);
-    const toAccount = accountById.get(toAccountId);
+    const fromAccount = accountByLookupId.get(fromAccountId);
+    const toAccount = accountByLookupId.get(toAccountId);
     if (!fromAccount || !toAccount) continue;
 
     const amountCents = Math.max(0, Math.round(Number(row.amount_cents || 0)));
@@ -831,6 +911,16 @@ export async function createTreasuryTransfer(input: {
     data: JSON.stringify(payload),
   });
 
+  await syncService.queueOperation(
+    'treasury_transfer',
+    'create',
+    {
+      ...payload,
+      id: null,
+    },
+    localId
+  );
+
   const row = await db.queryFirst<any>('SELECT * FROM treasury_transfers WHERE local_id = ? LIMIT 1', [localId]);
   return mapTreasuryTransferRow(row);
 }
@@ -945,6 +1035,18 @@ export async function reverseTreasuryTransfer(input: {
     synced: 0,
     data: JSON.stringify(nextOriginalPayload),
   });
+
+  await syncService.queueOperation(
+    'treasury_transfer_reverse',
+    'create',
+    {
+      transferId: original.localId,
+      reason,
+      reversedAt: reverseAt,
+      reverseLocalId,
+    },
+    original.localId
+  );
 
   return {
     originalId: original.localId,

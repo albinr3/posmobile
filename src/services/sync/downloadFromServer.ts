@@ -190,6 +190,119 @@ async function markMissingServerRowsAsInactive(table: 'products' | 'customers' |
   );
 }
 
+async function ensureTreasuryAccountFromServerHint(input: {
+  serverTreasuryAccountId?: string | null;
+  paymentMethod?: unknown;
+  transferBankName?: unknown;
+}): Promise<string | null> {
+  const serverTreasuryAccountId = String(input.serverTreasuryAccountId || '').trim();
+  if (!serverTreasuryAccountId) return null;
+
+  const existingById = await db.queryFirst<any>(
+    `SELECT *
+     FROM treasury_accounts
+     WHERE server_id = ? OR local_id = ?
+     LIMIT 1`,
+    [serverTreasuryAccountId, serverTreasuryAccountId]
+  );
+  if (existingById?.local_id) {
+    return String(existingById.local_id);
+  }
+
+  const method = String(input.paymentMethod || '').trim().toUpperCase();
+  const transferBankName = String(input.transferBankName || '').trim() || null;
+  const inferredType: 'BANCO' | 'CAJA' = method === 'TRANSFERENCIA' ? 'BANCO' : 'CAJA';
+  const inferredName =
+    inferredType === 'BANCO'
+      ? transferBankName || `Banco ${serverTreasuryAccountId.slice(-6).toUpperCase()}`
+      : 'Caja Efectivo';
+
+  const candidate = await db.queryFirst<any>(
+    `SELECT *
+     FROM treasury_accounts
+     WHERE type = ?
+       AND lower(name) = lower(?)
+       AND (server_id IS NULL OR server_id = '')
+     ORDER BY created_at ASC
+     LIMIT 1`,
+    [inferredType, inferredName]
+  );
+
+  const now = Date.now();
+  if (candidate?.local_id) {
+    const parsedCandidate = parseJsonSafe(candidate?.data) || {};
+    await db.update('treasury_accounts', String(candidate.local_id), {
+      server_id: serverTreasuryAccountId,
+      bank_name:
+        inferredType === 'BANCO'
+          ? transferBankName || String(candidate.bank_name || parsedCandidate.bankName || inferredName)
+          : null,
+      updated_at: now,
+      synced: Number(candidate?.synced ?? 1) === 0 ? 0 : 1,
+      data: JSON.stringify({
+        ...parsedCandidate,
+        serverId: serverTreasuryAccountId,
+        type: inferredType,
+        name: String(candidate.name || parsedCandidate.name || inferredName),
+        bankName:
+          inferredType === 'BANCO'
+            ? transferBankName || String(candidate.bank_name || parsedCandidate.bankName || inferredName)
+            : null,
+        updatedAt: now,
+      }),
+    });
+    return String(candidate.local_id);
+  }
+
+  let finalName = inferredName;
+  if (inferredType === 'CAJA' && inferredName.toLocaleLowerCase('es') === 'caja efectivo') {
+    const preferredCashBound = await db.queryFirst<{ local_id?: string }>(
+      `SELECT local_id
+       FROM treasury_accounts
+       WHERE type = 'CAJA'
+         AND lower(name) = lower(?)
+         AND server_id IS NOT NULL
+         AND server_id != ''
+       LIMIT 1`,
+      [inferredName]
+    );
+    if (preferredCashBound?.local_id) {
+      finalName = `Caja Web ${serverTreasuryAccountId.slice(-4).toUpperCase()}`;
+    }
+  }
+
+  const localId = `server_treasury_${serverTreasuryAccountId}`;
+  const payload = {
+    localId,
+    serverId: serverTreasuryAccountId,
+    name: finalName,
+    type: inferredType,
+    currency: 'DOP',
+    bankName: inferredType === 'BANCO' ? transferBankName || finalName : null,
+    accountNumber: null,
+    isActive: true,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await db.insert('treasury_accounts', {
+    local_id: localId,
+    server_id: serverTreasuryAccountId,
+    name: payload.name,
+    type: payload.type,
+    currency: payload.currency,
+    bank_name: payload.bankName,
+    account_number: payload.accountNumber,
+    is_active: 1,
+    created_at: payload.createdAt,
+    updated_at: payload.updatedAt,
+    synced: 1,
+    data: JSON.stringify(payload),
+  });
+
+  return localId;
+}
+
 export async function downloadFromServer(options: {
   authToken: string;
   getTokenFn: (() => Promise<string | null>) | null;
@@ -198,6 +311,7 @@ export async function downloadFromServer(options: {
   const { authToken, getTokenFn, getSubUserTokenFn } = options;
   const failedEntities: Array<{ entity: string; error: string }> = [];
   const successfulEntities: string[] = [];
+  const treasuryAccountLocalIdByServerId = new Map<string, string>();
 
   const runEntityTask = async (entity: string, task: () => Promise<void>) => {
     try {
@@ -273,6 +387,24 @@ export async function downloadFromServer(options: {
         'X-SubUser-Token': headers['X-SubUser-Token'] ? headers['X-SubUser-Token'].substring(0, 20) + '...' : 'MISSING',
       });
     }
+
+    const resolveTreasuryLocalIdFromServerId = async (
+      serverTreasuryAccountId: string | null | undefined,
+      paymentMethod?: unknown,
+      transferBankName?: unknown
+    ): Promise<string | null> => {
+      const serverId = String(serverTreasuryAccountId || '').trim();
+      if (!serverId) return null;
+      const cached = treasuryAccountLocalIdByServerId.get(serverId);
+      if (cached) return cached;
+      const localId = await ensureTreasuryAccountFromServerHint({
+        serverTreasuryAccountId: serverId,
+        paymentMethod,
+        transferBankName,
+      });
+      if (localId) treasuryAccountLocalIdByServerId.set(serverId, localId);
+      return localId;
+    };
 
     // Descargar productos
     await runEntityTask('products', async () => {
@@ -465,6 +597,252 @@ export async function downloadFromServer(options: {
       await markMissingServerRowsAsInactive('categories', serverCategoryIds);
     });
 
+    // Descargar cuentas de tesorería
+    await runEntityTask('treasury_accounts', async () => {
+      const accounts = await fetchAllWithSkip('treasury/accounts', headers);
+      const serverAccountIds = new Set<string>();
+
+      for (const account of accounts) {
+        const accountServerId = String(account?.id || '').trim();
+        if (!accountServerId) continue;
+        serverAccountIds.add(accountServerId);
+
+        let existing = await db.queryFirst<any>(
+          `SELECT *
+           FROM treasury_accounts
+           WHERE server_id = ?
+              OR local_id = ?
+           LIMIT 1`,
+          [accountServerId, accountServerId]
+        );
+        if (!existing) {
+          existing = await db.queryFirst<any>(
+            `SELECT *
+             FROM treasury_accounts
+             WHERE (server_id IS NULL OR server_id = '')
+               AND type = ?
+               AND lower(name) = lower(?)
+             ORDER BY created_at ASC
+             LIMIT 1`,
+            [
+              String(account?.type || '').toUpperCase() === 'BANCO' ? 'BANCO' : 'CAJA',
+              String(account?.name || ''),
+            ]
+          );
+        }
+
+        const localId = existing?.local_id ? String(existing.local_id) : `server_treasury_${accountServerId}`;
+        const createdAtMs =
+          account?.createdAt && !Number.isNaN(new Date(account.createdAt).getTime())
+            ? new Date(account.createdAt).getTime()
+            : Number(existing?.created_at || Date.now());
+        const updatedAtMs =
+          account?.updatedAt && !Number.isNaN(new Date(account.updatedAt).getTime())
+            ? new Date(account.updatedAt).getTime()
+            : Number(existing?.updated_at || createdAtMs);
+        const rowData = {
+          localId,
+          serverId: accountServerId,
+          name: String(account?.name || existing?.name || ''),
+          type: String(account?.type || existing?.type || 'CAJA').toUpperCase() === 'BANCO' ? 'BANCO' : 'CAJA',
+          currency: String(account?.currency || existing?.currency || 'DOP'),
+          bankName: account?.bankName ? String(account.bankName) : null,
+          accountNumber: account?.accountNumber ? String(account.accountNumber) : null,
+          isActive: typeof account?.isActive === 'boolean' ? account.isActive : Number(existing?.is_active ?? 1) === 1,
+          createdAt: createdAtMs,
+          updatedAt: updatedAtMs,
+          createdByUserId: account?.createdByUserId ? String(account.createdByUserId) : null,
+        };
+
+        const rowPatch = {
+          server_id: accountServerId,
+          name: rowData.name,
+          type: rowData.type,
+          currency: rowData.currency,
+          bank_name: rowData.bankName,
+          account_number: rowData.accountNumber,
+          is_active: rowData.isActive ? 1 : 0,
+          created_at: rowData.createdAt,
+          updated_at: rowData.updatedAt,
+          synced: 1,
+          data: JSON.stringify(rowData),
+        };
+
+        if (existing?.local_id) {
+          await db.update('treasury_accounts', localId, rowPatch);
+        } else {
+          await db.insert('treasury_accounts', {
+            local_id: localId,
+            ...rowPatch,
+          });
+        }
+
+        treasuryAccountLocalIdByServerId.set(accountServerId, localId);
+      }
+
+      if (serverAccountIds.size === 0) return;
+      const serverIds = Array.from(serverAccountIds);
+      const inClause = serverIds.map(() => '?').join(', ');
+      await db.runAsync(
+        `UPDATE treasury_accounts
+         SET is_active = 0
+         WHERE server_id IS NOT NULL
+           AND server_id NOT IN (${inClause})
+           AND COALESCE(is_active, 1) != 0`,
+        serverIds
+      );
+    });
+
+    // Descargar saldos iniciales de tesorería
+    await runEntityTask('treasury_opening_balances', async () => {
+      const openingBalances = await fetchAllWithSkip('treasury/opening-balances', headers);
+      for (const opening of openingBalances) {
+        const openingServerId = String(opening?.id || '').trim();
+        if (!openingServerId) continue;
+
+        const accountLocalId = await resolveTreasuryLocalIdFromServerId(
+          opening?.treasuryAccountId ? String(opening.treasuryAccountId) : null,
+          null,
+          null
+        );
+        if (!accountLocalId) continue;
+
+        const existing = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM treasury_opening_balances WHERE server_id = ? LIMIT 1',
+          [openingServerId]
+        );
+        const localId = existing?.local_id ? String(existing.local_id) : `server_treasury_opening_${openingServerId}`;
+        const effectiveAtMs =
+          opening?.effectiveAt && !Number.isNaN(new Date(opening.effectiveAt).getTime())
+            ? new Date(opening.effectiveAt).getTime()
+            : Date.now();
+        const createdAtMs =
+          opening?.createdAt && !Number.isNaN(new Date(opening.createdAt).getTime())
+            ? new Date(opening.createdAt).getTime()
+            : effectiveAtMs;
+        const rowData = {
+          localId,
+          serverId: openingServerId,
+          treasuryAccountId: accountLocalId,
+          amountCents: Number(opening?.amountCents || 0),
+          effectiveAt: effectiveAtMs,
+          note: opening?.note ? String(opening.note) : null,
+          createdByUserId: opening?.createdByUserId ? String(opening.createdByUserId) : null,
+          createdAt: createdAtMs,
+        };
+        const rowPatch = {
+          server_id: openingServerId,
+          treasury_account_id: accountLocalId,
+          amount_cents: rowData.amountCents,
+          effective_at: rowData.effectiveAt,
+          note: rowData.note,
+          created_by_user_id: rowData.createdByUserId,
+          created_at: rowData.createdAt,
+          synced: 1,
+          data: JSON.stringify(rowData),
+        };
+
+        if (existing?.local_id) {
+          await db.update('treasury_opening_balances', localId, rowPatch);
+        } else {
+          await db.insert('treasury_opening_balances', {
+            local_id: localId,
+            ...rowPatch,
+          });
+        }
+      }
+    });
+
+    // Descargar transferencias de tesorería
+    await runEntityTask('treasury_transfers', async () => {
+      const transfers = await fetchAllWithSkip('treasury/transfers', headers);
+      for (const transfer of transfers) {
+        const transferServerId = String(transfer?.id || '').trim();
+        if (!transferServerId) continue;
+
+        const fromLocalId = await resolveTreasuryLocalIdFromServerId(
+          transfer?.fromTreasuryAccountId ? String(transfer.fromTreasuryAccountId) : null,
+          null,
+          null
+        );
+        const toLocalId = await resolveTreasuryLocalIdFromServerId(
+          transfer?.toTreasuryAccountId ? String(transfer.toTreasuryAccountId) : null,
+          null,
+          null
+        );
+        if (!fromLocalId || !toLocalId) continue;
+
+        const existing = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM treasury_transfers WHERE server_id = ? LIMIT 1',
+          [transferServerId]
+        );
+        const localId = existing?.local_id ? String(existing.local_id) : `server_treasury_transfer_${transferServerId}`;
+        const transferredAtMs =
+          transfer?.transferredAt && !Number.isNaN(new Date(transfer.transferredAt).getTime())
+            ? new Date(transfer.transferredAt).getTime()
+            : Date.now();
+        const createdAtMs =
+          transfer?.createdAt && !Number.isNaN(new Date(transfer.createdAt).getTime())
+            ? new Date(transfer.createdAt).getTime()
+            : transferredAtMs;
+        const status =
+          String(transfer?.status || 'ACTIVE').toUpperCase() === 'REVERSED' ? 'REVERSED' : 'ACTIVE';
+        const reversesServerId = transfer?.reversesTransferId ? String(transfer.reversesTransferId) : null;
+        let reversesLocalId: string | null = null;
+        if (reversesServerId) {
+          const localReversed = await db.queryFirst<{ local_id?: string }>(
+            'SELECT local_id FROM treasury_transfers WHERE server_id = ? LIMIT 1',
+            [reversesServerId]
+          );
+          reversesLocalId = localReversed?.local_id ? String(localReversed.local_id) : null;
+        }
+        const rowData = {
+          localId,
+          serverId: transferServerId,
+          accountId: accountId || null,
+          fromTreasuryAccountId: fromLocalId,
+          toTreasuryAccountId: toLocalId,
+          amountCents: Number(transfer?.amountCents || 0),
+          transferredAt: transferredAtMs,
+          note: transfer?.note ? String(transfer.note) : null,
+          createdByUserId: transfer?.createdByUserId ? String(transfer.createdByUserId) : null,
+          status,
+          reversesTransferId: reversesLocalId || reversesServerId,
+          reversedByUserId: null,
+          reversedAt: null,
+          reverseReason: null,
+          createdAt: createdAtMs,
+        };
+        const rowPatch = {
+          server_id: transferServerId,
+          account_id: accountId || null,
+          from_treasury_account_id: fromLocalId,
+          to_treasury_account_id: toLocalId,
+          amount_cents: rowData.amountCents,
+          transferred_at: rowData.transferredAt,
+          note: rowData.note,
+          created_by_user_id: rowData.createdByUserId,
+          status: rowData.status,
+          reverses_transfer_id: rowData.reversesTransferId,
+          reversed_by_user_id: rowData.reversedByUserId,
+          reversed_at: rowData.reversedAt,
+          reverse_reason: rowData.reverseReason,
+          created_at: rowData.createdAt,
+          synced: 1,
+          data: JSON.stringify(rowData),
+        };
+
+        if (existing?.local_id) {
+          await db.update('treasury_transfers', localId, rowPatch);
+        } else {
+          await db.insert('treasury_transfers', {
+            local_id: localId,
+            ...rowPatch,
+          });
+        }
+      }
+    });
+
     // Descargar ventas/facturas
     await runEntityTask('sales', async () => {
       const sales = await fetchAllWithSkip('sales', headers);
@@ -567,6 +945,46 @@ export async function downloadFromServer(options: {
         };
       });
 
+      const salePaymentMethod = String(
+        saleDetail?.paymentMethod || sale?.paymentMethod || localSale?.paymentMethod || 'EFECTIVO'
+      )
+        .trim()
+        .toUpperCase();
+      const saleTreasuryAccountId =
+        (saleDetail?.treasuryAccountId ? String(saleDetail.treasuryAccountId).trim() : '') ||
+        (sale?.treasuryAccountId ? String(sale.treasuryAccountId).trim() : '') ||
+        (localSale?.treasuryAccountId ? String(localSale.treasuryAccountId).trim() : '') ||
+        null;
+      const saleTransferBankName = saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null;
+      if (saleTreasuryAccountId) {
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: saleTreasuryAccountId,
+          paymentMethod: salePaymentMethod,
+          transferBankName: saleTransferBankName,
+        });
+      }
+
+      const resolvedPaymentSplits = Array.isArray(saleDetail?.paymentSplits)
+        ? saleDetail.paymentSplits.map((split: any) => ({
+            method: String(split?.method || 'EFECTIVO'),
+            amountCents: Number(split?.amountCents || 0),
+            transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
+            treasuryAccountId: split?.treasuryAccountId ? String(split.treasuryAccountId) : null,
+          }))
+        : Array.isArray(localSale?.paymentSplits)
+          ? localSale.paymentSplits
+          : [];
+
+      for (const split of resolvedPaymentSplits) {
+        const splitTreasuryAccountId = String(split?.treasuryAccountId || '').trim();
+        if (!splitTreasuryAccountId) continue;
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: splitTreasuryAccountId,
+          paymentMethod: split?.method,
+          transferBankName: split?.transferBankName,
+        });
+      }
+
       const saleData = {
         id: saleId,
         invoiceCode: String(saleDetail?.invoiceCode || sale?.invoiceCode || localSale?.invoiceCode || '-'),
@@ -574,23 +992,10 @@ export async function downloadFromServer(options: {
         customerId,
         customerVisualId,
         customerName,
-        paymentMethod: String(saleDetail?.paymentMethod || sale?.paymentMethod || localSale?.paymentMethod || 'EFECTIVO'),
-        treasuryAccountId:
-          (saleDetail?.treasuryAccountId ? String(saleDetail.treasuryAccountId).trim() : '') ||
-          (sale?.treasuryAccountId ? String(sale.treasuryAccountId).trim() : '') ||
-          (localSale?.treasuryAccountId ? String(localSale.treasuryAccountId).trim() : '') ||
-          null,
-        transferBankName: saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null,
-        paymentSplits: Array.isArray(saleDetail?.paymentSplits)
-          ? saleDetail.paymentSplits.map((split: any) => ({
-              method: String(split?.method || 'EFECTIVO'),
-              amountCents: Number(split?.amountCents || 0),
-              transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
-              treasuryAccountId: split?.treasuryAccountId ? String(split.treasuryAccountId) : null,
-            }))
-          : Array.isArray(localSale?.paymentSplits)
-            ? localSale.paymentSplits
-            : [],
+        paymentMethod: salePaymentMethod,
+        treasuryAccountId: saleTreasuryAccountId,
+        transferBankName: saleTransferBankName,
+        paymentSplits: resolvedPaymentSplits,
         type: String(saleDetail?.type || sale?.type || localSale?.type || 'CONTADO'),
         items,
         subtotalCents: Number(saleDetail?.subtotalCents || sale?.subtotalCents || localSale?.subtotalCents || 0),
@@ -697,6 +1102,15 @@ export async function downloadFromServer(options: {
         ret?.cancelledAt && !Number.isNaN(new Date(ret.cancelledAt).getTime())
           ? new Date(ret.cancelledAt).getTime()
           : null;
+      const refundMethod = ret?.refundMethod ? String(ret.refundMethod).trim().toUpperCase() : null;
+      const refundTreasuryAccountId = ret?.refundTreasuryAccountId ? String(ret.refundTreasuryAccountId).trim() : null;
+      if (refundTreasuryAccountId) {
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: refundTreasuryAccountId,
+          paymentMethod: refundMethod,
+          transferBankName: null,
+        });
+      }
 
       const returnData = {
         id: returnServerId,
@@ -709,8 +1123,8 @@ export async function downloadFromServer(options: {
         itbisCents: Number(ret?.itbisCents || 0),
         salePricesIncludeItbis:
           typeof ret?.salePricesIncludeItbis === 'boolean' ? Boolean(ret.salePricesIncludeItbis) : true,
-        refundMethod: ret?.refundMethod ? String(ret.refundMethod) : null,
-        refundTreasuryAccountId: ret?.refundTreasuryAccountId ? String(ret.refundTreasuryAccountId) : null,
+        refundMethod,
+        refundTreasuryAccountId,
         notes: ret?.notes ? String(ret.notes) : null,
         returnedAt: returnedAtMs,
         cancelledAt: cancelledAtMs,
@@ -1020,6 +1434,13 @@ export async function downloadFromServer(options: {
         updateProductCost: true,
         updateProductPrice: true,
       };
+      if (purchaseData.treasuryAccountId) {
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: purchaseData.treasuryAccountId,
+          paymentMethod: purchaseData.paymentMethod,
+          transferBankName: null,
+        });
+      }
 
       const purchaseRow = {
         supplier_name: purchaseData.supplierName || null,
@@ -1322,6 +1743,13 @@ export async function downloadFromServer(options: {
         cancelledAt: cancelledAtMs,
         cancellationReason: payment?.cancellationReason ? String(payment.cancellationReason) : null,
       };
+      if (paymentData.treasuryAccountId) {
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: paymentData.treasuryAccountId,
+          paymentMethod: paymentData.method,
+          transferBankName: paymentData.transferBankName,
+        });
+      }
 
       const paymentRow = {
         receipt_code: paymentData.receiptCode || `R-${serverPaymentId}`,
@@ -1405,6 +1833,13 @@ export async function downloadFromServer(options: {
         createdAt: expense?.createdAt ? String(expense.createdAt) : null,
         updatedAt: expense?.updatedAt ? String(expense.updatedAt) : null,
       };
+      if (expenseData.treasuryAccountId) {
+        await ensureTreasuryAccountFromServerHint({
+          serverTreasuryAccountId: expenseData.treasuryAccountId,
+          paymentMethod: expenseData.paymentMethod,
+          transferBankName: null,
+        });
+      }
       const expenseRow = {
         description: expenseData.description,
         amount_cents: expenseData.amountCents,
