@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { Button, Divider, Menu, Modal, Portal, Surface, Text, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
@@ -41,7 +41,9 @@ function formatDateTime(valueMs: number): string {
 
 export function TreasuryScreen() {
   const { getToken } = useAuth();
-  const subUserToken = useAuthStore((state) => state.subUserToken);
+  const getTokenRef = useRef(getToken);
+  const focusRefreshRunningRef = useRef(false);
+  getTokenRef.current = getToken;
   const [loading, setLoading] = useState(false);
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([]);
   const [movements, setMovements] = useState<TreasuryMovement[]>([]);
@@ -96,21 +98,28 @@ export function TreasuryScreen() {
     useCallback(() => {
       let active = true;
       const autoRefreshOnEnter = async () => {
+        if (focusRefreshRunningRef.current) return;
+        focusRefreshRunningRef.current = true;
         await loadData();
-        if (!active || !subUserToken) return;
         try {
+          if (!active) return;
+          const currentSubUserToken = useAuthStore.getState().subUserToken;
+          if (!currentSubUserToken) return;
+
           const netInfo = await NetInfo.fetch();
           const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
           if (!hasInternet || !active) return;
 
-          const clerkToken = await getToken();
+          const clerkToken = await getTokenRef.current();
           if (!clerkToken || !active) return;
 
-          syncService.setTokenGetter(() => getToken());
+          syncService.setTokenGetter(() => getTokenRef.current());
           syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
           await syncService.fullSync(clerkToken, { ignoreCooldown: true });
         } catch (error) {
           console.error('[TreasuryScreen] auto refresh on enter failed:', error);
+        } finally {
+          focusRefreshRunningRef.current = false;
         }
         if (!active) return;
         await loadData();
@@ -125,10 +134,11 @@ export function TreasuryScreen() {
       return () => {
         active = false;
       };
-    }, [consumeCreateAccountModalRequest, getToken, loadData, subUserToken])
+    }, [consumeCreateAccountModalRequest, loadData])
   );
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.isActive), [accounts]);
+  const recentMovements = useMemo(() => movements.slice(0, 10), [movements]);
 
   const openReverseModal = (transferId: string) => {
     setTransferIdToReverse(transferId);
@@ -353,19 +363,24 @@ export function TreasuryScreen() {
           </Surface>
         ) : null}
 
-        <Surface style={styles.section}>
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Movimientos del período</Text>
-            {permissions.canManageAccounts ? (
-              <Button mode="text" compact onPress={() => setCreateModalVisible(true)}>
-                + Cuenta
+        {permissions.canManageAccounts ? (
+          <Surface style={styles.section}>
+            <Text style={styles.sectionTitle}>Cuentas de tesorería</Text>
+            <Text style={styles.sectionHint}>Crea y administra cuentas de caja o banco.</Text>
+            <View style={styles.sectionActionRow}>
+              <Button mode="contained" buttonColor={ui.colors.primary} onPress={() => setCreateModalVisible(true)}>
+                Crear cuenta
               </Button>
-            ) : null}
-          </View>
-          {!movements.length ? (
+            </View>
+          </Surface>
+        ) : null}
+
+        <Surface style={styles.section}>
+          <Text style={styles.sectionTitle}>Últimos 10 movimientos del período</Text>
+          {!recentMovements.length ? (
             <Text style={styles.emptyText}>No hay movimientos para este período</Text>
           ) : (
-            movements.map((movement) => (
+            recentMovements.map((movement) => (
               <View key={movement.id} style={styles.movementRow}>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.movementRef}>{movement.reference}</Text>
@@ -390,6 +405,11 @@ export function TreasuryScreen() {
               </View>
             ))
           )}
+          {movements.length > recentMovements.length ? (
+            <Text style={[styles.emptyText, styles.movementCountHint]}>
+              Mostrando {recentMovements.length} de {movements.length} movimientos.
+            </Text>
+          ) : null}
         </Surface>
       </ScrollView>
 
@@ -497,6 +517,8 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },
   sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  sectionHint: { color: ui.colors.textMuted, fontSize: 13 },
+  sectionActionRow: { marginTop: 10, alignItems: 'flex-start' },
   accountRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   accountName: { color: ui.colors.text, fontWeight: '700' },
   accountMeta: { color: ui.colors.textMuted, fontSize: 12 },
@@ -523,6 +545,7 @@ const styles = StyleSheet.create({
   movementRef: { color: ui.colors.text, fontWeight: '700' },
   movementMeta: { color: ui.colors.textMuted, fontSize: 12, marginTop: 2 },
   movementAmountWrap: { alignItems: 'flex-end' },
+  movementCountHint: { marginTop: 8 },
   amountIn: { color: '#15803D', fontWeight: '800' },
   amountOut: { color: '#B91C1C', fontWeight: '800' },
   modalCard: {
