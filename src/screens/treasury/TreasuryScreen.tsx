@@ -69,7 +69,7 @@ export function TreasuryScreen() {
   const [accountOpeningAmount, setAccountOpeningAmount] = useState('');
   const [typeMenuVisible, setTypeMenuVisible] = useState(false);
   const [bankMenuVisible, setBankMenuVisible] = useState(false);
-  const [bankOptions, setBankOptions] = useState<string[]>(DOMINICAN_BANKS);
+  const [bankOptions, setBankOptions] = useState<string[]>([...DOMINICAN_BANKS]);
 
   const [reverseModalVisible, setReverseModalVisible] = useState(false);
   const [transferIdToReverse, setTransferIdToReverse] = useState<string | null>(null);

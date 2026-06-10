@@ -25,6 +25,11 @@ import {
   markInternetConnectionSeen,
   OFFLINE_SESSION_MAX_DAYS,
 } from './src/services/auth/offlineSessionService';
+import {
+  registerPushTokenForCurrentDevice,
+  setupPushNotificationResponseHandler,
+  teardownPushNotificationResponseHandler,
+} from './src/services/push/pushNotificationService';
 import { syncService } from './src/services/sync/SyncService';
 import { useOtaUpdates } from './src/services/updates/useOtaUpdates';
 import { useAuthStore } from './src/store/authStore';
@@ -68,7 +73,16 @@ function RootApp() {
   const [isReady, setIsReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authRefreshTick, setAuthRefreshTick] = useState(0);
-  const { setLoading, setUser, isAuthenticated, loadSubUserToken, logout, setBiometricEnabled } = useAuthStore();
+  const {
+    setLoading,
+    setUser,
+    isAuthenticated,
+    loadSubUserToken,
+    logout,
+    setBiometricEnabled,
+    subUserToken,
+    accountId,
+  } = useAuthStore();
   const { syncBlockedReason, pendingCount } = useSyncStore();
   const otaUpdates = useOtaUpdates();
   const lastSyncBlockedReasonRef = useRef<string | null>(null);
@@ -99,6 +113,13 @@ function RootApp() {
       db.destroy().catch((error) => {
         console.warn('No se pudo cerrar SQLite al desmontar App:', error);
       });
+    };
+  }, []);
+
+  useEffect(() => {
+    setupPushNotificationResponseHandler();
+    return () => {
+      teardownPushNotificationResponseHandler();
     };
   }, []);
 
@@ -162,6 +183,36 @@ function RootApp() {
       setErrorTokenGetter(tokenGetter);
     }
   }, [isLoaded, getToken]);
+
+  useEffect(() => {
+    if (!isReady || !isAuthenticated || !subUserToken || !isLoaded || !getToken) return;
+
+    let cancelled = false;
+
+    const registerPushToken = async () => {
+      try {
+        const netInfo = await NetInfo.fetch();
+        const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+        if (!hasInternet || cancelled) return;
+
+        const clerkToken = await (getToken as any)?.({ skipCache: true });
+        if (!clerkToken || cancelled) return;
+
+        await registerPushTokenForCurrentDevice({
+          clerkToken,
+          subUserToken,
+          accountId,
+        });
+      } catch (error) {
+        console.warn('No se pudo registrar el token de notificaciones push:', error);
+      }
+    };
+
+    void registerPushToken();
+    return () => {
+      cancelled = true;
+    };
+  }, [isReady, isAuthenticated, subUserToken, accountId, isLoaded, getToken]);
 
   // Configurar token getter del subusuario
   useEffect(() => {

@@ -10,7 +10,7 @@ import { MainNavigator } from './MainNavigator';
 
 const Stack = createStackNavigator();
 const APP_NAV_DEBUG = false;
-const navigationRef = createNavigationContainerRef();
+export const navigationRef = createNavigationContainerRef();
 
 function getCurrentRoutePath(): string | null {
   if (!navigationRef.isReady()) return null;
