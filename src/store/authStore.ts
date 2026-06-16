@@ -38,6 +38,32 @@ interface SubUser {
   role: string;
   isOwner: boolean;
   email?: string | null;
+  canAccessSales?: boolean;
+  canAccessDashboard?: boolean;
+  canAccessReturns?: boolean;
+  canAccessProducts?: boolean;
+  canAccessAccountsReceivable?: boolean;
+  canAccessPayments?: boolean;
+  canAccessDailyClose?: boolean;
+  canAccessReports?: boolean;
+  canAccessShippingLabels?: boolean;
+  canAccessBilling?: boolean;
+  canAccessSettings?: boolean;
+  canEditSales?: boolean;
+  canCancelSales?: boolean;
+  canManageCategories?: boolean;
+  canManagePurchases?: boolean;
+  canCancelPurchases?: boolean;
+  canManageSuppliers?: boolean;
+  canManageCustomers?: boolean;
+  canManageExpenses?: boolean;
+  canCancelExpenses?: boolean;
+  canManageQuotes?: boolean;
+  canManageBackups?: boolean;
+  canViewTreasury?: boolean;
+  canManageTreasuryAccounts?: boolean;
+  canCreateTreasuryTransfers?: boolean;
+  canReverseTreasuryTransfers?: boolean;
 }
 
 interface AuthState {

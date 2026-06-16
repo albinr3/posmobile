@@ -16,6 +16,7 @@ import { useAuthStore } from '../store/authStore';
 import { getBillingOverviewWithOptions } from '../services/billing/billingService';
 import { syncService } from '../services/sync/SyncService';
 import { useSyncStore } from '../store/syncStore';
+import { canAccessModule } from '../utils/moduleAccess';
 
 import { DashboardScreen } from '../screens/reports/DashboardScreen';
 import { DailyCloseScreen } from '../screens/reports/DailyCloseScreen';
@@ -93,6 +94,132 @@ const DRAWER_ENTRIES = [
   { key: 'settings_menu', label: 'Ajustes', icon: 'cog-outline' },
   { key: 'backups', label: 'Backups', icon: 'database', disabled: true },
 ];
+
+type DrawerEntry = (typeof DRAWER_ENTRIES)[number];
+type StoredSubUser = NonNullable<ReturnType<typeof useAuthStore.getState>['subUser']>;
+
+function hasLegacyPermission(subUser: StoredSubUser | null, permission: keyof StoredSubUser): boolean {
+  if (!subUser) return false;
+  if (subUser.isOwner) return true;
+  return subUser[permission] === true;
+}
+
+function canAccessDrawerEntry(subUser: StoredSubUser | null, entry: DrawerEntry): boolean {
+  switch (entry.key) {
+    case 'dashboard':
+      return canAccessModule(subUser, 'dashboard');
+    case 'returns':
+      return canAccessModule(subUser, 'returns');
+    case 'products':
+      return canAccessModule(subUser, 'products');
+    case 'ar':
+      return canAccessModule(subUser, 'accountsReceivable');
+    case 'payment_receipts':
+      return canAccessModule(subUser, 'payments');
+    case 'daily_closing':
+      return canAccessModule(subUser, 'dailyClose');
+    case 'reports_menu':
+      return canAccessModule(subUser, 'reports');
+    case 'shipping_labels':
+      return canAccessModule(subUser, 'shippingLabels');
+    case 'billing_plans':
+      return canAccessModule(subUser, 'billing');
+    case 'settings_menu':
+      return canAccessModule(subUser, 'settings');
+    case 'customers':
+      return hasLegacyPermission(subUser, 'canManageCustomers');
+    case 'quotes':
+    case 'quotes_list':
+      return hasLegacyPermission(subUser, 'canManageQuotes');
+    case 'categories':
+      return hasLegacyPermission(subUser, 'canManageCategories');
+    case 'suppliers':
+      return hasLegacyPermission(subUser, 'canManageSuppliers');
+    case 'purchases':
+      return hasLegacyPermission(subUser, 'canManagePurchases') || hasLegacyPermission(subUser, 'canCancelPurchases');
+    case 'operating_expenses':
+      return hasLegacyPermission(subUser, 'canManageExpenses') || hasLegacyPermission(subUser, 'canCancelExpenses');
+    case 'treasury':
+      return (
+        hasLegacyPermission(subUser, 'canViewTreasury') ||
+        hasLegacyPermission(subUser, 'canManageTreasuryAccounts') ||
+        hasLegacyPermission(subUser, 'canCreateTreasuryTransfers') ||
+        hasLegacyPermission(subUser, 'canReverseTreasuryTransfers')
+      );
+    case 'backups':
+      return hasLegacyPermission(subUser, 'canManageBackups');
+    case 'billing':
+      return hasLegacyPermission(subUser, 'canEditSales') || hasLegacyPermission(subUser, 'canCancelSales');
+    default:
+      return true;
+  }
+}
+
+function getAllowedDrawerEntries(subUser: StoredSubUser | null, isBillingBlocked: boolean): DrawerEntry[] {
+  if (isBillingBlocked) {
+    return DRAWER_ENTRIES.filter((item) => item.key === 'billing_plans');
+  }
+
+  return DRAWER_ENTRIES.filter((item) => canAccessDrawerEntry(subUser, item));
+}
+
+function getFirstAllowedRoute(subUser: StoredSubUser | null): string {
+  if (canAccessModule(subUser, 'dashboard') || canAccessModule(subUser, 'sales') || canAccessModule(subUser, 'accountsReceivable')) {
+    return 'Home';
+  }
+
+  const firstEntry = getAllowedDrawerEntries(subUser, false).find((item) => !item.disabled);
+  if (!firstEntry) return 'FeaturePlaceholder';
+
+  switch (firstEntry.key) {
+    case 'customers':
+      return 'Customers';
+    case 'quotes':
+      return 'Quotes';
+    case 'quotes_list':
+      return 'QuoteListMenu';
+    case 'returns':
+      return 'Returns';
+    case 'products':
+      return 'InventoryMenu';
+    case 'categories':
+      return 'CategoriesMenu';
+    case 'suppliers':
+      return 'SuppliersMenu';
+    case 'purchases':
+      return 'PurchasesMenu';
+    case 'billing':
+      return 'BillingMenu';
+    case 'payment_receipts':
+      return 'PaymentReceiptsMenu';
+    case 'daily_closing':
+      return 'DailyCloseMenu';
+    case 'operating_expenses':
+      return 'OperatingExpensesMenu';
+    case 'treasury':
+      return 'TreasuryMenu';
+    case 'ar':
+      return 'ARMenu';
+    case 'reports_menu':
+      return 'Reports';
+    case 'settings_menu':
+      return 'Settings';
+    case 'billing_plans':
+      return 'BillingPlansMenu';
+    default:
+      return 'FeaturePlaceholder';
+  }
+}
+
+function hasHomeTabs(subUser: StoredSubUser | null): boolean {
+  return canAccessModule(subUser, 'dashboard') || canAccessModule(subUser, 'sales') || canAccessModule(subUser, 'accountsReceivable');
+}
+
+function getInitialHomeTab(subUser: StoredSubUser | null): string {
+  if (canAccessModule(subUser, 'dashboard')) return 'Dashboard';
+  if (canAccessModule(subUser, 'sales')) return 'POS';
+  return 'AR';
+}
 
 function withScreenBoundary<TProps extends object>(
   Component: React.ComponentType<TProps>,
@@ -305,6 +432,14 @@ function DashboardStack() {
   );
 }
 
+function DailyCloseStack() {
+  return (
+    <Stack.Navigator screenOptions={commonStackOptions}>
+      <Stack.Screen name="DailyClose" component={DailyCloseScreenWithBoundary} />
+    </Stack.Navigator>
+  );
+}
+
 function ReportsStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
@@ -338,6 +473,10 @@ function PlaceholderScreen({ route }: any) {
 
 function BottomTabs() {
   const insets = useSafeAreaInsets();
+  const { subUser } = useAuthStore();
+  const canUseDashboard = canAccessModule(subUser, 'dashboard');
+  const canUseSales = canAccessModule(subUser, 'sales');
+  const canUseAccountsReceivable = canAccessModule(subUser, 'accountsReceivable');
   const defaultTabBarStyle = {
     backgroundColor: '#fff',
     borderTopWidth: 0,
@@ -354,6 +493,7 @@ function BottomTabs() {
 
   return (
     <Tab.Navigator
+      initialRouteName={getInitialHomeTab(subUser)}
       backBehavior="history"
       screenOptions={{
         headerShown: false,
@@ -367,70 +507,76 @@ function BottomTabs() {
         tabBarStyle: defaultTabBarStyle,
       }}
     >
-      <Tab.Screen
-        name="Dashboard"
-        component={DashboardStack}
-        options={{
-          title: 'Inicio',
-          tabBarIcon: ({ color, size }) => <Icon source="home" color={color} size={size} />,
-        }}
-      />
-      <Tab.Screen
-        name="POS"
-        component={SalesStack}
-        options={({ route }) => {
-          const nestedRoute = getFocusedRouteNameFromRoute(route) ?? 'POSMain';
-          const hideTabBar = ['Cart', 'SelectCustomer', 'AddCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
+      {canUseDashboard && (
+        <Tab.Screen
+          name="Dashboard"
+          component={DashboardStack}
+          options={{
+            title: 'Inicio',
+            tabBarIcon: ({ color, size }) => <Icon source="home" color={color} size={size} />,
+          }}
+        />
+      )}
+      {canUseSales && (
+        <Tab.Screen
+          name="POS"
+          component={SalesStack}
+          options={({ route }) => {
+            const nestedRoute = getFocusedRouteNameFromRoute(route) ?? 'POSMain';
+            const hideTabBar = ['Cart', 'SelectCustomer', 'AddCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
 
-          return {
-            title: 'Ventas',
-            tabBarLabel: '',
-            tabBarItemStyle: { marginTop: -14 },
-            tabBarLabelStyle: { height: 0 },
-            tabBarStyle: hideTabBar ? { display: 'none' } : defaultTabBarStyle,
-            tabBarIcon: ({ focused }) => (
-              <View
-                style={{
-                  width: 66,
-                  height: 66,
-                  borderRadius: 33,
-                  backgroundColor: ui.colors.primary,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderWidth: 3,
-                  borderColor: '#fff',
-                  elevation: focused ? 9 : 5,
-                  marginTop: 2,
-                }}
-              >
-                <Icon source="cash-register" color="#fff" size={30} />
-              </View>
-            ),
-          };
-        }}
-      />
-      <Tab.Screen
-        name="AR"
-        component={ARStack}
-        options={{
-          title: 'Cobros',
-          tabBarIcon: ({ color, size }) => <Icon source="cash-plus" color={color} size={size} />,
-        }}
-      />
+            return {
+              title: 'Ventas',
+              tabBarLabel: '',
+              tabBarItemStyle: { marginTop: -14 },
+              tabBarLabelStyle: { height: 0 },
+              tabBarStyle: hideTabBar ? { display: 'none' } : defaultTabBarStyle,
+              tabBarIcon: ({ focused }) => (
+                <View
+                  style={{
+                    width: 66,
+                    height: 66,
+                    borderRadius: 33,
+                    backgroundColor: ui.colors.primary,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 3,
+                    borderColor: '#fff',
+                    elevation: focused ? 9 : 5,
+                    marginTop: 2,
+                  }}
+                >
+                  <Icon source="cash-register" color="#fff" size={30} />
+                </View>
+              ),
+            };
+          }}
+        />
+      )}
+      {canUseAccountsReceivable && (
+        <Tab.Screen
+          name="AR"
+          component={ARStack}
+          options={{
+            title: 'Cobros',
+            tabBarIcon: ({ color, size }) => <Icon source="cash-plus" color={color} size={size} />,
+          }}
+        />
+      )}
     </Tab.Navigator>
   );
 }
 
 function CustomDrawerContent(props: DrawerContentComponentProps) {
   const { signOut } = useAuth();
-  const { logout, setSubUser, isBillingBlocked } = useAuthStore();
+  const { logout, setSubUser, isBillingBlocked, subUser } = useAuthStore();
   const insets = useSafeAreaInsets();
   const topInset = Math.max(insets.top, StatusBar.currentHeight || 0) + 6;
   const bottomInset = Math.max(insets.bottom, 12);
   const currentRoute = props.state.routeNames[props.state.index] || 'Home';
   const entries = useMemo(
-    () => (isBillingBlocked ? DRAWER_ENTRIES.filter((item) => item.key === 'billing_plans') : DRAWER_ENTRIES),
-    [isBillingBlocked]
+    () => getAllowedDrawerEntries(subUser, isBillingBlocked),
+    [isBillingBlocked, subUser]
   );
 
   const navigateFromDrawer = (key: string, label: string) => {
@@ -439,7 +585,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       return;
     }
     if (key === 'daily_closing') {
-      (props.navigation as any).navigate('Home', { screen: 'Dashboard', params: { screen: 'DailyClose' } });
+      (props.navigation as any).navigate('DailyCloseMenu', { screen: 'DailyClose' });
       return;
     }
     if (key === 'sell') {
@@ -562,7 +708,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
         </View>
       </View>
 
-      {!isBillingBlocked && (
+      {!isBillingBlocked && canAccessModule(subUser, 'sales') && (
         <TouchableOpacity
           style={styles.sellButton}
           activeOpacity={0.8}
@@ -593,6 +739,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'billing_plans' && currentRoute === 'BillingPlansMenu') ||
             (item.key === 'billing' && currentRoute === 'BillingMenu') ||
             (item.key === 'payment_receipts' && currentRoute === 'PaymentReceiptsMenu') ||
+            (item.key === 'daily_closing' && currentRoute === 'DailyCloseMenu') ||
             (item.key === 'operating_expenses' && currentRoute === 'OperatingExpensesMenu') ||
             (item.key === 'ar' && currentRoute === 'ARMenu') ||
             (item.key === 'treasury' && currentRoute === 'TreasuryMenu');
@@ -647,7 +794,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
 
 export function MainNavigator() {
   const { getToken } = useAuth();
-  const { subUserToken, accountId, isBillingBlocked, setBillingState, setSubUser } = useAuthStore();
+  const { subUser, subUserToken, accountId, isBillingBlocked, setBillingState, setSubUser } = useAuthStore();
   const [checkingBillingAccess, setCheckingBillingAccess] = useState(true);
   const getTokenRef = useRef(getToken);
   const setBillingStateRef = useRef(setBillingState);
@@ -767,7 +914,7 @@ export function MainNavigator() {
   return (
     <Drawer.Navigator
       key={isBillingBlocked ? 'billing-blocked' : 'full-access'}
-      initialRouteName={isBillingBlocked ? 'BillingPlansMenu' : 'Home'}
+      initialRouteName={isBillingBlocked ? 'BillingPlansMenu' : getFirstAllowedRoute(subUser)}
       backBehavior="history"
       drawerContent={(props) => <CustomDrawerContent {...props} />}
       screenOptions={{
@@ -776,25 +923,28 @@ export function MainNavigator() {
         drawerStyle: { width: 280, backgroundColor: ui.colors.surface },
       }}
     >
-      <Drawer.Screen name="BillingPlansMenu" component={BillingPlansStack} options={{ title: 'Planes y facturación' }} />
+      {(isBillingBlocked || canAccessModule(subUser, 'billing')) && (
+        <Drawer.Screen name="BillingPlansMenu" component={BillingPlansStack} options={{ title: 'Planes y facturación' }} />
+      )}
       {!isBillingBlocked ? (
         <>
-          <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />
-          <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />
-          <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />
-          <Drawer.Screen name="QuoteListMenu" component={QuoteListStack} options={{ title: 'Lista de Cotizaciones' }} />
-          <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />
-          <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />
-          <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />
-          <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />
-          <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />
-          <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />
-          <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />
-          <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />
-          <Drawer.Screen name="TreasuryMenu" component={TreasuryStack} options={{ title: 'Tesorería' }} />
-          <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />
-          <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />
-          <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />
+          {hasHomeTabs(subUser) && <Drawer.Screen name="Home" component={BottomTabs} options={{ title: 'Inicio' }} />}
+          {hasLegacyPermission(subUser, 'canManageCustomers') && <Drawer.Screen name="Customers" component={CustomersStack} options={{ title: 'Clientes' }} />}
+          {hasLegacyPermission(subUser, 'canManageQuotes') && <Drawer.Screen name="Quotes" component={QuotesStack} options={{ title: 'Cotizaciones' }} />}
+          {hasLegacyPermission(subUser, 'canManageQuotes') && <Drawer.Screen name="QuoteListMenu" component={QuoteListStack} options={{ title: 'Lista de Cotizaciones' }} />}
+          {canAccessModule(subUser, 'returns') && <Drawer.Screen name="Returns" component={ReturnsStack} options={{ title: 'Devoluciones' }} />}
+          {canAccessModule(subUser, 'products') && <Drawer.Screen name="InventoryMenu" component={InventoryStack} options={{ title: 'Productos' }} />}
+          {hasLegacyPermission(subUser, 'canManageCategories') && <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />}
+          {hasLegacyPermission(subUser, 'canManageSuppliers') && <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />}
+          {(hasLegacyPermission(subUser, 'canManagePurchases') || hasLegacyPermission(subUser, 'canCancelPurchases')) && <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />}
+          {(hasLegacyPermission(subUser, 'canEditSales') || hasLegacyPermission(subUser, 'canCancelSales')) && <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />}
+          {canAccessModule(subUser, 'payments') && <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />}
+          {canAccessModule(subUser, 'dailyClose') && <Drawer.Screen name="DailyCloseMenu" component={DailyCloseStack} options={{ title: 'Cuadre diario' }} />}
+          {(hasLegacyPermission(subUser, 'canManageExpenses') || hasLegacyPermission(subUser, 'canCancelExpenses')) && <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />}
+          {(hasLegacyPermission(subUser, 'canViewTreasury') || hasLegacyPermission(subUser, 'canManageTreasuryAccounts') || hasLegacyPermission(subUser, 'canCreateTreasuryTransfers') || hasLegacyPermission(subUser, 'canReverseTreasuryTransfers')) && <Drawer.Screen name="TreasuryMenu" component={TreasuryStack} options={{ title: 'Tesorería' }} />}
+          {canAccessModule(subUser, 'accountsReceivable') && <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />}
+          {canAccessModule(subUser, 'reports') && <Drawer.Screen name="Reports" component={ReportsStack} options={{ title: 'Reportes' }} />}
+          {canAccessModule(subUser, 'settings') && <Drawer.Screen name="Settings" component={SettingsStack} options={{ title: 'Configuración' }} />}
           <Drawer.Screen name="FeaturePlaceholder" component={PlaceholderScreenWithBoundary} options={{ title: 'Próximamente' }} />
         </>
       ) : null}
