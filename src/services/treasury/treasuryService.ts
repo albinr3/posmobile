@@ -42,6 +42,7 @@ type TreasuryDashboardResult = {
   toMs: number;
   accounts: TreasuryDashboardAccount[];
   movements: TreasuryMovement[];
+  recentMovements: TreasuryMovement[];
   totals: {
     inCents: number;
     outCents: number;
@@ -1115,10 +1116,11 @@ export async function getTreasuryDashboard(input?: DateRangeInput): Promise<Trea
   const fromMs = Number(input?.fromMs || startOfDayMs(now));
   const toMs = Number(input?.toMs || endOfDayMs(now));
   const permissions = getTreasuryPermissions();
-  const { movements, accountById } = await buildAllTreasuryMovementsUntil(toMs, permissions.canReverseTransfers);
+  const { movements, accountById } = await buildAllTreasuryMovementsUntil(Number.MAX_SAFE_INTEGER, permissions.canReverseTransfers);
+  const balanceMovements = movements.filter((movement) => movement.occurredAt <= toMs);
 
   const balancesByAccount: BalanceByAccountMap = new Map();
-  for (const movement of movements) {
+  for (const movement of balanceMovements) {
     addMovementBalance(balancesByAccount, movement);
   }
 
@@ -1141,6 +1143,7 @@ export async function getTreasuryDashboard(input?: DateRangeInput): Promise<Trea
   const periodMovements = movements
     .filter((movement) => movementTimeInRange(movement.occurredAt, fromMs, toMs))
     .sort((a, b) => b.occurredAt - a.occurredAt);
+  const recentMovements = [...movements].sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 10);
 
   const totals = {
     inCents: periodMovements
@@ -1157,6 +1160,7 @@ export async function getTreasuryDashboard(input?: DateRangeInput): Promise<Trea
     toMs,
     accounts,
     movements: periodMovements,
+    recentMovements,
     totals,
   };
 }

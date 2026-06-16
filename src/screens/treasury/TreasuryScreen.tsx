@@ -109,7 +109,7 @@ export function TreasuryScreen() {
         getTreasuryDashboard({ fromMs: 0, toMs: Date.now() }),
         listTreasuryAccounts(true),
       ]);
-      setMovements(dashboard.movements);
+      setMovements(dashboard.recentMovements);
       const accumulatedTotals = dashboard.accounts.reduce(
         (acc, account) => {
           acc.inCents += Number(account.inCents || 0);
@@ -418,7 +418,7 @@ export function TreasuryScreen() {
         <Surface style={styles.section}>
           <Text style={styles.sectionTitle}>Últimos 10 movimientos</Text>
           {!recentMovements.length ? (
-            <Text style={styles.emptyText}>No hay movimientos para este período</Text>
+            <Text style={styles.emptyText}>No hay movimientos registrados</Text>
           ) : (
             recentMovements.map((movement) => (
               <View key={movement.id} style={styles.movementRow}>
