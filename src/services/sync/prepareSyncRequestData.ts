@@ -395,12 +395,24 @@ export async function prepareSyncRequestData(
         if (action === 'delete') {
           return {};
         }
+        const rawTreasuryAccountId = data?.treasuryAccountId ? String(data.treasuryAccountId).trim() : '';
+        let treasuryAccountId: string | null = null;
+        if (rawTreasuryAccountId) {
+          const account = await db.queryFirst<{ server_id?: string }>(
+            'SELECT server_id FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
+            [rawTreasuryAccountId, rawTreasuryAccountId]
+          );
+          treasuryAccountId = String(account?.server_id || '').trim() || null;
+          if (!treasuryAccountId) {
+            throw new Error(`Cuenta de tesorería sin server_id: ${rawTreasuryAccountId}`);
+          }
+        }
         return {
           description: String(data?.description || '').trim(),
           amountCents: Number(data?.amountCents || 0),
           expenseDate,
           paymentMethod: data?.paymentMethod ? String(data.paymentMethod).trim().toUpperCase() : 'EFECTIVO',
-          treasuryAccountId: data?.treasuryAccountId ? String(data.treasuryAccountId).trim() : null,
+          treasuryAccountId,
           category: data?.category ? String(data.category).trim() : null,
           notes: data?.notes ? String(data.notes).trim() : null,
         };

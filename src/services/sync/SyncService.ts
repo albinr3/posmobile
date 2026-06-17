@@ -1135,6 +1135,19 @@ class SyncService {
       ? String(error.response?.data?.error || error.response?.data?.message || error.message || '')
       : String(error?.message || '');
     const backendErrorMessage = backendErrorRaw.toLowerCase();
+    const dependencyError =
+      (typeof error?.message === 'string' &&
+        (error.message.includes('Producto sin server_id') ||
+          error.message.includes('Item de venta sin server_id') ||
+          error.message.includes('Venta sin server_id para devolución') ||
+          error.message.includes('Cuenta de tesorería sin server_id') ||
+          error.message.includes('Transferencia de tesorería sin server_id'))) ||
+      (axios.isAxiosError(error) &&
+        String(error.response?.data?.error || '').includes('Item de venta no encontrado'));
+    if (dependencyError) {
+      console.warn(`Sync pendiente por dependencia (${item.entity_type} #${item.id}): ${error.message}`);
+      return false;
+    }
 
     void reportError(error, {
       code: 'SYNC_ERROR',
@@ -1149,19 +1162,6 @@ class SyncService {
         summary: errorSummary,
       },
     });
-    const dependencyError =
-      (typeof error?.message === 'string' &&
-        (error.message.includes('Producto sin server_id') ||
-          error.message.includes('Item de venta sin server_id') ||
-          error.message.includes('Venta sin server_id para devolución') ||
-          error.message.includes('Cuenta de tesorería sin server_id') ||
-          error.message.includes('Transferencia de tesorería sin server_id'))) ||
-      (axios.isAxiosError(error) &&
-        String(error.response?.data?.error || '').includes('Item de venta no encontrado'));
-    if (dependencyError) {
-      console.warn(`Sync pendiente por dependencia (${item.entity_type} #${item.id}): ${error.message}`);
-      return false;
-    }
 
     const authNotReadyError =
       typeof error?.message === 'string' &&
@@ -1671,7 +1671,6 @@ class SyncService {
 }
 
 export const syncService = new SyncService();
-
 
 
 
