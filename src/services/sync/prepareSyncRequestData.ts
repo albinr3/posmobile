@@ -5,6 +5,20 @@ import { inferProductKind, inferProductUnit } from '../../utils/productUnits';
 import { normalizeDiscountPercentBp } from '../../utils/tax';
 import { normalizeApplyLegalTip } from '../../utils/legalTip';
 
+// HELPER AÑADIDO: Convierte el local_id (SQLite) de la cuenta de tesorería a su server_id.
+// Esto previene el error del backend (500) "La cuenta de tesorería seleccionada no existe o está inactiva",
+// ya que la base local guarda el local_id, pero el backend requiere el server_id (UUID).
+async function resolveTreasuryAccountIdHelper(id: string | null | undefined): Promise<string | null> {
+  if (!id) return null;
+  const rawId = String(id).trim();
+  if (!rawId) return null;
+  const account = await db.queryFirst<{ server_id?: string }>(
+    'SELECT server_id FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
+    [rawId, rawId]
+  );
+  return account?.server_id ? String(account.server_id) : rawId;
+}
+
 export async function prepareSyncRequestData(
   entityType: string,
   data: any,
@@ -156,20 +170,25 @@ export async function prepareSyncRequestData(
         : 0;
       const applyLegalTip = normalizeApplyLegalTip(data, false);
 
+      const resolvedSaleTreasuryAccountId = await resolveTreasuryAccountIdHelper(data.treasuryAccountId);
+      const resolvedPaymentSplits = Array.isArray(data.paymentSplits)
+        ? await Promise.all(
+            data.paymentSplits.map(async (split: any) => ({
+              method: split?.method || null,
+              amountCents: Number(split?.amountCents || 0),
+              transferBankName: split?.transferBankName || null,
+              treasuryAccountId: (await resolveTreasuryAccountIdHelper(split?.treasuryAccountId)) || null,
+            }))
+          )
+        : undefined;
+
       return {
         customerId: resolvedCustomerId,
         type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
         paymentMethod: data.paymentMethod || null,
-        treasuryAccountId: data.treasuryAccountId || null,
+        treasuryAccountId: resolvedSaleTreasuryAccountId,
         transferBankName: data.transferBankName || null,
-        paymentSplits: Array.isArray(data.paymentSplits)
-          ? data.paymentSplits.map((split: any) => ({
-              method: split?.method || null,
-              amountCents: Number(split?.amountCents || 0),
-              transferBankName: split?.transferBankName || null,
-              treasuryAccountId: split?.treasuryAccountId || null,
-            }))
-          : undefined,
+        paymentSplits: resolvedPaymentSplits,
         salePricesIncludeItbis:
           typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
         items: saleItems,
@@ -218,7 +237,7 @@ export async function prepareSyncRequestData(
         arId: resolvedArId,
         amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
         method: data.method || data.paymentMethod,
-        treasuryAccountId: data.treasuryAccountId || null,
+        treasuryAccountId: (await resolveTreasuryAccountIdHelper(data.treasuryAccountId)) || null,
         transferBankName: data.transferBankName || null,
         note: data.note || data.notes || null,
       };
@@ -244,7 +263,7 @@ export async function prepareSyncRequestData(
         arIds: resolvedArIds,
         amountCents: data.amountCents || Math.round((data.amount || 0) * 100),
         method: data.method || data.paymentMethod,
-        treasuryAccountId: data.treasuryAccountId || null,
+        treasuryAccountId: (await resolveTreasuryAccountIdHelper(data.treasuryAccountId)) || null,
         transferBankName: data.transferBankName || null,
         note: data.note || data.notes || null,
       };
@@ -305,7 +324,7 @@ export async function prepareSyncRequestData(
         supplierId: resolvedSupplierId,
         supplierName: data?.supplierName ? String(data.supplierName).trim() : null,
         paymentMethod: data?.paymentMethod ? String(data.paymentMethod).trim().toUpperCase() : null,
-        treasuryAccountId: data?.treasuryAccountId ? String(data.treasuryAccountId).trim() : null,
+        treasuryAccountId: (await resolveTreasuryAccountIdHelper(data?.treasuryAccountId)) || null,
         notes: data?.notes ? String(data.notes).trim() : null,
         updateProductCost: data?.updateProductCost !== false,
         updateProductPrice: data?.updateProductPrice !== false,
@@ -625,7 +644,7 @@ export async function prepareSyncRequestData(
             typeof data.salePricesIncludeItbis === 'boolean' ? data.salePricesIncludeItbis : undefined,
           items: returnItems,
           refundMethod: data?.refundMethod ? String(data.refundMethod).trim().toUpperCase() : undefined,
-          refundTreasuryAccountId: data?.refundTreasuryAccountId ? String(data.refundTreasuryAccountId).trim() : undefined,
+          refundTreasuryAccountId: (await resolveTreasuryAccountIdHelper(data?.refundTreasuryAccountId)) || undefined,
           notes: data?.notes ? String(data.notes).trim() : null,
         };
       }
