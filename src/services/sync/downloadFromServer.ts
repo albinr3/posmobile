@@ -1784,16 +1784,20 @@ export async function downloadFromServer(options: {
         continue;
       }
 
-      const existsByReceipt = paymentData.receiptCode
+      const existsByReceiptAndAr = paymentData.receiptCode && arLocalId
         ? await db.queryFirst<{ local_id?: string }>(
-            'SELECT local_id FROM payments WHERE receipt_code = ?',
-            [paymentData.receiptCode]
+            `SELECT local_id
+             FROM payments
+             WHERE receipt_code = ?
+               AND ar_id = ?
+             LIMIT 1`,
+            [paymentData.receiptCode, arLocalId]
           )
         : null;
-      if (existsByReceipt?.local_id) {
+      if (existsByReceiptAndAr?.local_id) {
         await db.update(
           'payments',
-          String(existsByReceipt.local_id),
+          String(existsByReceiptAndAr.local_id),
           { server_id: serverPaymentId, ...paymentRow }
         );
         continue;
