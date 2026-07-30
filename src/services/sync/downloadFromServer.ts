@@ -1803,8 +1803,43 @@ export async function downloadFromServer(options: {
         continue;
       }
 
+      const preferredLocalId = `server_payment_${serverPaymentId}`;
+      let localId = preferredLocalId;
+      const localIdCollision = await db.queryFirst<{ local_id?: string; server_id?: string }>(
+        'SELECT local_id, server_id FROM payments WHERE local_id = ? LIMIT 1',
+        [preferredLocalId]
+      );
+      const collidedServerId = String(localIdCollision?.server_id || '').trim();
+      if (localIdCollision?.local_id && collidedServerId === serverPaymentId) {
+        await db.update('payments', preferredLocalId, paymentRow, 'local_id');
+        continue;
+      }
+
+      if (localIdCollision?.local_id && collidedServerId && collidedServerId !== serverPaymentId) {
+        const canonicalCollidedLocalId = `server_payment_${collidedServerId}`;
+        const canonicalCollidedRow = await db.queryFirst<{ local_id?: string }>(
+          'SELECT local_id FROM payments WHERE local_id = ? LIMIT 1',
+          [canonicalCollidedLocalId]
+        );
+
+        if (!canonicalCollidedRow?.local_id) {
+          await db.runAsync(
+            'UPDATE payments SET local_id = ? WHERE local_id = ?',
+            [canonicalCollidedLocalId, preferredLocalId]
+          );
+        } else {
+          localId = `recovered_payment_${serverPaymentId}_${Date.now()}`;
+          console.warn('[SyncService] Colisión heredada de pagos: se conservan ambos registros.', {
+            serverPaymentId,
+            collidedServerId,
+          });
+        }
+      } else if (localIdCollision?.local_id) {
+        localId = `recovered_payment_${serverPaymentId}_${Date.now()}`;
+      }
+
       await db.insert('payments', {
-        local_id: `server_payment_${serverPaymentId}`,
+        local_id: localId,
         server_id: serverPaymentId,
         ...paymentRow,
       });
