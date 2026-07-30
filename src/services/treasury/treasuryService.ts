@@ -611,12 +611,17 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     });
   }
 
-  const saleRows = await db.query<any>('SELECT local_id, invoice_code, total_cents, data FROM sales');
+  const saleRows = await db.query<any>(
+    'SELECT local_id, server_id, invoice_code, total_cents, treasury_account_id, data FROM sales'
+  );
+  const saleTypeById = new Map<string, string>();
   for (const row of saleRows) {
     const parsed = parseJsonSafe<any>(row.data) || {};
-    if (isSaleCancelled(parsed)) continue;
     const saleType = String(parsed.type || '').toUpperCase();
-    if (saleType === 'CREDITO') continue;
+    saleTypeById.set(String(row.local_id), saleType);
+    if (row.server_id) saleTypeById.set(String(row.server_id), saleType);
+    if (isSaleCancelled(parsed)) continue;
+    if (saleType !== 'CONTADO') continue;
     const occurredAt = normalizeDateMs(parsed.soldAt ?? parsed.createdAt ?? parsed.date);
     if (occurredAt > toMs) continue;
     const paymentSplits = Array.isArray(parsed.paymentSplits) ? parsed.paymentSplits : [];
@@ -651,7 +656,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
       continue;
     }
 
-    const accountId = String(parsed.treasuryAccountId || '').trim();
+    const accountId = String(parsed.treasuryAccountId || row.treasury_account_id || '').trim();
     if (!accountId) continue;
     const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
@@ -678,11 +683,13 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     });
   }
 
-  const paymentRows = await db.query<any>('SELECT local_id, receipt_code, amount_cents, data FROM payments');
+  const paymentRows = await db.query<any>(
+    'SELECT local_id, receipt_code, amount_cents, treasury_account_id, data FROM payments'
+  );
   for (const row of paymentRows) {
     const parsed = parseJsonSafe<any>(row.data) || {};
     if (parsed.cancel === true || parsed.cancelledAt) continue;
-    const accountId = String(parsed.treasuryAccountId || '').trim();
+    const accountId = String(parsed.treasuryAccountId || row.treasury_account_id || '').trim();
     if (!accountId) continue;
     const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
@@ -711,11 +718,13 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     });
   }
 
-  const purchaseRows = await db.query<any>('SELECT local_id, total_cents, purchased_at, data FROM purchases');
+  const purchaseRows = await db.query<any>(
+    'SELECT local_id, total_cents, purchased_at, cancelled_at, treasury_account_id, data FROM purchases'
+  );
   for (const row of purchaseRows) {
     const parsed = parseJsonSafe<any>(row.data) || {};
-    if (parsed.cancelledAt) continue;
-    const accountId = String(parsed.treasuryAccountId || '').trim();
+    if (parsed.cancelledAt || row.cancelled_at) continue;
+    const accountId = String(parsed.treasuryAccountId || row.treasury_account_id || '').trim();
     if (!accountId) continue;
     const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
@@ -737,10 +746,12 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     });
   }
 
-  const expenseRows = await db.query<any>('SELECT local_id, amount_cents, expense_date, description, data FROM operating_expenses');
+  const expenseRows = await db.query<any>(
+    'SELECT local_id, amount_cents, expense_date, description, payment_method, treasury_account_id, data FROM operating_expenses'
+  );
   for (const row of expenseRows) {
     const parsed = parseJsonSafe<any>(row.data) || {};
-    const accountId = String(parsed.treasuryAccountId || '').trim();
+    const accountId = String(parsed.treasuryAccountId || row.treasury_account_id || '').trim();
     if (!accountId) continue;
     const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
@@ -754,7 +765,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
       direction: 'OUT',
       amountCents,
       occurredAt,
-      method: normalizeMethod(parsed.paymentMethod) || null,
+      method: normalizeMethod(parsed.paymentMethod || row.payment_method) || null,
       treasuryAccountId: account.localId,
       treasuryAccountName: account.name,
       reference: 'Gasto',
@@ -762,11 +773,19 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
     });
   }
 
-  const returnRows = await db.query<any>('SELECT local_id, total_cents, returned_at, return_code, data FROM returns');
+  const returnRows = await db.query<any>(
+    `SELECT local_id, total_cents, returned_at, return_code, cancelled_at,
+            sale_local_id, sale_server_id, refund_method, refund_treasury_account_id, data
+     FROM returns`
+  );
   for (const row of returnRows) {
     const parsed = parseJsonSafe<any>(row.data) || {};
-    if (parsed.cancelledAt) continue;
-    const accountId = String(parsed.refundTreasuryAccountId || '').trim();
+    if (parsed.cancelledAt || row.cancelled_at) continue;
+    const saleType = String(
+      parsed.sale?.type || saleTypeById.get(String(row.sale_local_id || '')) || saleTypeById.get(String(row.sale_server_id || '')) || ''
+    ).toUpperCase();
+    if (saleType !== 'CONTADO') continue;
+    const accountId = String(parsed.refundTreasuryAccountId || row.refund_treasury_account_id || '').trim();
     if (!accountId) continue;
     const account = resolveAccountByAnyId(accountId);
     if (!account) continue;
@@ -780,7 +799,7 @@ async function buildAllTreasuryMovementsUntil(toMs: number, canReverseTransfers:
       direction: 'OUT',
       amountCents,
       occurredAt,
-      method: normalizeMethod(parsed.refundMethod) || null,
+      method: normalizeMethod(parsed.refundMethod || row.refund_method) || null,
       treasuryAccountId: account.localId,
       treasuryAccountName: account.name,
       reference: String(parsed.returnCode || row.return_code || 'Devolución'),

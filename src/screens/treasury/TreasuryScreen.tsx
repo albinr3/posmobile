@@ -42,6 +42,12 @@ function formatDateTime(valueMs: number): string {
   return new Date(valueMs).toLocaleString('es-DO', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function endOfCurrentDayMs(): number {
+  const date = new Date();
+  date.setHours(23, 59, 59, 999);
+  return date.getTime();
+}
+
 export function TreasuryScreen() {
   const { getToken } = useAuth();
   const getTokenRef = useRef(getToken);
@@ -106,7 +112,7 @@ export function TreasuryScreen() {
     try {
       await loadBankOptions();
       const [dashboard, accountList] = await Promise.all([
-        getTreasuryDashboard({ fromMs: 0, toMs: Date.now() }),
+        getTreasuryDashboard({ fromMs: 0, toMs: endOfCurrentDayMs() }),
         listTreasuryAccounts(true),
       ]);
       setMovements(dashboard.recentMovements);
@@ -134,38 +140,49 @@ export function TreasuryScreen() {
     }
   }, [loadBankOptions]);
 
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-      const autoRefreshOnEnter = async () => {
-        if (focusRefreshRunningRef.current) return;
-        focusRefreshRunningRef.current = true;
+  const refreshTreasury = useCallback(
+    async (canApplyResult: () => boolean = () => true) => {
+      if (focusRefreshRunningRef.current) return;
+      focusRefreshRunningRef.current = true;
+      let syncedWithServer = false;
+
+      try {
         await loadData();
+        if (!canApplyResult()) return;
+
+        const currentSubUserToken = useAuthStore.getState().subUserToken;
+        if (!currentSubUserToken) return;
+
+        const netInfo = await NetInfo.fetch();
+        const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+        if (!hasInternet || !canApplyResult()) return;
+
+        const clerkToken = await getTokenRef.current();
+        if (!clerkToken || !canApplyResult()) return;
+
+        syncService.setTokenGetter(() => getTokenRef.current());
+        syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+        await syncService.fullSync(clerkToken, { ignoreCooldown: true });
+        syncedWithServer = true;
+      } catch (error) {
+        console.error('[TreasuryScreen] refresh failed:', error);
+      } finally {
         try {
-          if (!active) return;
-          const currentSubUserToken = useAuthStore.getState().subUserToken;
-          if (!currentSubUserToken) return;
-
-          const netInfo = await NetInfo.fetch();
-          const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
-          if (!hasInternet || !active) return;
-
-          const clerkToken = await getTokenRef.current();
-          if (!clerkToken || !active) return;
-
-          syncService.setTokenGetter(() => getTokenRef.current());
-          syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
-          await syncService.fullSync(clerkToken, { ignoreCooldown: true });
-        } catch (error) {
-          console.error('[TreasuryScreen] auto refresh on enter failed:', error);
+          if (syncedWithServer && canApplyResult()) {
+            await loadData();
+          }
         } finally {
           focusRefreshRunningRef.current = false;
         }
-        if (!active) return;
-        await loadData();
-      };
+      }
+    },
+    [loadData]
+  );
 
-      void autoRefreshOnEnter();
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      void refreshTreasury(() => active);
       const openRequest = consumeCreateAccountModalRequest();
       if (openRequest.open) {
         setAccountType(openRequest.preferredType === 'CAJA' ? 'CAJA' : 'BANCO');
@@ -174,7 +191,7 @@ export function TreasuryScreen() {
       return () => {
         active = false;
       };
-    }, [consumeCreateAccountModalRequest, loadData])
+    }, [consumeCreateAccountModalRequest, refreshTreasury])
   );
 
   const activeAccounts = useMemo(() => accounts.filter((account) => account.isActive), [accounts]);
@@ -294,7 +311,7 @@ export function TreasuryScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.headerRow}>
           <Text style={styles.screenTitle}>Tesorería</Text>
-          <Button mode="text" onPress={() => void loadData()} loading={loading}>
+          <Button mode="text" onPress={() => void refreshTreasury()} loading={loading}>
             Actualizar
           </Button>
         </View>

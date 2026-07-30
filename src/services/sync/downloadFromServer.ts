@@ -27,6 +27,20 @@ function parseJsonSafe(raw: any): any | null {
   }
 }
 
+function getFirstServerField(sources: any[], field: string): { found: boolean; value: unknown } {
+  for (const source of sources) {
+    if (source && typeof source === 'object' && Object.prototype.hasOwnProperty.call(source, field)) {
+      return { found: true, value: source[field] };
+    }
+  }
+  return { found: false, value: undefined };
+}
+
+function normalizeNullableId(value: unknown): string | null {
+  const normalized = String(value ?? '').trim();
+  return normalized || null;
+}
+
 async function loadLocalDataByServerId(
   table: 'sales' | 'quotes',
   serverIds: string[]
@@ -950,11 +964,10 @@ export async function downloadFromServer(options: {
       )
         .trim()
         .toUpperCase();
-      const saleTreasuryAccountId =
-        (saleDetail?.treasuryAccountId ? String(saleDetail.treasuryAccountId).trim() : '') ||
-        (sale?.treasuryAccountId ? String(sale.treasuryAccountId).trim() : '') ||
-        (localSale?.treasuryAccountId ? String(localSale.treasuryAccountId).trim() : '') ||
-        null;
+      const saleTreasuryAccountField = getFirstServerField([saleDetail, sale], 'treasuryAccountId');
+      const saleTreasuryAccountId = saleTreasuryAccountField.found
+        ? normalizeNullableId(saleTreasuryAccountField.value)
+        : normalizeNullableId(localSale?.treasuryAccountId);
       const saleTransferBankName = saleDetail?.transferBankName || sale?.transferBankName || localSale?.transferBankName || null;
       if (saleTreasuryAccountId) {
         await ensureTreasuryAccountFromServerHint({
@@ -964,16 +977,18 @@ export async function downloadFromServer(options: {
         });
       }
 
-      const resolvedPaymentSplits = Array.isArray(saleDetail?.paymentSplits)
-        ? saleDetail.paymentSplits.map((split: any) => ({
-            method: String(split?.method || 'EFECTIVO'),
-            amountCents: Number(split?.amountCents || 0),
-            transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
-            treasuryAccountId: split?.treasuryAccountId ? String(split.treasuryAccountId) : null,
-          }))
+      const paymentSplitsField = getFirstServerField([saleDetail, sale], 'paymentSplits');
+      const rawPaymentSplits = paymentSplitsField.found
+        ? (Array.isArray(paymentSplitsField.value) ? paymentSplitsField.value : [])
         : Array.isArray(localSale?.paymentSplits)
           ? localSale.paymentSplits
           : [];
+      const resolvedPaymentSplits = rawPaymentSplits.map((split: any) => ({
+        method: String(split?.method || 'EFECTIVO'),
+        amountCents: Number(split?.amountCents || 0),
+        transferBankName: split?.transferBankName ? String(split.transferBankName) : null,
+        treasuryAccountId: normalizeNullableId(split?.treasuryAccountId),
+      }));
 
       for (const split of resolvedPaymentSplits) {
         const splitTreasuryAccountId = String(split?.treasuryAccountId || '').trim();
@@ -1413,6 +1428,8 @@ export async function downloadFromServer(options: {
         };
       });
 
+      const purchasePaymentMethodField = getFirstServerField([purchase], 'paymentMethod');
+      const purchaseTreasuryAccountField = getFirstServerField([purchase], 'treasuryAccountId');
       const purchaseData = {
         id: purchaseId,
         serverId: purchaseId,
@@ -1423,14 +1440,12 @@ export async function downloadFromServer(options: {
         cancelledAt: cancelledAtMs,
         itemsCount: Number(purchase?.itemsCount || normalizedItems.length),
         items: normalizedItems,
-        paymentMethod:
-          (purchase?.paymentMethod ? String(purchase.paymentMethod).trim().toUpperCase() : '') ||
-          (localPurchase?.paymentMethod ? String(localPurchase.paymentMethod).trim().toUpperCase() : '') ||
-          'EFECTIVO',
-        treasuryAccountId:
-          (purchase?.treasuryAccountId ? String(purchase.treasuryAccountId).trim() : '') ||
-          (localPurchase?.treasuryAccountId ? String(localPurchase.treasuryAccountId).trim() : '') ||
-          null,
+        paymentMethod: purchasePaymentMethodField.found
+          ? String(purchasePaymentMethodField.value ?? '').trim().toUpperCase()
+          : String(localPurchase?.paymentMethod || 'EFECTIVO').trim().toUpperCase(),
+        treasuryAccountId: purchaseTreasuryAccountField.found
+          ? normalizeNullableId(purchaseTreasuryAccountField.value)
+          : normalizeNullableId(localPurchase?.treasuryAccountId),
         updateProductCost: true,
         updateProductPrice: true,
       };
@@ -1890,4 +1905,3 @@ export async function downloadFromServer(options: {
     throw error;
   }
 }
-
