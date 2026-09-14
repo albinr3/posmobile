@@ -332,7 +332,10 @@ class SyncService {
       }
       useSyncStore.getState().setSyncBlockedReason(null);
 
-      await this.processQueueInternal();
+      // Reutilizamos el token que ya pasó la validación de Clerk en este ciclo.
+      // No volver a pedirlo por cada elemento: durante un refresh Clerk puede
+      // devolver null transitoriamente y convertir una sincronización válida en SYNC_ERROR.
+      await this.processQueueInternal(authStatus.clerkToken || undefined);
     } finally {
       this.isSyncing = false;
       await this.updatePendingCount();
@@ -343,7 +346,7 @@ class SyncService {
    * Internal queue processor — does NOT check/set isSyncing.
    * Called by processQueue (with guard) and uploadPendingChanges (already inside fullSync).
    */
-  private async processQueueInternal() {
+  private async processQueueInternal(clerkToken?: string) {
     const now = Date.now();
 
     // Recuperar solo syncing stale (evita reset masivo agresivo).
@@ -402,7 +405,7 @@ class SyncService {
           sync_started_at: Date.now(),
         }, 'id');
 
-        await this.syncItem(item);
+        await this.syncItem(item, clerkToken);
         
         // Marcar como sincronizado
         await db.update('sync_queue', item.id, {
@@ -426,13 +429,13 @@ class SyncService {
     }
   }
 
-  private async syncItem(item: any) {
+  private async syncItem(item: any, validatedClerkToken?: string) {
     const data = JSON.parse(item.data);
     const endpoint = this.getEndpoint(item.entity_type, item.action);
     
     // Obtener token de Clerk
-    let clerkToken: string | null = null;
-    if (this.getTokenFn) {
+    let clerkToken: string | null = validatedClerkToken || null;
+    if (!clerkToken && this.getTokenFn) {
       clerkToken = await this.getTokenFn();
     }
     
@@ -1149,6 +1152,22 @@ class SyncService {
       return false;
     }
 
+    const authNotReadyError =
+      typeof error?.message === 'string' &&
+      (error.message.includes('No hay token de autenticación de Clerk disponible') ||
+        error.message.includes('No hay token de subusuario disponible'));
+    if (authNotReadyError) {
+      // La sesión puede estar hidratándose o refrescándose. Se pausa la cola
+      // sin alertar a soporte: no es un fallo de sincronización accionable.
+      useSyncStore.getState().setSyncBlockedReason(
+        error.message.includes('subusuario')
+          ? 'Sync pausado: falta autenticacion de subusuario. Inicia sesion del usuario de caja.'
+          : 'Sync pausado: falta autenticacion principal (Clerk). Inicia sesion nuevamente.'
+      );
+      console.warn(`Sync en espera de sesion (${item.entity_type} #${item.id}): ${error.message}`);
+      return true;
+    }
+
     void reportError(error, {
       code: 'SYNC_ERROR',
       severity: 'HIGH',
@@ -1162,20 +1181,6 @@ class SyncService {
         summary: errorSummary,
       },
     });
-
-    const authNotReadyError =
-      typeof error?.message === 'string' &&
-      (error.message.includes('No hay token de autenticación de Clerk disponible') ||
-        error.message.includes('No hay token de subusuario disponible'));
-    if (authNotReadyError) {
-      useSyncStore.getState().setSyncBlockedReason(
-        error.message.includes('subusuario')
-          ? 'Sync pausado: falta autenticacion de subusuario. Inicia sesion del usuario de caja.'
-          : 'Sync pausado: falta autenticacion principal (Clerk). Inicia sesion nuevamente.'
-      );
-      console.warn(`Sync en espera de sesion (${item.entity_type} #${item.id}): ${error.message}`);
-      return true;
-    }
 
     const backendAuthLikeMessage =
       axios.isAxiosError(error) &&
@@ -1554,10 +1559,10 @@ class SyncService {
     return status.ready;
   }
 
-  private async getAuthStatus(): Promise<{ ready: boolean; reason: string | null }> {
+  private async getAuthStatus(): Promise<{ ready: boolean; reason: string | null; clerkToken: string | null }> {
     // Si Clerk aun no inyecto getToken (arranque de app), no avisar error de sesion.
     if (!this.getTokenFn) {
-      return { ready: false, reason: null };
+      return { ready: false, reason: null, clerkToken: null };
     }
 
     let clerkToken: string | null = null;
@@ -1567,6 +1572,7 @@ class SyncService {
       return {
         ready: false,
         reason: 'Sync pausado: no hay sesion principal activa. Inicia sesion para continuar.',
+        clerkToken: null,
       };
     }
 
@@ -1583,10 +1589,11 @@ class SyncService {
       return {
         ready: false,
         reason: 'Sync pausado: falta autenticacion de subusuario. Selecciona el usuario de caja.',
+        clerkToken: null,
       };
     }
 
-    return { ready: true, reason: null };
+    return { ready: true, reason: null, clerkToken };
   }
 
   private async downloadFromServer(authToken: string) {
@@ -1598,7 +1605,7 @@ class SyncService {
   }
 
   private async uploadPendingChanges(authToken: string) {
-    await this.processQueueInternal();
+    await this.processQueueInternal(authToken);
   }
 
   private async getPendingQueueCount(): Promise<number> {
@@ -1671,6 +1678,4 @@ class SyncService {
 }
 
 export const syncService = new SyncService();
-
-
 
