@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useAuth } from '@clerk/clerk-expo';
@@ -7,6 +8,7 @@ import { setErrorRouteGetter } from '../services/error/errorReporter';
 import { useAuthStore } from '../store/authStore';
 import { AuthNavigator } from './AuthNavigator';
 import { MainNavigator } from './MainNavigator';
+import { WELCOME_SEEN_STORAGE_KEY } from '../screens/auth/WelcomeScreen';
 
 const Stack = createStackNavigator();
 const APP_NAV_DEBUG = false;
@@ -35,6 +37,29 @@ setErrorRouteGetter(() => getCurrentRoutePath());
 export function AppNavigator() {
   const { isAuthenticated, isLoading } = useAuthStore();
   const { isLoaded, isSignedIn } = useAuth();
+  const [isWelcomeLoaded, setIsWelcomeLoaded] = useState(false);
+  const [shouldShowWelcome, setShouldShowWelcome] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadWelcomeState = async () => {
+      try {
+        const welcomeSeen = await AsyncStorage.getItem(WELCOME_SEEN_STORAGE_KEY);
+        if (isMounted) setShouldShowWelcome(welcomeSeen !== '1');
+      } catch (error) {
+        console.warn('No se pudo leer el estado de bienvenida:', error);
+        if (isMounted) setShouldShowWelcome(false);
+      } finally {
+        if (isMounted) setIsWelcomeLoaded(true);
+      }
+    };
+
+    void loadWelcomeState();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   if (APP_NAV_DEBUG) {
     console.log('[AppNavigator] render', {
@@ -46,7 +71,7 @@ export function AppNavigator() {
     });
   }
 
-  if (isLoading) {
+  if (isLoading || !isWelcomeLoaded) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#1a73e8" />
@@ -61,7 +86,13 @@ export function AppNavigator() {
           <Stack.Screen name="Main" component={MainNavigator} />
         ) : (
           <Stack.Screen name="Auth">
-            {() => <AuthNavigator initialRouteName={isLoaded && isSignedIn ? 'SelectUser' : 'Login'} />}
+            {() => (
+              <AuthNavigator
+                initialRouteName={
+                  shouldShowWelcome ? 'Welcome' : isLoaded && isSignedIn ? 'SelectUser' : 'Login'
+                }
+              />
+            )}
           </Stack.Screen>
         )}
       </Stack.Navigator>
