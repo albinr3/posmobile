@@ -32,6 +32,7 @@ import {
 } from './src/services/push/pushNotificationService';
 import { syncService } from './src/services/sync/SyncService';
 import { useOtaUpdates } from './src/services/updates/useOtaUpdates';
+import { reportMobileInstallationActivity } from './src/services/metrics/mobileInstallationService';
 import { useAuthStore } from './src/store/authStore';
 import { useSyncStore } from './src/store/syncStore';
 
@@ -89,6 +90,7 @@ function RootApp() {
   const authHydratedRef = useRef(false);
   const offlineExpiryAlertShownRef = useRef(false);
   const clerkSignedOutDetectedAtRef = useRef<number | null>(null);
+  const isReadyRef = useRef(false);
   const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
 
@@ -129,6 +131,7 @@ function RootApp() {
       if (!hasInternet) return;
       void markInternetConnectionSeen();
       void flushErrorQueue();
+      if (isReadyRef.current) void reportMobileInstallationActivity();
     });
 
     return () => {
@@ -145,6 +148,7 @@ function RootApp() {
         void markInternetConnectionSeen();
         void flushErrorQueue();
         void syncService.incrementalSync();
+        if (isReadyRef.current) void reportMobileInstallationActivity();
       }
     };
 
@@ -159,6 +163,11 @@ function RootApp() {
       appStateSubscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    if (!isReady) return;
+    void reportMobileInstallationActivity();
+  }, [isReady]);
 
   // Configurar token getter cuando useAuth esté disponible
   useEffect(() => {
@@ -444,7 +453,7 @@ function RootApp() {
       await syncService.init();
       setLoading(false);
       if (APP_AUTH_DEBUG) console.log('[App] initializeApp() ready');
-      
+      isReadyRef.current = true;
       setIsReady(true);
     } catch (err) {
       console.error('Error inicializando app:', err);
