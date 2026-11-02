@@ -37,6 +37,7 @@ interface SubUser {
   username: string;
   role: string;
   isOwner: boolean;
+  canSellWithoutStock?: boolean;
   email?: string | null;
   canAccessSales?: boolean;
   canAccessDashboard?: boolean;

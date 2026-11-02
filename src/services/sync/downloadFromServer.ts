@@ -1,3 +1,4 @@
+import { saleStockService } from '../stock/saleStockService';
 import axios from 'axios';
 import { db } from '../../database/Database';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
@@ -422,51 +423,9 @@ export async function downloadFromServer(options: {
 
     // Descargar productos
     await runEntityTask('products', async () => {
-      const productsResponse = await axios.get(`${API_URL}/api/products`, {
-        headers,
-        timeout: DOWNLOAD_TIMEOUT_MS,
-      });
-
-      if (SYNC_DEBUG) {
-        console.log('✅ [SyncService] Productos descargados:', productsResponse.data?.data?.length || productsResponse.data?.length || 0);
-      }
-
-      const products = productsResponse.data?.data || productsResponse.data || [];
-      const serverProductIds = new Set<string>();
-
-      for (const product of products) {
-        const productId = String(product?.id || '').trim();
-        if (!productId) continue;
-        serverProductIds.add(productId);
-
-        const exists = await db.queryFirst(
-          'SELECT 1 FROM products WHERE server_id = ? LIMIT 1',
-          [product.id]
-        );
-
-        const productData = {
-          name: product.name,
-          sku: product.sku,
-          cost_cents: product.costCents || Math.round((product.cost || 0) * 100),
-          price_cents: product.priceCents || Math.round((product.price || 0) * 100),
-          stock: product.stock || 0,
-          is_available_for_sale: typeof product.isAvailableForSale === 'boolean' ? (product.isAvailableForSale ? 1 : 0) : 1,
-          synced: 1,
-          data: JSON.stringify(product),
-        };
-
-        if (exists) {
-          await db.update('products', product.id, productData, 'server_id');
-        } else {
-          await db.insert('products', {
-            local_id: `server_${product.id}`,
-            server_id: product.id,
-            ...productData,
-          });
-        }
-      }
-
-      await markMissingServerRowsAsInactive('products', serverProductIds);
+      // Obtener todas las páginas incluye los insumos que no se venden por separado.
+      const products = await fetchAllWithCursor('products', headers);
+      await saleStockService.applyCatalog(products);
     });
 
     // Descargar clientes
@@ -955,7 +914,8 @@ export async function downloadFromServer(options: {
           totalCents,
           itbisRateBp: Number(item?.itbisRateBp ?? item?.product?.itbisRateBp ?? 1800),
           wasPriceOverridden: Boolean(item?.wasPriceOverridden),
-          recipeAdjustments: Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments : [],
+          recipeAdjustments: Array.isArray(item?.recipeAdjustments) ? item.recipeAdjustments.map((adjustment: any) => ({ ...adjustment, adjustmentType: adjustment.adjustmentType ?? adjustment.type })) : [],
+          consumptions: Array.isArray(item?.consumptions) ? item.consumptions : [],
         };
       });
 

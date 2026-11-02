@@ -1,3 +1,4 @@
+import { saleStockService } from '../../services/stock/saleStockService';
 import React, { useCallback, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, RefreshControl, Alert, TouchableOpacity, Share } from 'react-native';
 import { Searchbar, Text, Chip, Icon, Portal, Dialog, Button, TextInput } from 'react-native-paper';
@@ -1224,20 +1225,10 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       const saleInvoiceCode = String(row.invoice_code || parsedData?.invoiceCode || invoice.invoiceCode || '');
       const saleServerId = row.server_id ? String(row.server_id) : null;
 
-      const saleItems = Array.isArray(parsedData?.items) ? parsedData.items : [];
-      for (const item of saleItems) {
-        const quantity = Number(item?.quantity ?? item?.qty ?? 0);
-        if (!Number.isFinite(quantity) || quantity <= 0) continue;
-        const localProductId = await resolveLocalProductId(String(item?.productId || ''));
-        if (!localProductId) continue;
-        await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [quantity, localProductId]);
+      if (!await saleStockService.cancel(invoice.localId, updatedData)) {
+        Alert.alert('Factura', 'Esta factura ya estaba cancelada.');
+        return;
       }
-
-      await db.update('sales', invoice.localId, {
-        status: 'cancelled',
-        data: JSON.stringify(updatedData),
-        synced: 0,
-      });
 
       const arRows = await db.query<any>(
         `SELECT local_id, total_cents, data

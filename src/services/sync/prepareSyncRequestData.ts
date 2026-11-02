@@ -144,7 +144,11 @@ export async function prepareSyncRequestData(
                 ? Math.max(0, Math.round(Number(item.itbisRateBp)))
                 : undefined,
             wasPriceOverridden: Boolean(item.wasPriceOverridden),
-            recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
+            recipeAdjustments: await Promise.all((Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : []).map(async (adjustment: any) => {
+              const ingredient = await db.queryFirst<{ server_id?: string }>('SELECT server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1', [adjustment.ingredientId, adjustment.ingredientId]);
+              if (!ingredient?.server_id) throw new Error('Sincroniza los insumos antes de enviar la receta.');
+              return { ingredientId: ingredient.server_id, adjustmentType: adjustment.adjustmentType ?? adjustment.type };
+            })),
           };
         })
       );

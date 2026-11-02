@@ -1,3 +1,6 @@
+import { pendingStockDeltas, stockContext, type StockRow } from '../stock/saleStockService';
+import { validateStockConsumptions, type StockEntry, type StockConsumption } from '../../utils/stockCore';
+import type { SaleItem } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
@@ -237,6 +240,56 @@ class SyncService {
         ready: false,
         reason: 'Sync pausado: no se pudo renovar la sesion del subusuario. Debes volver a iniciar sesion del usuario de caja.',
       };
+    }
+  }
+
+  async checkSaleStock(items: SaleItem[], editingSaleLocalId: string | null) {
+    const { isOnline } = useSyncStore.getState();
+    if (!isOnline) return;
+    const fresh = await this.ensureSubUserSessionFresh();
+    if (!fresh.ready) throw new Error(fresh.reason || 'Vuelve a iniciar sesión antes de vender.');
+    const { useAuthStore } = await import('../../store/authStore');
+    const actor = useAuthStore.getState();
+    const accountId = actor.accountId, userId = actor.subUser?.id;
+    const products = await db.query<StockRow>('SELECT local_id, server_id, name, stock, data FROM products');
+    const context = stockContext(products);
+    const sales = await db.query<any>('SELECT local_id, server_id, synced, status, data FROM sales WHERE synced = 0 OR local_id = ?', [editingSaleLocalId ?? '']);
+    const editing = sales.find(row => row.local_id === editingSaleLocalId);
+    const clerkToken = this.getTokenFn ? await this.getTokenFn() : null;
+    const subUserToken = this.getSubUserTokenFn ? await this.getSubUserTokenFn() : actor.subUserToken;
+    if (!clerkToken || !subUserToken) throw new Error('Conéctate y vuelve a iniciar sesión antes de guardar.');
+    const serverId = (id: string) => context.products.get(context.resolve(id))?.server_id;
+    const payloadItems = items.map(item => {
+      const productId = serverId(item.productId);
+      if (!productId) throw new Error('Sincroniza los productos antes de facturar.');
+      return { productId, qty: item.quantity, recipeAdjustments: (item.recipeAdjustments ?? []).map(adjustment => {
+        const ingredientId = serverId(adjustment.ingredientId);
+        if (!ingredientId) throw new Error('Sincroniza los insumos antes de facturar.');
+        return { ingredientId, adjustmentType: adjustment.adjustmentType };
+      }) };
+    });
+    let checked: any;
+    try {
+      const response = await axios.post(API_URL + '/api/sales/stock', { items: payloadItems, saleId: editing?.server_id || undefined }, {
+        headers: { Authorization: 'Bearer ' + clerkToken, 'X-Clerk-Authorization': 'Bearer ' + clerkToken, 'X-SubUser-Token': subUserToken, 'X-Account-Id': accountId || '' }, timeout: 12000,
+      });
+      checked = response.data;
+    } catch (error) {
+      // Una caída de red permite la validación SQLite. Un rechazo HTTP de
+      // permisos/stock nunca debe convertirse en una venta offline pendiente.
+      if (axios.isAxiosError(error) && !error.response) return;
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+      throw new Error(status === 404 ? 'Actualiza el servidor para comprobar existencias desde móvil.' : (axios.isAxiosError(error) ? error.response?.data?.error : null) || 'No se pudieron comprobar las existencias.');
+    }
+    if (checked.accountId !== accountId || checked.userId !== userId || useAuthStore.getState().accountId !== accountId || useAuthStore.getState().subUser?.id !== userId) throw new Error('El usuario cambió. Vuelve a abrir la venta.');
+    if (typeof checked.isOwner !== 'boolean' || typeof checked.canSellWithoutStock !== 'boolean' || typeof checked.ok !== 'boolean') throw new Error('Respuesta de existencias incompleta. Actualiza el servidor.');
+    await useAuthStore.getState().setSubUser({ ...actor.subUser!, isOwner: checked.isOwner, canSellWithoutStock: checked.canSellWithoutStock }, subUserToken, accountId);
+    if (!checked.ok) throw new Error(checked.issue?.message || 'Existencia insuficiente.');
+    if (!checked.isOwner && !checked.canSellWithoutStock) {
+      const inventory = new Map<string, StockEntry>((checked.inventory as StockEntry[]).map(item => { const id = context.resolve(item.id); return [id, { ...item, id }]; }));
+      const consumptions: StockConsumption[] = checked.consumptions.map((item: StockConsumption) => ({ ...item, ingredientId: context.resolve(item.ingredientId) }));
+      const problem = validateStockConsumptions(consumptions, inventory, pendingStockDeltas(sales, context, editingSaleLocalId));
+      if (problem) throw new Error(problem.message);
     }
   }
 

@@ -1,3 +1,5 @@
+import { Alert } from 'react-native';
+import { saleStockService, useSaleStockStore } from '../services/stock/saleStockService';
 import { SaleItem, SalePaymentSplit } from '../types';
 import { BaseCartState, createCartStore } from './createCartStore';
 
@@ -90,6 +92,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     saleLocalId,
     invoiceCode,
   }) => {
+    void saleStockService.refresh(saleLocalId);
     set({
       items,
       customerId,
@@ -114,6 +117,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
   },
 
   clearEditContext: () => {
+    void saleStockService.refresh(null);
     set({
       editingSaleLocalId: null,
       editingInvoiceCode: null,
@@ -121,6 +125,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
   },
 
   clear: () => {
+    void saleStockService.refresh(null);
     set({
       items: [],
       customerId: null,
@@ -139,6 +144,18 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
       editingInvoiceCode: null,
     });
   },
-}));
+}), {
+  initialQuantity: (product, items, requested) => saleStockService.initialQuantity(product, items, requested),
+  validateItems: (next, previous, state) => {
+    if (state.editingSaleLocalId !== useSaleStockStore.getState().editingSaleLocalId) {
+      void saleStockService.refresh(state.editingSaleLocalId);
+      Alert.alert('Existencias', 'Espera a que se actualicen las existencias de esta venta.');
+      return false;
+    }
+    const issue = saleStockService.issue(next, previous);
+    if (issue) { Alert.alert('Existencia insuficiente', issue.message); return false; }
+    return true;
+  },
+});
 
 export type { CartState };

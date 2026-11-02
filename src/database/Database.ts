@@ -1,9 +1,41 @@
 import * as SQLite from 'expo-sqlite';
 
+export type DatabaseTransaction = {
+  query: <R>(sql: string, params?: any[]) => Promise<R[]>;
+  queryFirst: <R>(sql: string, params?: any[]) => Promise<R | null>;
+  runAsync: (sql: string, params?: any[]) => Promise<SQLite.SQLiteRunResult>;
+};
+
 class DatabaseService {
   private db: SQLite.SQLiteDatabase | null = null;
   private currentAccountScope: string | null = null;
   private currentDbName: string | null = null;
+  private dataListeners = new Set<() => void>();
+  subscribeChanges(listener: () => void) { this.dataListeners.add(listener); return () => { this.dataListeners.delete(listener); }; }
+  private notifyInventoryChange() {
+    // Un consumidor de UI no debe convertir un commit exitoso en un guardado fallido.
+    for (const listener of this.dataListeners) { try { listener(); } catch { /* La transacción ya fue confirmada. */ } }
+  }
+
+  // La validación y el descuento comparten una transacción SQLite y la misma
+  // cola que las descargas: ninguna venta puede reservar existencias ya usadas.
+  async transaction<T>(work: (tx: DatabaseTransaction) => Promise<T>): Promise<T> {
+    return this.enqueueTask(async () => {
+      const connection = this.db;
+      if (!connection) throw new Error('Database not initialized');
+      let result!: T;
+      await connection.withTransactionAsync(async () => {
+        result = await work({
+          query: <R>(sql: string, params: any[] = []) => connection.getAllAsync<R>(sql, this.normalizeParams(params)),
+          queryFirst: <R>(sql: string, params: any[] = []) => connection.getFirstAsync<R>(sql, this.normalizeParams(params)),
+          runAsync: (sql, params = []) => connection.runAsync(sql, this.normalizeParams(params)),
+        });
+      });
+      this.notifyInventoryChange();
+      return result;
+    });
+  }
+
   private opQueue: Promise<any> = Promise.resolve();
 
   private truncateSql(sql: string, maxLength: number = 280): string {
@@ -647,6 +679,7 @@ class DatabaseService {
           `insert:${table}`
         )
       );
+      if (table === 'products' || table === 'sales') this.notifyInventoryChange();
     } catch (error) {
       console.error('SQLite insert error:', { table, keys, values, error });
       void this.reportDbError(
@@ -683,6 +716,7 @@ class DatabaseService {
           `update:${table}`
         )
       );
+      if (table === 'products' || table === 'sales') this.notifyInventoryChange();
     } catch (error) {
       console.error('SQLite update error:', { table, idColumn, id, keys, values, error });
       void this.reportDbError(
@@ -710,6 +744,7 @@ class DatabaseService {
           `delete:${table}`
         )
       );
+      if (table === 'products' || table === 'sales') this.notifyInventoryChange();
     } catch (error) {
       console.error('SQLite delete error:', { table, idColumn, id, error });
       void this.reportDbError(
@@ -770,7 +805,9 @@ class DatabaseService {
     if (!this.db) throw new Error('Database not initialized');
     const normalizedParams = this.normalizeParams(params);
     try {
-      return await this.enqueueTask(() => this.withDbRetry(() => this.db!.runAsync(sql, normalizedParams), 'runAsync'));
+      const result = await this.enqueueTask(() => this.withDbRetry(() => this.db!.runAsync(sql, normalizedParams), 'runAsync'));
+      if (/\b(products|sales|sync_metadata)\b/i.test(sql)) this.notifyInventoryChange();
+      return result;
     } catch (error) {
       console.error('SQLite runAsync error:', { sql, params: normalizedParams, error });
       void this.reportDbError(

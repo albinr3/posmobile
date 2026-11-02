@@ -1,3 +1,4 @@
+import { saleStockService, useSaleStockStore } from '../../services/stock/saleStockService';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity } from 'react-native';
 import { CameraView, useCameraPermissions, type BarcodeScanningResult } from 'expo-camera';
@@ -5,7 +6,7 @@ import { Text, Button, Surface, IconButton, Divider } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
 import { Product } from '../../types';
-import { inferProductKind, inferProductUnit } from '../../utils/productUnits';
+import { inferProductKind, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useCartStore } from '../../store/cartStore';
@@ -50,7 +51,10 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
       : route?.params?.scannerMode === 'PURCHASE_SPLIT'
         ? 'PURCHASE_SPLIT'
         : 'SEARCH';
-  const { addItem } = useCartStore();
+  const stockSnapshot = useSaleStockStore();
+  void stockSnapshot.version;
+  const scannedItemsRef = useRef<ScannedItem[]>([]);
+  scannedItemsRef.current = scannedItems;
 
   useEffect(() => {
     return () => {
@@ -66,6 +70,7 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
     const loadProducts = async () => {
       try {
         setLoadingProducts(true);
+        if (scannerMode === 'CART_SPLIT') await saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
         const rows = await db.query<any>('SELECT * FROM products WHERE is_available_for_sale = 1 ORDER BY name');
         const mapped: ScannerProduct[] = rows.map((row) => {
           let parsedData: Record<string, unknown> | null = null;
@@ -145,23 +150,16 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
       return;
     }
 
-    if (product.productKind !== 'RECIPE' && product.stock <= 0) {
-      setScanMessage(`${product.name} no tiene stock`);
-      openScanWindow();
-      return;
+    const current = scannedItemsRef.current;
+    const quantity = scannerMode === 'CART_SPLIT' ? saleStockService.initialQuantity(product, proposedScannedCart(current).items) : 1;
+    const existing = current.find(entry => entry.product.localId === product.localId);
+    const next = existing ? current.map(entry => entry === existing ? { ...entry, qty: entry.qty + quantity } : entry) : [...current, { product, qty: quantity }];
+    if (scannerMode === 'CART_SPLIT') {
+      const checked = proposedScannedCart(next);
+      if (checked.issue) { setScanMessage(checked.issue.message); openScanWindow(); return; }
     }
-
-    setScannedItems((prev) => {
-      const existing = prev.find((entry) => entry.product.localId === product.localId);
-      if (existing) {
-        return prev.map((entry) =>
-          entry.product.localId === product.localId
-            ? { ...entry, qty: entry.qty + 1 }
-            : entry
-        );
-      }
-      return [...prev, { product, qty: 1 }];
-    });
+    scannedItemsRef.current = next;
+    setScannedItems(next);
     setScanMessage(`Agregado: ${product.name}`);
     openScanWindow();
   };
@@ -202,16 +200,25 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
     navigation.goBack();
   };
 
+  function proposedScannedCart(entries: ScannedItem[]) {
+    let items = useCartStore.getState().items;
+    for (const entry of entries) {
+      const checked = saleStockService.preview(entry.product, items, entry.qty);
+      if (checked.issue) return { items, issue: checked.issue };
+      items = checked.items;
+    }
+    return { items, issue: null };
+  }
+
   const updateScannedQty = (productLocalId: string, delta: number) => {
-    setScannedItems((prev) =>
-      prev
-        .map((entry) =>
-          entry.product.localId === productLocalId
-            ? { ...entry, qty: Math.max(0, entry.qty + delta) }
-            : entry
-        )
-        .filter((entry) => entry.qty > 0)
-    );
+    const next = scannedItemsRef.current.map(entry => entry.product.localId === productLocalId
+      ? { ...entry, qty: Math.max(0, Math.round((entry.qty + delta * (unitAllowsDecimals(entry.product.unit) ? 0.5 : 1)) * 100) / 100) } : entry).filter(entry => entry.qty > 0);
+    if (scannerMode === 'CART_SPLIT' && delta > 0) {
+      const checked = proposedScannedCart(next);
+      if (checked.issue) { setScanMessage(checked.issue.message); return; }
+    }
+    scannedItemsRef.current = next;
+    setScannedItems(next);
   };
 
   const totalItems = useMemo(
@@ -231,9 +238,10 @@ export function BarcodeScannerScreen({ navigation, route }: BarcodeScannerScreen
     }
 
     if (scannerMode === 'CART_SPLIT') {
-      scannedItems.forEach((entry) => {
-        addItem(entry.product, entry.qty);
-      });
+      const checked = proposedScannedCart(scannedItemsRef.current);
+      if (checked.issue) { setScanMessage(checked.issue.message); return; }
+      // Insertar el lote completo o rechazarlo: nunca perder líneas con un envío parcial.
+      if (!useCartStore.getState().setItems(checked.items)) return;
     } else if (scannerMode === 'PURCHASE_SPLIT') {
       route?.params?.onSubmitScanned?.(
         scannedItems.map((entry) => ({

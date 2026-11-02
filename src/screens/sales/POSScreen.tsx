@@ -1,3 +1,4 @@
+import { saleStockService, useSaleStockStore } from '../../services/stock/saleStockService';
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image, ScrollView, LayoutAnimation } from 'react-native';
 import { Text, Icon, Searchbar, Menu, IconButton, Modal, Portal, Button, Chip } from 'react-native-paper';
@@ -129,6 +130,10 @@ const normalizeEditPaymentSplits = (
 };
 
 export function POSScreen({ navigation, route }: POSScreenProps) {
+  const stockSnapshot = useSaleStockStore();
+  useFocusEffect(useCallback(() => {
+    void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
+  }, []));
   const [searchQuery, setSearchQuery] = useState('');
   const [scanExactSkuQuery, setScanExactSkuQuery] = useState<string | null>(null);
   const [products, setProducts] = useState<POSProduct[]>([]);
@@ -454,6 +459,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   };
 
   const filteredProducts = useMemo(() => {
+    void stockSnapshot.version;
     const activeProducts = products.filter((product) => product.isActive);
 
     if (scanExactSkuQuery) {
@@ -472,7 +478,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         (product.sku && product.sku.toLowerCase().includes(normalizedSearch)) ||
         (product.reference && product.reference.toLowerCase().includes(normalizedSearch))
     );
-  }, [products, searchQuery, scanExactSkuQuery]);
+  }, [products, searchQuery, scanExactSkuQuery, stockSnapshot.version]);
 
   const cartTotals = useMemo(
     () => {
@@ -512,10 +518,6 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
       Alert.alert('Producto no disponible', 'Este producto no esta activo.');
       return;
     }
-    if (product.productKind !== 'RECIPE' && product.stock <= 0) {
-      Alert.alert('Sin stock', 'Este producto no tiene stock disponible.');
-      return;
-    }
     addItem(product);
   };
 
@@ -548,10 +550,11 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   const renderProduct = ({ item }: { item: any }) => {
     const isRecipe = (item as any).productKind === 'RECIPE';
-    const isOut = !isRecipe && item.stock <= 0;
+    const stockIssue = saleStockService.preview(item, items).issue;
+    const isOut = Boolean(stockIssue);
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
-    const stockLabel = isRecipe ? 'Receta' : `${formatProductQty(item.stock, item.unit)} disponible`;
+    const stockLabel = stockIssue ? (stockIssue.kind === 'missing' ? 'Sincroniza para validar' : (stockIssue.available ?? 0) <= 0 ? 'Sin existencia' : 'Existencia insuficiente') : isRecipe ? 'Receta' : `${formatProductQty(saleStockService.available(item), item.unit)} disponible`;
     const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
@@ -560,6 +563,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <TouchableOpacity
             style={[styles.productCard, styles.productCardList]}
             onPress={() => handleProductPress(item)}
+            disabled={isOut}
+            accessibilityState={{ disabled: isOut }}
+            accessibilityHint={stockIssue?.message}
             onLongPress={() => {
               if (selectedQty > 0) {
                 removeOneLineByProductId(item.localId);
@@ -596,6 +602,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
       <TouchableOpacity
         style={styles.productCard}
         onPress={() => handleProductPress(item)}
+            disabled={isOut}
+            accessibilityState={{ disabled: isOut }}
+            accessibilityHint={stockIssue?.message}
         onLongPress={() => {
           if (selectedQty > 0) {
             removeOneLineByProductId(item.localId);
@@ -993,36 +1002,30 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                       };
                       nextItems.splice(insertIdx + 1, 0, newLine);
                     }
-                    useCartStore.setState({ items: nextItems });
+                    if (!useCartStore.getState().setItems(nextItems)) return;
                   } else {
                     if (newLineId !== recipeDialogLineId) {
                       const existingTarget = currentItems.find(i => i.lineId === newLineId);
                       if (existingTarget) {
-                        useCartStore.setState({
-                          items: currentItems
+                        if (!useCartStore.getState().setItems(currentItems
                             .filter(i => i.lineId !== recipeDialogLineId)
                             .map(i => i.lineId === newLineId
                               ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
                               : i
-                            ),
-                        });
+                            ))) return;
                       } else {
-                        useCartStore.setState({
-                          items: currentItems.map(item =>
+                        if (!useCartStore.getState().setItems(currentItems.map(item =>
                             item.lineId === recipeDialogLineId
                               ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
                               : item
-                          ),
-                        });
+                          ))) return;
                       }
                     } else {
-                      useCartStore.setState({
-                        items: currentItems.map(item =>
+                      if (!useCartStore.getState().setItems(currentItems.map(item =>
                           item.lineId === recipeDialogLineId
                             ? { ...item, recipeAdjustments: adjustments }
                             : item
-                        ),
-                      });
+                        ))) return;
                     }
                   }
                 }

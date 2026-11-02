@@ -10,6 +10,41 @@ function buildLineId(productId: string, recipeAdjustments: any[] = []): string {
   return adjustmentsKey ? `${productId}::${adjustmentsKey}` : productId;
 }
 
+export function createProductCartItem(product: Product, quantity: number): SaleItem {
+  // Extract recipeItems from product parsed data
+  let recipeItems: any[] | undefined;
+  let productItbisRateBp = 1800;
+  try {
+    const parsed = product.data ? JSON.parse(product.data) : null;
+    if (Array.isArray(parsed?.recipeItems) && parsed.recipeItems.length > 0) {
+      recipeItems = parsed.recipeItems.map((ri: any) => ({
+        ingredientId: String(ri.ingredientId || ri.id || ''),
+        ingredientName: String(ri.ingredientName || ri.name || ''),
+        qty: Number(ri.qty || ri.quantity || 0),
+        ingredientUnit: String(ri.ingredientUnit || ri.unit || 'UNIDAD'),
+      }));
+    }
+    const rawItbisRateBp = Number(parsed?.itbisRateBp);
+    if (Number.isFinite(rawItbisRateBp) && rawItbisRateBp >= 0) {
+      productItbisRateBp = Math.round(rawItbisRateBp);
+    } else {
+      const rawTaxPercent = Number(parsed?.taxRate);
+      if (Number.isFinite(rawTaxPercent) && rawTaxPercent >= 0) {
+        productItbisRateBp = rawTaxPercent <= 100 ? Math.round(rawTaxPercent * 100) : Math.round(rawTaxPercent);
+      }
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  return { lineId: buildLineId(product.localId), productId: product.localId, productName: product.name, sku: product.sku, reference: product.reference, quantity, priceCents: product.priceCents, totalCents: quantity * product.priceCents, itbisRateBp: productItbisRateBp, unit: product.unit, productKind: product.productKind, recipeItems, recipeAdjustments: [] };
+}
+
+type CartOptions<T> = {
+  validateItems?: (next: SaleItem[], previous: SaleItem[], state: T) => boolean;
+  initialQuantity?: (product: Product, items: SaleItem[], requested?: number) => number;
+};
+
 export interface BaseCartState {
   items: SaleItem[];
   customerId: string | null;
@@ -18,10 +53,11 @@ export interface BaseCartState {
   customerSaleDiscountPercentBp: number | null;
   discountPercentBp: number | null;
   discountWasManual: boolean;
-  addItem: (product: Product, quantity?: number) => void;
+  addItem: (product: Product, quantity?: number) => boolean;
+  setItems: (items: SaleItem[]) => boolean;
   removeItem: (lineId: string) => void;
   removeOneLineByProductId: (productId: string) => void;
-  updateQuantity: (lineId: string, quantity: number) => void;
+  updateQuantity: (lineId: string, quantity: number) => boolean;
   updatePrice: (lineId: string, priceCents: number) => void;
   setCustomer: (
     customerId: string | null,
@@ -42,7 +78,8 @@ type SetState<T> = (
 
 function createBaseCartSlice<TState extends BaseCartState>(
   set: SetState<TState>,
-  get: () => TState
+  get: () => TState,
+  options: CartOptions<TState>
 ): BaseCartState {
   return {
     items: [],
@@ -53,72 +90,23 @@ function createBaseCartSlice<TState extends BaseCartState>(
     discountPercentBp: null,
     discountWasManual: false,
 
-    addItem: (product: Product, quantity: number = 1) => {
-      set((state) => {
-        const lineId = buildLineId(product.localId);
-        const existingItem = state.items.find((item) => item.lineId === lineId);
+    setItems: (items) => {
+      const state = get();
+      if (options.validateItems && !options.validateItems(items, state.items, state)) return false;
+      set({ items } as Partial<TState>);
+      return true;
+    },
 
-        if (existingItem) {
-          return {
-            items: state.items.map((item) =>
-              item.lineId === lineId
-                ? {
-                    ...item,
-                    quantity: item.quantity + quantity,
-                    totalCents: (item.quantity + quantity) * item.priceCents,
-                  }
-                : item
-            ),
-          } as Partial<TState>;
-        }
-
-        // Extract recipeItems from product parsed data
-        let recipeItems: any[] | undefined;
-        let productItbisRateBp = 1800;
-        try {
-          const parsed = product.data ? JSON.parse(product.data) : null;
-          if (Array.isArray(parsed?.recipeItems) && parsed.recipeItems.length > 0) {
-            recipeItems = parsed.recipeItems.map((ri: any) => ({
-              ingredientId: String(ri.ingredientId || ri.id || ''),
-              ingredientName: String(ri.ingredientName || ri.name || ''),
-              qty: Number(ri.qty || ri.quantity || 0),
-              ingredientUnit: String(ri.ingredientUnit || ri.unit || 'UNIDAD'),
-            }));
-          }
-          const rawItbisRateBp = Number(parsed?.itbisRateBp);
-          if (Number.isFinite(rawItbisRateBp) && rawItbisRateBp >= 0) {
-            productItbisRateBp = Math.round(rawItbisRateBp);
-          } else {
-            const rawTaxPercent = Number(parsed?.taxRate);
-            if (Number.isFinite(rawTaxPercent) && rawTaxPercent >= 0) {
-              productItbisRateBp = rawTaxPercent <= 100 ? Math.round(rawTaxPercent * 100) : Math.round(rawTaxPercent);
-            }
-          }
-        } catch {
-          // ignore parse errors
-        }
-
-        return {
-          items: [
-            ...state.items,
-            {
-              lineId,
-              productId: product.localId,
-              productName: product.name,
-              sku: product.sku,
-              reference: product.reference,
-              quantity,
-              priceCents: product.priceCents,
-              totalCents: quantity * product.priceCents,
-              itbisRateBp: productItbisRateBp,
-              unit: product.unit,
-              productKind: product.productKind,
-              recipeItems,
-              recipeAdjustments: [],
-            },
-          ],
-        } as Partial<TState>;
-      });
+    addItem: (product, requested) => {
+      const state = get();
+      const quantity = options.initialQuantity?.(product, state.items, requested) ?? requested ?? 1;
+      if (!Number.isFinite(quantity) || quantity <= 0) return false;
+      const lineId = buildLineId(product.localId);
+      const existing = state.items.find(item => item.lineId === lineId);
+      const items = existing
+        ? state.items.map(item => item.lineId === lineId ? { ...item, quantity: item.quantity + quantity, totalCents: (item.quantity + quantity) * item.priceCents } : item)
+        : [...state.items, createProductCartItem(product, quantity)];
+      return state.setItems(items);
     },
 
     removeItem: (lineId: string) => {
@@ -137,23 +125,10 @@ function createBaseCartSlice<TState extends BaseCartState>(
       });
     },
 
-    updateQuantity: (lineId: string, quantity: number) => {
-      if (quantity <= 0) {
-        get().removeItem(lineId);
-        return;
-      }
-
-      set((state) => ({
-        items: state.items.map((item) =>
-          item.lineId === lineId
-            ? {
-                ...item,
-                quantity,
-                totalCents: quantity * item.priceCents,
-              }
-            : item
-        ),
-      }) as Partial<TState>);
+    updateQuantity: (lineId, quantity) => {
+      if (!Number.isFinite(quantity)) return false;
+      if (quantity <= 0) { get().removeItem(lineId); return true; }
+      return get().setItems(get().items.map(item => item.lineId === lineId ? { ...item, quantity, totalCents: quantity * item.priceCents } : item));
     },
 
     updatePrice: (lineId: string, priceCents: number) => {
@@ -224,11 +199,12 @@ export function createCartStore<TExtra extends Record<string, any>>(
   createExtraSlice: (
     set: SetState<BaseCartState & TExtra>,
     get: () => BaseCartState & TExtra
-  ) => TExtra
+  ) => TExtra,
+  options: CartOptions<BaseCartState & TExtra> = {}
 ) {
   type State = BaseCartState & TExtra;
   return create<State>((set, get) => ({
-    ...createBaseCartSlice<State>(set as SetState<State>, get as () => State),
+    ...createBaseCartSlice<State>(set as SetState<State>, get as () => State, options),
     ...createExtraSlice(set as SetState<State>, get as () => State),
   }));
 }

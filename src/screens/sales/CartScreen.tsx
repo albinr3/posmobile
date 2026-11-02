@@ -1,3 +1,5 @@
+import type { StockConsumption } from '../../utils/stockCore';
+import { saleStockService, useSaleStockStore } from '../../services/stock/saleStockService';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
@@ -75,6 +77,10 @@ const normalizeAccountName = (value: unknown): string =>
   String(value || '').trim().toLocaleLowerCase('es');
 
 export function CartScreen({ navigation, route }: CartScreenProps) {
+  const stockSnapshot = useSaleStockStore();
+  useFocusEffect(useCallback(() => {
+    void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
+  }, []));
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
   const {
@@ -190,36 +196,30 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           const newLine = { ...cartItem, lineId: newLineId, quantity: 1, totalCents: cartItem.priceCents, recipeAdjustments: adjustments };
           nextItems.splice(insertIdx + 1, 0, newLine);
         }
-        useCartStore.setState({ items: nextItems });
+        if (!useCartStore.getState().setItems(nextItems)) return;
       } else {
         if (newLineId !== recipeDialogLineId) {
           const existingTarget = currentItems.find(i => i.lineId === newLineId);
           if (existingTarget) {
-            useCartStore.setState({
-              items: currentItems
+            if (!useCartStore.getState().setItems(currentItems
                 .filter(i => i.lineId !== recipeDialogLineId)
                 .map(i => i.lineId === newLineId
                   ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
                   : i
-                ),
-            });
+                ))) return;
           } else {
-            useCartStore.setState({
-              items: currentItems.map(item =>
+            if (!useCartStore.getState().setItems(currentItems.map(item =>
                 item.lineId === recipeDialogLineId
                   ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
                   : item
-              ),
-            });
+              ))) return;
           }
         } else {
-          useCartStore.setState({
-            items: currentItems.map(item =>
+          if (!useCartStore.getState().setItems(currentItems.map(item =>
               item.lineId === recipeDialogLineId
                 ? { ...item, recipeAdjustments: adjustments }
                 : item
-            ),
-          });
+            ))) return;
         }
       }
     }
@@ -796,8 +796,14 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     if (completingSaleRef.current) return;
     completingSaleRef.current = true;
     setLoading(true);
+    let reservation: Awaited<ReturnType<typeof saleStockService.reserve>> | null = null;
+    let stockPersisted = false;
     try {
       if (items.length === 0) return;
+      await saleStockService.refresh(editingSaleLocalId);
+      const stockIssue = saleStockService.issue(items);
+      if (stockIssue) { Alert.alert('Existencias', stockIssue.message); return; }
+      useSaleStockStore.setState({ saving: true });
     if (!applyDiscountDraft(discountDraft, discountWasManual)) {
       Alert.alert('Descuento inválido', 'Corrige el porcentaje de descuento antes de completar la venta.');
       return;
@@ -944,6 +950,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
     }
 
+      // Comprobar antes de crear la factura o tocar la cola. La reserva SQLite
+      // vuelve a validar de forma atómica después de la comprobación remota.
+      await syncService.checkSaleStock(items, editingSaleLocalId);
       let localId = generateLocalId();
       let invoiceCode = generateInvoiceCode();
       const now = Date.now();
@@ -975,6 +984,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           : [];
 
       const basePayload = {
+        stockConsumptions: [] as StockConsumption[],
+        stockReservationDelta: [] as StockConsumption[],
         customerId: selectedCustomerId,
         customerVisualId: selectedCustomerVisualId ?? null,
         customerName: selectedCustomerName,
@@ -1078,22 +1089,6 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           recipeAdjustments: Array.isArray(item.recipeAdjustments) ? item.recipeAdjustments : [],
         }));
 
-        const oldItems = Array.isArray(existingData?.items) ? existingData.items : [];
-
-        // Revertir stock anterior
-        for (const oldItem of oldItems) {
-          const qty = Number(oldItem?.quantity ?? oldItem?.qty ?? 0);
-          if (!Number.isFinite(qty) || qty <= 0) continue;
-          const localProductId = await resolveLocalProductId(String(oldItem?.productId || ''));
-          if (!localProductId) continue;
-          await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [qty, localProductId]);
-        }
-
-        // Aplicar stock nuevo
-        for (const item of items) {
-          await db.runAsync('UPDATE products SET stock = stock - ? WHERE local_id = ?', [item.quantity, item.productId]);
-        }
-
         const updatedData = {
           ...(existingData || {}),
           localId: editingSaleLocalId,
@@ -1122,14 +1117,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           editedAt: now,
         };
 
-        await db.update('sales', editingSaleLocalId, {
-          customer_id: selectedCustomerId,
-          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
-          total_cents: documentTotalCents,
-          status: 'completed',
-          synced: 0,
-          data: JSON.stringify(updatedData),
+        reservation = await saleStockService.reserve(items, editingSaleLocalId, async (tx, reserved) => {
+          updatedData.stockConsumptions = reserved.consumptions;
+          updatedData.stockReservationDelta = reserved.pendingDelta;
+          await tx.runAsync('UPDATE sales SET customer_id = ?, treasury_account_id = ?, total_cents = ?, status = ?, synced = 0, data = ? WHERE local_id = ?', [selectedCustomerId, paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null, documentTotalCents, 'completed', JSON.stringify(updatedData), editingSaleLocalId]);
         });
+        stockPersisted = true;
 
         if (paymentMethod === 'CREDITO') {
           await upsertLocalArForCreditSale({
@@ -1147,6 +1140,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         }
 
         await queueSaleUpdateForEdit(editingSaleLocalId, {
+          stockConsumptions: reservation.consumptions,
+          stockReservationDelta: reservation.pendingDelta,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
           customerId: selectedCustomerId,
           customerVisualId: selectedCustomerVisualId ?? null,
@@ -1169,12 +1164,15 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             unit: item.unit || 'UNIDAD',
             price: item.priceCents / 100,
             wasPriceOverridden: !!item.wasPriceOverridden,
+            recipeAdjustments: item.recipeAdjustments ?? [],
           })),
           shippingCents,
           status: 'completed',
         });
       } else {
         const saleData = {
+          stockConsumptions: [] as StockConsumption[],
+          stockReservationDelta: [] as StockConsumption[],
           localId,
           invoiceCode,
           customerId: selectedCustomerId,
@@ -1207,17 +1205,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           soldAt: now,
         };
 
-        await db.insert('sales', {
-          local_id: localId,
-          invoice_code: invoiceCode,
-          customer_id: selectedCustomerId,
-          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
-          total_cents: cartTotals.totalCents,
-          status: 'completed',
-          created_at: now,
-          synced: 0,
-          data: JSON.stringify(saleData),
+        reservation = await saleStockService.reserve(items, null, async (tx, reserved) => {
+          saleData.stockConsumptions = reserved.consumptions;
+          saleData.stockReservationDelta = reserved.pendingDelta;
+          await tx.runAsync('INSERT INTO sales (local_id, invoice_code, customer_id, treasury_account_id, total_cents, status, created_at, synced, data) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)', [localId, invoiceCode, selectedCustomerId, paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null, cartTotals.totalCents, 'completed', now, JSON.stringify(saleData)]);
         });
+        stockPersisted = true;
 
         if (paymentMethod === 'CREDITO') {
           await upsertLocalArForCreditSale({
@@ -1242,9 +1235,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         );
         resolvedInvoiceCode = syncedSale?.invoice_code || invoiceCode;
 
-        for (const item of items) {
-          await db.runAsync('UPDATE products SET stock = stock - ? WHERE local_id = ?', [item.quantity, item.productId]);
-        }
+        await saleStockService.refresh();
       }
 
       const saleTicketPayload = {
@@ -1304,12 +1295,17 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       navigation.navigate('Receipt', { saleId: localId, invoiceCode: resolvedInvoiceCode });
     } catch (error) {
       console.error('Error completando venta:', error);
-      Alert.alert('Error', 'No se pudo completar la venta');
+      if (reservation && !stockPersisted) await saleStockService.release(reservation.delta);
+      Alert.alert('No se pudo completar la venta', error instanceof Error ? error.message : 'Revisa las existencias e intenta nuevamente.');
     } finally {
       setLoading(false);
       completingSaleRef.current = false;
+      useSaleStockStore.setState({ saving: false });
+      void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
     }
   };
+
+  const cartStockIssue = saleStockService.issue(items);
 
   const renderItem = ({ item }: { item: typeof items[0] }) => {
     const step = unitAllowsDecimals(item.unit) ? 0.5 : 1;
@@ -1386,6 +1382,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
+      {cartStockIssue && items.length > 0 ? <Text accessibilityRole="alert" style={{ color: '#DC2626', padding: 12 }}>{cartStockIssue.message}</Text> : null}
       <FlatList
         data={items}
         renderItem={renderItem}
@@ -1586,8 +1583,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               textColor="#fff"
               labelStyle={styles.completeButtonLabel}
               onPress={handleCompleteSale}
+              disabled={loading || !!cartStockIssue || !stockSnapshot.ready}
               loading={loading}
-              disabled={loading}
               style={styles.completeButton}
               contentStyle={styles.completeButtonContent}
             >
