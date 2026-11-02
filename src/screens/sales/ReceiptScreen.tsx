@@ -3,6 +3,7 @@ import { View, StyleSheet, ScrollView, Share, Alert } from 'react-native';
 import { Text, Surface, Button, Divider } from 'react-native-paper';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Asset } from 'expo-asset';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { db } from '../../database/Database';
@@ -15,6 +16,7 @@ import { getSalesSettings } from '../../services/settings/salesSettings';
 import { calcDocumentTotalsByTaxMode, normalizeDiscountPercentBp } from '../../utils/tax';
 import { formatCustomerLabel, GENERIC_CUSTOMER_DISPLAY_NAME } from '../../utils/customerLabels';
 import { LEGAL_TIP_PERCENT_BP, resolveLegalTipSummary } from '../../utils/legalTip';
+import { PAPER_SIZE_KEY, printSaleTicketDirect } from '../../services/printing/thermalPrinterService';
 
 interface ReceiptScreenProps {
   navigation: any;
@@ -105,6 +107,7 @@ const buildReceiptHtml = (params: {
   discountTotalCents?: number;
   legalTipPercentBp?: number;
   legalTipCents?: number;
+  paperSize?: '80' | 'carta';
 }) => {
   const {
     notes,
@@ -192,9 +195,9 @@ const buildReceiptHtml = (params: {
       <head>
         <meta charset="utf-8" />
         <style>
-          @page { size: 80mm auto; margin: 0; }
+          @page { size: ${params.paperSize === 'carta' ? 'letter' : '80mm auto'}; margin: 0; }
           body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #000; background: #fff; }
-          .ticket { width: 80mm; margin: 0 auto; padding: 10px 10px 14px; font-size: 14px; line-height: 1.25; }
+          .ticket { box-sizing: border-box; width: ${params.paperSize === 'carta' ? '100%' : '80mm'}; margin: 0 auto; padding: 10px 10px 14px; font-size: 14px; line-height: 1.25; }
           .brand { text-align: center; margin-bottom: 6px; }
           .logo { height: 28px; width: auto; }
           .sep { border-top: 1px dashed #444; border-bottom: 1px dashed #444; padding: 7px 0; margin: 7px 0; }
@@ -322,31 +325,73 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
     const displayInvoiceCode = sale?.invoice_code || sale?.invoiceCode || routeInvoiceCode;
     const createdAt = resolveSaleCreatedAt(sale?.created_at, sale);
     const legalTip = resolveSaleLegalTip(sale);
-    const html = buildReceiptHtml({
-      invoiceCode: displayInvoiceCode,
-      createdAt,
-      customerName: sale.customerName,
-      notes: sale.notes,
-      paymentMethod: sale.paymentMethod,
-      transferBankName: sale.transferBankName,
-      paymentSplits: sale.paymentSplits || [],
-      totalCents: sale.totalCents,
-      shippingCents: resolveSaleShippingCents(sale),
-      items: sale.items || [],
-      logoUri,
-      showItbisBreakdown,
-      salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
-      discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
-      discountTotalCents: Number(sale.discountTotalCents || 0),
-      legalTipPercentBp: legalTip.legalTipPercentBp,
-      legalTipCents: legalTip.legalTipCents,
-    });
-
     try {
+      const paperSize = await AsyncStorage.getItem(PAPER_SIZE_KEY);
+      if (paperSize !== 'carta') {
+        const salePricesIncludeItbis = sale.salePricesIncludeItbis !== false;
+        const result = await printSaleTicketDirect({
+          invoiceCode: displayInvoiceCode,
+          createdAt,
+          customerName: sale.customerName,
+          notes: sale.notes,
+          paymentMethod: sale.paymentMethod,
+          transferBankName: sale.transferBankName,
+          paymentSplits: sale.paymentSplits || [],
+          type: sale.type || (sale.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
+          dueDate: sale.dueDate,
+          totalCents: sale.totalCents,
+          shippingCents: resolveSaleShippingCents(sale),
+          salePricesIncludeItbis,
+          discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
+          discountTotalCents: Number(sale.discountTotalCents || 0),
+          legalTipPercentBp: legalTip.legalTipPercentBp,
+          legalTipBaseCents: Number(sale.legalTipBaseCents ?? sale.subtotalCents ?? 0),
+          legalTipCents: legalTip.legalTipCents,
+          items: (sale.items || []).map((item: any) => ({
+            productName: String(item.productName || 'Producto'),
+            quantity: Number(item.quantity || item.qty || 0),
+            priceCents: Number(item.priceCents || item.unitPriceCents || 0),
+            totalCents: calcDocumentTotalsByTaxMode({
+              items: [{ quantity: Number(item.quantity || item.qty || 0), priceCents: Number(item.priceCents || item.unitPriceCents || 0), itbisRateBp: Number(item.itbisRateBp ?? 1800) }],
+              shippingCents: 0,
+              salePricesIncludeItbis,
+            }).totalCents,
+            unit: item.unit || 'UNIDAD',
+            reference: item.reference || item.sku || null,
+            productId: item.productId || null,
+            sku: item.sku || null,
+          })),
+        });
+        if (!result.printed) {
+          Alert.alert('Impresión', result.message || 'No se pudo imprimir en la impresora térmica.');
+        }
+        return;
+      }
+      const html = buildReceiptHtml({
+        invoiceCode: displayInvoiceCode,
+        createdAt,
+        customerName: sale.customerName,
+        notes: sale.notes,
+        paymentMethod: sale.paymentMethod,
+        transferBankName: sale.transferBankName,
+        paymentSplits: sale.paymentSplits || [],
+        totalCents: sale.totalCents,
+        shippingCents: resolveSaleShippingCents(sale),
+        items: sale.items || [],
+        logoUri,
+        showItbisBreakdown,
+        salePricesIncludeItbis: typeof sale.salePricesIncludeItbis === 'boolean' ? sale.salePricesIncludeItbis : true,
+        discountPercentBp: normalizeDiscountPercentBp(sale.discountPercentBp ?? 0),
+        discountTotalCents: Number(sale.discountTotalCents || 0),
+        legalTipPercentBp: legalTip.legalTipPercentBp,
+        legalTipCents: legalTip.legalTipCents,
+        paperSize: 'carta',
+      });
+
       await Print.printAsync({ html });
     } catch (error) {
       console.error('Error imprimiendo:', error);
-      Alert.alert('Error', 'No se pudo abrir la vista de impresión.');
+      Alert.alert('Error', 'No se pudo imprimir la factura.');
     }
   };
 
