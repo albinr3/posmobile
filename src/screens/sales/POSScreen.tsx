@@ -791,7 +791,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <CashShiftGate />
+      <CashShiftGate showActivationOffer />
       <FlatList
         key={viewMode}
         data={filteredProducts}
