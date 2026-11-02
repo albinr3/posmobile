@@ -4,6 +4,8 @@ import { SaleItem, SalePaymentSplit } from '../types';
 import { BaseCartState, createCartStore } from './createCartStore';
 
 interface CartExtraState {
+  notes: string;
+  setNotes: (notes: string) => void;
   paymentMethod: string;
   transferBankName: string | null;
   treasuryAccountId: string | null;
@@ -34,6 +36,7 @@ interface CartExtraState {
     discountWasManual?: boolean;
     saleLocalId: string;
     invoiceCode: string;
+    notes?: string | null;
   }) => void;
   clearEditContext: () => void;
 }
@@ -41,6 +44,8 @@ interface CartExtraState {
 type CartState = BaseCartState & CartExtraState;
 
 export const useCartStore = createCartStore<CartExtraState>((set) => ({
+  notes: '',
+  setNotes: (notes) => set({ notes }),
   paymentMethod: 'EFECTIVO',
   transferBankName: null,
   treasuryAccountId: null,
@@ -91,10 +96,12 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     discountWasManual,
     saleLocalId,
     invoiceCode,
+    notes,
   }) => {
     void saleStockService.refresh(saleLocalId);
     set({
       items,
+      notes: notes ?? '',
       customerId,
       customerName,
       customerVisualId: customerVisualId ?? null,
@@ -128,6 +135,7 @@ export const useCartStore = createCartStore<CartExtraState>((set) => ({
     void saleStockService.refresh(null);
     set({
       items: [],
+      notes: '',
       customerId: null,
       customerName: null,
       customerVisualId: null,

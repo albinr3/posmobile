@@ -381,6 +381,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         const normalizedDiscountPercentBp = normalizeDiscountPercentBp(parsedData?.discountPercentBp ?? 0);
         const resolvedApplyLegalTip = normalizeApplyLegalTip(parsedData, false);
         loadInvoiceForEdit({
+          notes: parsedData?.notes ?? null,
           items: resolvedItems,
           customerId: resolvedCustomerId,
           customerName: resolvedCustomerName,

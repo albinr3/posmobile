@@ -963,6 +963,10 @@ export async function downloadFromServer(options: {
       }
 
       const saleData = {
+        notes: (() => {
+          const field = getFirstServerField([saleDetail, sale], 'notes');
+          return field.found ? field.value : localSale?.notes ?? null;
+        })(),
         id: saleId,
         invoiceCode: String(saleDetail?.invoiceCode || sale?.invoiceCode || localSale?.invoiceCode || '-'),
         soldAt: createdAt,
@@ -1043,7 +1047,11 @@ export async function downloadFromServer(options: {
 
       const exists = await db.queryFirst<any>('SELECT local_id FROM sales WHERE server_id = ?', [saleId]);
       if (exists) {
-        await db.update('sales', saleId, saleRow, 'server_id');
+        // No sobrescribir una edición local pendiente, incluso si se produce durante la descarga.
+        await db.runAsync(
+          'UPDATE sales SET invoice_code = ?, customer_id = ?, treasury_account_id = ?, total_cents = ?, status = ?, created_at = ?, synced = ?, data = ? WHERE server_id = ? AND synced = 1',
+          [saleRow.invoice_code, saleRow.customer_id, saleRow.treasury_account_id, saleRow.total_cents, saleRow.status, saleRow.created_at, saleRow.synced, saleRow.data, saleId]
+        );
       } else {
         await db.insert('sales', {
           local_id: `server_sale_${saleId}`,

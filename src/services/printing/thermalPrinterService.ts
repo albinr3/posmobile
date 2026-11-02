@@ -53,6 +53,7 @@ export interface PaymentReceiptTicketPayload {
 }
 
 export interface SaleTicketPayload {
+  notes?: string | null;
   invoiceCode: string;
   createdAt: number;
   customerName?: string | null;
@@ -229,6 +230,9 @@ export const buildSaleTicketText = (
     );
   }
   lines.push(formatColumns('TOTAL', formatCurrency(payload.totalCents), width));
+  if (payload.notes?.trim()) {
+    lines.push(separator, 'Nota', payload.notes);
+  }
   lines.push(`ITBIS: ${payload.salePricesIncludeItbis === false ? 'NO INCLUIDO' : 'INCLUIDO'}`);
   if (isCreditSale) {
     lines.push('VENTA A CREDITO');

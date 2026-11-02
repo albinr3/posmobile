@@ -88,6 +88,7 @@ const resolveSaleLegalTip = (saleData: any): { legalTipPercentBp: number; legalT
 };
 
 const buildReceiptHtml = (params: {
+  notes?: string | null;
   invoiceCode: string;
   createdAt: number;
   customerName?: string | null;
@@ -106,6 +107,7 @@ const buildReceiptHtml = (params: {
   legalTipCents?: number;
 }) => {
   const {
+    notes,
     invoiceCode,
     createdAt,
     customerName,
@@ -220,6 +222,7 @@ const buildReceiptHtml = (params: {
           <div>${itemsRows}</div>
           ${taxRows}
           <div class="total"><span>TOTAL</span><span>${formatCurrency(totalCents)}</span></div>
+          ${notes?.trim() ? `<div style="margin-top:10px;white-space:pre-wrap;overflow-wrap:anywhere"><strong>Nota</strong><br/>${escapeHtml(notes)}</div>` : ''}
           <div class="thanks">Gracias por su compra</div>
         </div>
       </body>
@@ -274,6 +277,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       invoiceCode: displayInvoiceCode,
       createdAt,
       customerName: sale.customerName,
+      notes: sale.notes,
       paymentMethod: sale.paymentMethod,
       transferBankName: sale.transferBankName,
       paymentSplits: sale.paymentSplits || [],
@@ -322,6 +326,7 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
       invoiceCode: displayInvoiceCode,
       createdAt,
       customerName: sale.customerName,
+      notes: sale.notes,
       paymentMethod: sale.paymentMethod,
       transferBankName: sale.transferBankName,
       paymentSplits: sale.paymentSplits || [],
@@ -460,6 +465,9 @@ export function ReceiptScreen({ navigation, route }: ReceiptScreenProps) {
             <Text style={styles.totalLabel}>Total</Text>
             <Text style={styles.totalValue}>{formatCurrency(sale.totalCents)}</Text>
           </View>
+          {typeof sale.notes === 'string' && sale.notes.trim() ? (
+            <View style={{ marginTop: 12 }}><Text style={styles.label}>Nota</Text><Text>{sale.notes}</Text></View>
+          ) : null}
         </Surface>
 
         <View style={styles.actions}>

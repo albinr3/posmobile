@@ -188,6 +188,7 @@ export async function prepareSyncRequestData(
 
       return {
         customerId: resolvedCustomerId,
+        ...(action === 'create' ? { notes: data.notes ?? null } : {}),
         type: data.type || (data.paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO'),
         paymentMethod: data.paymentMethod || null,
         treasuryAccountId: resolvedSaleTreasuryAccountId,

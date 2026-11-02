@@ -8,6 +8,7 @@ import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCartStore } from '../../store/cartStore';
+import { normalizeSaleNotes, SALE_NOTES_MAX_LENGTH } from '../../utils/saleNotes';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, generateInvoiceCode, generateLocalId } from '../../utils/helpers';
 import { db, type DatabaseTransaction } from '../../database/Database';
@@ -87,6 +88,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const systemBottomInset = getBottomSafeInset(insets.bottom);
   const {
     items,
+    notes,
+    setNotes,
     updateQuantity,
     updatePrice,
     removeItem,
@@ -802,6 +805,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     let committedSale: { id: string; invoiceCode: string } | null = null;
     try {
       if (items.length === 0) return;
+      const normalizedNotes = normalizeSaleNotes(notes);
       await saleStockService.refresh(editingSaleLocalId);
       const stockIssue = saleStockService.issue(items);
       if (stockIssue) { Alert.alert('Existencias', stockIssue.message); return; }
@@ -1145,6 +1149,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         }
 
         await queueSaleUpdateForEdit(editingSaleLocalId, {
+          notes: existingData?.notes ?? null,
           stockConsumptions: reservation.consumptions,
           stockReservationDelta: reservation.pendingDelta,
           salePricesIncludeItbis: documentSalePricesIncludeItbis,
@@ -1176,6 +1181,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         });
       } else {
         const saleData = {
+          notes: normalizedNotes,
           stockConsumptions: [] as StockConsumption[],
           stockReservationDelta: [] as StockConsumption[],
           localId,
@@ -1239,6 +1245,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       }
 
       const saleTicketPayload = {
+        notes: normalizedNotes,
         invoiceCode: resolvedInvoiceCode,
         createdAt,
         customerName: formatCustomerLabel(
@@ -1398,6 +1405,21 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         renderItem={renderItem}
         keyExtractor={(item) => item.lineId}
         contentContainerStyle={styles.listContent}
+        ListFooterComponent={items.length > 0 ? (
+          <View style={{ marginTop: 12, marginBottom: 12 }}>
+            <TextInput
+              label="Nota (opcional)"
+              value={notes}
+              onChangeText={setNotes}
+              maxLength={SALE_NOTES_MAX_LENGTH}
+              multiline
+              numberOfLines={3}
+              mode="outlined"
+              editable={!editingSaleLocalId}
+            />
+            <Text style={{ marginTop: 4 }}>Esta nota aparecerá en la factura.</Text>
+          </View>
+        ) : null}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>El carrito está vacío</Text>
