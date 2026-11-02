@@ -46,6 +46,10 @@ interface SubUser {
   canAccessAccountsReceivable?: boolean;
   canAccessPayments?: boolean;
   canAccessDailyClose?: boolean;
+  canOperateCashShifts?: boolean;
+  canViewAllCashShifts?: boolean;
+  canManageCashShifts?: boolean;
+  canRecordCashMovements?: boolean;
   canAccessReports?: boolean;
   canAccessShippingLabels?: boolean;
   canAccessBilling?: boolean;
@@ -55,6 +59,9 @@ interface SubUser {
   canManageCategories?: boolean;
   canManagePurchases?: boolean;
   canCancelPurchases?: boolean;
+  canAccessAccountsPayable?: boolean;
+  canRegisterSupplierPayments?: boolean;
+  canCancelSupplierPayments?: boolean;
   canManageSuppliers?: boolean;
   canManageCustomers?: boolean;
   canManageExpenses?: boolean;
@@ -79,6 +86,7 @@ interface AuthState {
   biometricEnabled: boolean;
   setUser: (user: User | null) => void;
   setSubUser: (subUser: SubUser | null, token: string | null, accountId: string | null) => Promise<void>;
+  updateCashPermissions: (userId: string, permissions: Pick<SubUser, 'canOperateCashShifts' | 'canViewAllCashShifts' | 'canManageCashShifts' | 'canRecordCashMovements'>) => Promise<void>;
   setBillingState: (billingState: BillingState | null) => void;
   setLoading: (loading: boolean) => void;
   setBiometricEnabled: (enabled: boolean) => void;
@@ -165,6 +173,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         hasSubUser: !!subUser,
       });
     }
+  },
+
+  updateCashPermissions: async (userId, permissions) => {
+    const current = get().subUser;
+    if (!current || current.id !== userId) return;
+    const updated = { ...current, ...permissions };
+    set({ subUser: updated });
+    await SecureStore.setItemAsync(SUBUSER_DATA_KEY, JSON.stringify(updated));
   },
 
   setBillingState: (billingState: BillingState | null) => {

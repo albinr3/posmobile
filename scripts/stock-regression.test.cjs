@@ -29,6 +29,7 @@ function fixture({ owner = false, permitted = false, role = 'USER' } = {}) {
       if (name === 'zustand') return { create };
       if (name === 'react-native') return { Alert: { alert: (...args) => alerts.push(args) } };
       if (name === 'expo-sqlite') return {};
+      if (name === 'expo-secure-store') return { getItemAsync: async () => null, setItemAsync: async () => {} };
       if (name === 'axios') return { ...network, default: network };
       if (name === '@react-native-community/netinfo') return { default: {} };
       if (name === 'expo-file-system/legacy') return {};

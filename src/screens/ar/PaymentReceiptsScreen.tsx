@@ -8,6 +8,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
+import { getCashContext } from '../../services/cash/cashShiftService';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
@@ -513,6 +514,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       return;
     }
     try {
+      if ((await getCashContext()).enabled) throw new Error('Corrige este recibo desde el historial del turno de caja.');
       const cancelledAt = Date.now();
       const serverPaymentId = item.serverId || null;
       if (!serverPaymentId) {
@@ -544,7 +546,7 @@ export function PaymentReceiptsScreen({ navigation }: PaymentReceiptsScreenProps
       await loadReceipts();
     } catch (error) {
       console.error('Error cancelando recibo de pago:', error);
-      Alert.alert('Error', 'No se pudo cancelar el recibo.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo cancelar el recibo.');
     }
   };
 

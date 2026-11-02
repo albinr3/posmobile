@@ -25,6 +25,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [discountPercent, setDiscountPercent] = useState('');
+  const [creditDays, setCreditDays] = useState('0');
   const [chargesItbis, setChargesItbis] = useState(false);
   const [itbisRatePercent, setItbisRatePercent] = useState('18');
   const [notes, setNotes] = useState('');
@@ -81,6 +82,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
             row.discount_percent_bp ?? parsed?.discountPercentBp ?? 0
           );
           setDiscountPercent(discountBp ? String(discountBp / 100) : '');
+          setCreditDays(String(parsed?.creditDays ?? 0));
           const itbisRateBpRaw = row.itbis_rate_bp ?? parsed?.itbisRateBp;
           setItbisRatePercent(
             itbisRateBpRaw !== null && itbisRateBpRaw !== undefined
@@ -110,6 +112,11 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
       Alert.alert('Error', 'El nombre es requerido');
       return;
     }
+    const parsedCreditDays = Number(creditDays.trim());
+    if (!/^\d+$/.test(creditDays.trim()) || !Number.isSafeInteger(parsedCreditDays) || parsedCreditDays > 3650) {
+      Alert.alert('Error', 'Los días de crédito deben ser un entero entre 0 y 3650.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -134,6 +141,7 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
         address: address.trim() || null,
         notes: notes.trim() || null,
         discountPercentBp,
+        creditDays: parsedCreditDays,
         chargesItbis,
         itbisRateBp,
       };
@@ -274,6 +282,8 @@ export function AddSupplierScreen({ navigation, route }: AddSupplierScreenProps)
             activeOutlineColor={ui.colors.primary}
           />
           <Text style={styles.fieldHelp}>Este descuento se aplicará automáticamente al registrar compras de este proveedor.</Text>
+          <TextInput label="Días de crédito" value={creditDays} onChangeText={setCreditDays} mode="outlined" keyboardType="number-pad" style={styles.input} outlineColor={ui.colors.border} activeOutlineColor={ui.colors.primary} />
+          <Text style={styles.fieldHelp}>Propone el vencimiento de las compras a crédito nuevas.</Text>
           <View style={styles.checkRow}>
             <Checkbox status={chargesItbis ? 'checked' : 'unchecked'} onPress={() => setChargesItbis((prev) => !prev)} color={ui.colors.primary} />
             <View style={styles.checkTextWrap}>

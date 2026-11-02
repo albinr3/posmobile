@@ -1,4 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
+import { CashShiftsPanel } from './CashShiftsPanel';
+import { useAuthStore } from '../../store/authStore';
 import { View, StyleSheet, ScrollView } from 'react-native';
 import { Button, Card, Text, TextInput } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
@@ -88,6 +90,8 @@ function parseYmd(ymd: string): Date | null {
 }
 
 export function DailyCloseScreen() {
+  const subUser = useAuthStore(state => state.subUser);
+  const showDailySummary = !!(subUser?.isOwner || subUser?.canAccessDailyClose);
   const today = useMemo(() => toYmd(new Date()), []);
   const [from, setFrom] = useState(today);
   const [to, setTo] = useState(today);
@@ -292,8 +296,8 @@ export function DailyCloseScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadMetrics(from, to);
-    }, [from, to, loadMetrics])
+      if (showDailySummary) loadMetrics(from, to);
+    }, [from, to, loadMetrics, showDailySummary])
   );
 
   return (
@@ -303,6 +307,9 @@ export function DailyCloseScreen() {
           <Text style={styles.title}>Cuadre diario</Text>
           <Text style={styles.subtitle}>Resumen de lo vendido y lo cobrado del día o por rango.</Text>
         </View>
+
+        <CashShiftsPanel />
+        {showDailySummary && <>
 
         <View style={styles.filtersCard}>
           <View style={styles.row}>
@@ -522,6 +529,7 @@ export function DailyCloseScreen() {
             </Card>
           )}
         </View>
+        </>}
       </ScrollView>
     </SafeAreaView>
   );

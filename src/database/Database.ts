@@ -292,6 +292,19 @@ class DatabaseService {
         ALTER TABLE sync_queue ADD COLUMN last_error_code TEXT;
       `);
     }
+    for (const [name, definition] of [
+      ['account_id', 'TEXT'], ['user_id', 'TEXT'], ['cash_shift_id', 'TEXT'],
+      ['client_operation_id', 'TEXT'], ['client_sequence', 'INTEGER'], ['request_data', 'TEXT'],
+    ] as const) {
+      if (!syncQueueColumns.some((column) => column.name === name)) {
+        await this.db.execAsync(`ALTER TABLE sync_queue ADD COLUMN ${name} ${definition};`);
+      }
+    }
+    await this.db.execAsync(`
+      CREATE TABLE IF NOT EXISTS cash_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_operation_id ON sync_queue(client_operation_id);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shift_sequence ON sync_queue(cash_shift_id, client_sequence);
+    `);
 
     // Metadatos de sincronización
     await this.db.execAsync(`
@@ -832,6 +845,7 @@ class DatabaseService {
           this.db!.execAsync(`
             DELETE FROM sync_queue;
             DELETE FROM sync_metadata;
+            DELETE FROM cash_state;
             DELETE FROM sales;
             DELETE FROM quotes;
             DELETE FROM products;

@@ -6,8 +6,9 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import { useAuthStore } from '../../store/authStore';
 import { useSyncStore } from '../../store/syncStore';
-import { db } from '../../database/Database';
+import { db, type DatabaseTransaction } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { cashContextForQueue } from '../../services/cash/cashShiftService';
 import { formatCurrency, generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { getSalesSettings } from '../../services/settings/salesSettings';
@@ -15,6 +16,8 @@ import { listTreasuryAccounts } from '../../services/treasury/treasuryService';
 import { TreasuryAccount } from '../../types';
 import { filterTreasuryAccountsByMethod, findTreasuryAccountById } from '../../utils/treasury';
 import { useTreasuryUIStore } from '../../store/treasuryUIStore';
+import { purchaseCreditService, paymentAccounts, parseAmountCents, proposeDueDate, validDateOnly, type PaymentOptions } from '../../services/purchases/purchaseCreditService';
+import { PendingFinancialOperations } from '../../components/PendingFinancialOperations';
 
 interface AddPurchaseScreenProps {
   navigation: any;
@@ -28,6 +31,8 @@ interface SupplierOption {
   discountPercentBp: number;
   chargesItbis: boolean;
   itbisRateBp: number | null;
+  creditDays: number;
+  isActive: boolean;
 }
 
 interface ProductOption {
@@ -40,6 +45,7 @@ interface ProductOption {
   priceCents: number;
   itbisRateBp: number;
   isActive: boolean;
+  synced: boolean;
 }
 
 interface PurchaseStoredItem {
@@ -153,6 +159,16 @@ function normalizeStoredItems(raw: unknown): PurchaseStoredItem[] {
     .filter((item): item is PurchaseStoredItem => item !== null);
 }
 
+function purchaseEditFingerprint(value: any): string {
+  return JSON.stringify({
+    supplierId: value?.supplierId || null, notes: value?.notes || null, dueDate: value?.dueDate || null,
+    totalCents: Number(value?.totalCents || 0), paidCents: Number(value?.paidCents || 0),
+    items: normalizeStoredItems(value?.items).map(item => ({ id: item.id, productId: item.productId,
+      qty: item.qty, unitCostCents: item.unitCostCents, discountPercentBp: item.discountPercentBp,
+      salePriceCents: item.salePriceCents, saleMarginBp: item.saleMarginBp })).sort((a, b) => String(a.id || a.productId).localeCompare(String(b.id || b.productId))),
+  });
+}
+
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const normalizeDiscountBp = (discountBp: number | null | undefined) => {
   const raw = Number.isFinite(Number(discountBp)) ? Number(discountBp) : 0;
@@ -232,6 +248,18 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   const [supplierId, setSupplierId] = useState<string | null>(null);
   const [supplierName, setSupplierName] = useState('');
   const [notes, setNotes] = useState('');
+  const [purchaseType, setPurchaseType] = useState<'CONTADO' | 'CREDITO'>('CONTADO');
+  const [dueDate, setDueDate] = useState('');
+  const [initialPayment, setInitialPayment] = useState('0');
+  const [creditPaidCents, setCreditPaidCents] = useState(0);
+  const [creditBalanceCents, setCreditBalanceCents] = useState(0);
+  const [creditHasActivePayments, setCreditHasActivePayments] = useState(false);
+  const [creditLiveLoaded, setCreditLiveLoaded] = useState(false);
+  const [creditSubmissionPending, setCreditSubmissionPending] = useState(false);
+  const [creditPaymentOptions, setCreditPaymentOptions] = useState<PaymentOptions>({ methods: [], accounts: [] });
+  const [creditAccountId, setCreditAccountId] = useState<string | null>(null);
+  const [creditAccountMenuVisible, setCreditAccountMenuVisible] = useState(false);
+  const [typeMenuVisible, setTypeMenuVisible] = useState(false);
   const [updateProductCost, setUpdateProductCost] = useState(true);
   const [updateProductPrice, setUpdateProductPrice] = useState(true);
   const [defaultSaleMarginPercent, setDefaultSaleMarginPercent] = useState(DEFAULT_SALE_MARGIN_PERCENT);
@@ -252,9 +280,12 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
   const [loading, setLoading] = useState(false);
   const [loadingInitialData, setLoadingInitialData] = useState(true);
+  const creditServerFingerprintRef = useRef<string | null>(null);
   const lastFocusLoadKeyRef = useRef<string | null>(null);
   const { getToken } = useAuth();
   const { subUserToken, accountId } = useAuthStore();
+  const canRegisterSupplierPayments = useAuthStore(state => !!state.subUser?.isOwner || state.subUser?.canRegisterSupplierPayments === true);
+  const canManagePurchases = useAuthStore(state => !!state.subUser?.isOwner || state.subUser?.canManagePurchases === true);
   const { isOnline } = useSyncStore();
   const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
   const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
@@ -282,6 +313,11 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       setTreasuryAccountId(allowed[0]?.localId || null);
     }
   }, [paymentMethod, treasuryAccountId, treasuryAccounts]);
+
+  useEffect(() => {
+    const allowed = paymentAccounts(creditPaymentOptions, paymentMethod);
+    if (!allowed.some(account => account.id === creditAccountId)) setCreditAccountId(allowed[0]?.id || null);
+  }, [creditAccountId, creditPaymentOptions, paymentMethod]);
 
   const resolveLocalProductId = useCallback(
     (
@@ -314,9 +350,10 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       discount_percent_bp: number | null;
       charges_itbis: number | null;
       itbis_rate_bp: number | null;
+      is_available_for_sale: number | null;
       data: string | null;
     }>(
-      `SELECT local_id, server_id, name, discount_percent_bp, charges_itbis, itbis_rate_bp, data
+      `SELECT local_id, server_id, name, discount_percent_bp, charges_itbis, itbis_rate_bp, is_available_for_sale, data
        FROM suppliers
        ORDER BY name COLLATE NOCASE ASC`
     );
@@ -338,6 +375,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
             false
           ),
           itbisRateBp: asNumber(row.itbis_rate_bp) ?? asNumber(parsed?.itbisRateBp) ?? null,
+          creditDays: asNumber(parsed?.creditDays) ?? 0,
+          isActive: row.is_available_for_sale !== 0 && parsed?.isActive !== false,
         } as SupplierOption;
       })
       .filter((supplier) => supplier.name.length > 0);
@@ -349,9 +388,10 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       sku: string | null;
       cost_cents: number | null;
       price_cents: number | null;
+      synced: number | null;
       data: string | null;
     }>(
-      `SELECT local_id, server_id, name, sku, cost_cents, price_cents, data
+      `SELECT local_id, server_id, name, sku, cost_cents, price_cents, synced, data
        FROM products
        ORDER BY name COLLATE NOCASE ASC`
     );
@@ -382,6 +422,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           priceCents: Math.max(0, Math.round(asNumber(row.price_cents) ?? asNumber(parsed?.priceCents) ?? 0)),
           itbisRateBp: normalizedItbisRateBp,
           isActive,
+          synced: row.synced === 1,
         } as ProductOption;
       })
       .filter((product) => product.name.length > 0);
@@ -425,14 +466,14 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       }
 
       const parsed = parseJsonObject(row.data);
-      const parsedItems = normalizeStoredItems(parsed?.items);
+      let parsedItems = normalizeStoredItems(parsed?.items);
       const serverId =
         asString(row.server_id) || asString(parsed?.serverId) || asString(parsed?.id);
       const supplierFromPayloadId = asString(parsed?.supplierId);
       const supplierFromPayloadServerId = asString(parsed?.supplierServerId);
       const supplierNameFromPayload = asString(parsed?.supplierName) || asString(row.supplier_name) || '';
 
-      const matchedSupplier =
+      let matchedSupplier =
         catalog.suppliers.find((supplier) => supplier.id === supplierFromPayloadId) ||
         catalog.suppliers.find((supplier) => supplier.serverId === supplierFromPayloadServerId) ||
         catalog.suppliers.find(
@@ -447,6 +488,28 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       setSupplierId(matchedSupplier?.id || null);
       setSupplierName(matchedSupplier?.name || supplierNameFromPayload);
       setNotes(asString(parsed?.notes) || '');
+      const nextType = parsed?.type === 'CREDITO' ? 'CREDITO' : 'CONTADO';
+      setPurchaseType(nextType);
+      setDueDate(asString(parsed?.dueDate) || '');
+      setCreditPaidCents(asNumber(parsed?.paidCents) ?? 0);
+      setCreditBalanceCents(asNumber(parsed?.balanceCents) ?? 0);
+      setCreditHasActivePayments(false);
+      setCreditLiveLoaded(false);
+      creditServerFingerprintRef.current = null;
+      if (nextType === 'CREDITO' && serverId && isOnlineRef.current) {
+        const live = await purchaseCreditService.getPurchase(serverId);
+        creditServerFingerprintRef.current = purchaseEditFingerprint(live);
+        parsedItems = normalizeStoredItems(live.items).map(item => ({ ...item, productServerId: item.productId }));
+        matchedSupplier = live.supplierId ? catalog.suppliers.find(supplier => supplier.serverId === String(live.supplierId)) || null : matchedSupplier;
+        setSupplierId(matchedSupplier?.id || null);
+        setSupplierName(String(live.supplierName || matchedSupplier?.name || supplierNameFromPayload));
+        setNotes(String(live.notes || ''));
+        setDueDate(String(live.dueDate || ''));
+        setCreditPaidCents(Number(live.paidCents || 0));
+        setCreditBalanceCents(Number(live.balanceCents || 0));
+        setCreditHasActivePayments(Number(live.paidCents || 0) > 0);
+        setCreditLiveLoaded(true);
+      }
       const parsedPaymentMethod = String(parsed?.paymentMethod || 'EFECTIVO').toUpperCase();
       setPaymentMethod(parsedPaymentMethod === 'TRANSFERENCIA' ? 'TRANSFERENCIA' : parsedPaymentMethod === 'TARJETA' ? 'TARJETA' : parsedPaymentMethod === 'OTRO' ? 'OTRO' : 'EFECTIVO');
       setTreasuryAccountId(asString(parsed?.treasuryAccountId));
@@ -536,6 +599,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
             if (synced) {
               catalog = await loadLocalCatalogsRef.current();
             }
+            setCreditPaymentOptions(await purchaseCreditService.paymentOptions().catch(() => ({ methods: [], accounts: [] })));
           }
           if (!isMounted) return;
 
@@ -544,6 +608,9 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           } else {
             setPersistedLocalId(null);
             setPersistedServerId(null);
+            setPurchaseType('CONTADO');
+            setDueDate('');
+            setInitialPayment('0');
             setItems([createEmptyItem(nextDefaultMarginPercent)]);
           }
         } catch (error) {
@@ -788,7 +855,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
     async (
       previousItems: PurchaseStoredItem[],
       nextItems: PurchaseStoredItem[],
-      options: { updateCost: boolean; updatePrice: boolean }
+      options: { updateCost: boolean; updatePrice: boolean },
+      tx?: DatabaseTransaction
     ) => {
       const stockDeltaByProduct = new Map<string, number>();
       const latestPricingByProduct = new Map<string, { costCents: number; priceCents: number }>();
@@ -818,19 +886,20 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
       for (const [localProductId, delta] of stockDeltaByProduct.entries()) {
         if (!Number.isFinite(delta) || delta === 0) continue;
-        await db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [delta, localProductId]);
+        await (tx ? tx.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [delta, localProductId]) : db.runAsync('UPDATE products SET stock = stock + ? WHERE local_id = ?', [delta, localProductId]));
       }
 
       if (!options.updateCost && !options.updatePrice) return;
 
       for (const [localProductId, pricing] of latestPricingByProduct.entries()) {
-        const row = await db.queryFirst<{ data: string | null }>(
+        const row = await (tx ? tx.queryFirst<{ data: string | null }>(
+          `SELECT data FROM products WHERE local_id = ? LIMIT 1`, [localProductId]) : db.queryFirst<{ data: string | null }>(
           `SELECT data
            FROM products
            WHERE local_id = ?
            LIMIT 1`,
           [localProductId]
-        );
+        ));
 
         const patch: Record<string, any> = {};
         if (options.updateCost) patch.cost_cents = pricing.costCents;
@@ -846,7 +915,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         }
 
         if (Object.keys(patch).length > 0) {
-          await db.update('products', localProductId, patch);
+          if (tx) await tx.runAsync(`UPDATE products SET ${Object.keys(patch).map(key => `${key} = ?`).join(', ')} WHERE local_id = ?`, [...Object.values(patch), localProductId]);
+          else await db.update('products', localProductId, patch);
         }
       }
     },
@@ -854,6 +924,23 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
   );
 
   const handleSave = async () => {
+    if (loading) return;
+    if (creditSubmissionPending) { Alert.alert('Confirmación pendiente', 'Revisa la operación desde Compras antes de registrar otra.'); return; }
+    if (!canManagePurchases) { Alert.alert('Sin permiso', 'No tienes permiso para gestionar compras.'); return; }
+    if (isEditMode && purchaseType === 'CREDITO' && creditHasActivePayments) {
+      if (!isOnlineRef.current || !persistedServerId) { Alert.alert('Error', 'Conéctate y sincroniza la compra antes de editarla.'); return; }
+      if (!validDateOnly(dueDate)) { Alert.alert('Error', 'Introduce un vencimiento válido YYYY-MM-DD.'); return; }
+      setLoading(true);
+      try {
+        const current = await purchaseCreditService.getPurchase(persistedServerId);
+        if (purchaseEditFingerprint(current) !== creditServerFingerprintRef.current) throw new Error('La compra cambió en el servidor. Vuelve a abrirla antes de guardar.');
+        await purchaseCreditService.patchPurchase(persistedServerId, { notes: notes.trim() || null, dueDate });
+        await syncBestEffort().catch(error => console.warn('La compra se editó, pero no se pudo refrescar:', error));
+        Alert.alert('Éxito', 'Notas y vencimiento actualizados.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      } catch (error) { Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo actualizar la compra.'); }
+      finally { setLoading(false); }
+      return;
+    }
     if (!supplierId || !selectedSupplier) {
       Alert.alert('Error', 'Debes seleccionar un proveedor para guardar la compra.');
       return;
@@ -917,6 +1004,64 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       return;
     }
 
+    if (purchaseType === 'CREDITO') {
+      if (!isOnlineRef.current) { Alert.alert('Sin conexión', 'Conéctate para registrar o editar una compra a crédito.'); return; }
+      if (isEditMode && !creditLiveLoaded) { Alert.alert('Saldo sin confirmar', 'Actualiza la compra desde el servidor antes de editarla.'); return; }
+      if (!selectedSupplier.serverId || !selectedSupplier.isActive) { Alert.alert('Error', 'El crédito requiere un proveedor activo y sincronizado.'); return; }
+      if (!validDateOnly(dueDate)) { Alert.alert('Error', 'Introduce un vencimiento válido YYYY-MM-DD.'); return; }
+      const initialPaymentCents = isEditMode || !initialPayment.trim() ? 0 : parseAmountCents(initialPayment);
+      if (!Number.isSafeInteger(initialPaymentCents) || initialPaymentCents < 0 || initialPaymentCents >= totalCents || totalCents <= 0) {
+        Alert.alert('Error', 'El abono debe ser menor que el total. Usa Contado para pagar todo.'); return;
+      }
+      if (initialPaymentCents > 0 && !canRegisterSupplierPayments) { Alert.alert('Sin permiso', 'No tienes permiso para registrar un abono inicial.'); return; }
+      if (initialPaymentCents > 0 && (!creditAccountId || !paymentAccounts(creditPaymentOptions, paymentMethod).some(account => account.id === creditAccountId))) {
+        Alert.alert('Error', 'Selecciona una cuenta de pago activa en DOP.'); return;
+      }
+      if (!creditHasActivePayments && normalizedItems.some(item => !item.productServerId)) { Alert.alert('Error', 'Sincroniza los productos antes de registrar o editar crédito.'); return; }
+      if (!creditHasActivePayments && normalizedItems.some(item => products.find(product => product.id === item.productId)?.synced !== true)) { Alert.alert('Error', 'Hay productos con cambios locales pendientes. Sincronízalos antes de registrar crédito.'); return; }
+      setLoading(true);
+      try {
+        syncService.setTokenGetter(getToken);
+        syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+        const serverId = persistedServerId;
+        if (isEditMode && !serverId) throw new Error('Sincroniza la compra antes de editarla.');
+        if (isEditMode) {
+          const current = await purchaseCreditService.getPurchase(serverId!);
+          if (purchaseEditFingerprint(current) !== creditServerFingerprintRef.current) throw new Error('La compra cambió en el servidor. Vuelve a abrirla antes de guardar.');
+        }
+        let confirmedPurchaseId = serverId;
+        if (isEditMode && creditHasActivePayments) {
+          await purchaseCreditService.patchPurchase(serverId!, { notes: notes.trim() || null, dueDate });
+        } else {
+          const body = {
+            type: 'CREDITO' as const, supplierId: selectedSupplier.serverId, supplierName: selectedSupplier.name,
+            dueDate, notes: notes.trim() || null, updateProductCost, updateProductPrice,
+            items: normalizedItems.map(item => ({ productId: item.productServerId!, qty: item.qty,
+              unitCostCents: item.unitCostCents, discountPercentBp: item.discountPercentBp,
+              saleMarginBp: item.saleMarginBp, salePriceCents: item.salePriceCents,
+              purchaseIncludesItbis: item.purchaseIncludesItbis })),
+          };
+          if (isEditMode) await purchaseCreditService.updatePurchase(serverId!, { ...body, supplierName: undefined });
+          else {
+            const outcome = await purchaseCreditService.createCreditPurchase({ ...body, initialPaymentCents,
+              ...(initialPaymentCents > 0 ? { paymentMethod, treasuryAccountId: creditAccountId! } : {}) });
+            if (!outcome.confirmed) {
+              setCreditSubmissionPending(true);
+              Alert.alert(outcome.rejected ? 'Compra rechazada' : 'Confirmación pendiente', outcome.error || 'Reintenta la misma compra desde el listado antes de registrar otra.', [{ text: 'Ver Compras', onPress: () => navigation.goBack() }]);
+              return;
+            }
+            confirmedPurchaseId = String(outcome.result.id);
+          }
+        }
+        let refreshWarning = '';
+        try { await syncService.refreshConfirmedCreditPurchase(confirmedPurchaseId!); }
+        catch (error) { refreshWarning = error instanceof Error ? error.message : 'La actualización local está pendiente.'; }
+        Alert.alert('Compra confirmada', refreshWarning ? `Registrada en el servidor. ${refreshWarning}` : 'Compra a crédito confirmada en el servidor.', [{ text: 'OK', onPress: () => navigation.goBack() }]);
+      } catch (error) { Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo guardar la compra.'); }
+      finally { setLoading(false); }
+      return;
+    }
+
     if ((paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && !treasuryAccountId) {
       Alert.alert('Error', 'Debes seleccionar una cuenta de tesorería.');
       return;
@@ -924,6 +1069,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
     setLoading(true);
     try {
+      const cashQueueContext = await cashContextForQueue('purchase', isEditMode ? 'update' : 'create', { paymentMethod, treasuryAccountId });
       const now = Date.now();
       const localId = isEditMode ? persistedLocalId || String(purchaseId) : generateLocalId();
 
@@ -980,11 +1126,6 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         updateProductPrice,
       };
 
-      await applyPurchaseEffectsLocally(previousItems, normalizedItems, {
-        updateCost: updateProductCost,
-        updatePrice: updateProductPrice,
-      });
-
       const rowPatch = {
         server_id: serverId,
         supplier_name: selectedSupplier.name,
@@ -995,15 +1136,6 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         synced: 0,
         data: JSON.stringify(purchaseData),
       };
-
-      if (isEditMode) {
-        await db.update('purchases', localId, rowPatch);
-      } else {
-        await db.insert('purchases', {
-          local_id: localId,
-          ...rowPatch,
-        });
-      }
 
       const queuePayload = {
         ...(serverId ? { id: serverId } : {}),
@@ -1030,6 +1162,24 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
 
       syncService.setTokenGetter(getToken);
       syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+
+      if (!isEditMode) {
+        // La compra, el inventario y su pendiente deben quedar en un solo commit,
+        // incluso cuando el negocio aún usa el cuadre diario.
+        await db.transaction(async tx => {
+          await applyPurchaseEffectsLocally(previousItems, normalizedItems, { updateCost: updateProductCost, updatePrice: updateProductPrice }, tx);
+          await tx.runAsync('INSERT INTO purchases (local_id, server_id, supplier_name, treasury_account_id, total_cents, purchased_at, cancelled_at, synced, data) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)',
+            [localId, rowPatch.server_id, rowPatch.supplier_name, rowPatch.treasury_account_id, rowPatch.total_cents, rowPatch.purchased_at, rowPatch.cancelled_at, rowPatch.data]);
+          await syncService.queueOperationTx(tx, 'purchase', 'create', queuePayload, localId, cashQueueContext);
+        });
+        void syncService.kickQueue().catch(error => console.warn('La compra quedó en cola; falló la sincronización inmediata:', error));
+      } else {
+      await applyPurchaseEffectsLocally(previousItems, normalizedItems, {
+        updateCost: updateProductCost,
+        updatePrice: updateProductPrice,
+      });
+      if (isEditMode) await db.update('purchases', localId, rowPatch);
+      else await db.insert('purchases', { local_id: localId, ...rowPatch });
 
       if (isEditMode) {
         if (serverId) {
@@ -1077,6 +1227,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
         );
         await syncService.queueOperation('purchase', 'create', queuePayload, localId);
       }
+      }
 
       setPersistedLocalId(localId);
       setPersistedServerId(serverId || null);
@@ -1092,7 +1243,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
       Alert.alert('Éxito', successMessage, [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {
       console.error(isEditMode ? 'Error actualizando compra local:' : 'Error creando compra local:', error);
-      Alert.alert('Error', isEditMode ? 'No se pudo guardar la compra' : 'No se pudo crear la compra');
+      Alert.alert('Error', error instanceof Error ? error.message : isEditMode ? 'No se pudo guardar la compra' : 'No se pudo crear la compra');
     } finally {
       setLoading(false);
     }
@@ -1106,13 +1257,15 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           <Text style={styles.headerSubtitle}>{isEditMode ? 'Modifica la compra' : 'Registra una compra de inventario'}</Text>
         </View>
 
+        {!isEditMode && <PendingFinancialOperations kind="credit_purchase" onConfirmed={(result) => { if (result?.id) void syncService.refreshConfirmedCreditPurchase(String(result.id)).catch(error => console.warn('Compra confirmada; actualización local pendiente:', error)); }} />}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Proveedor y Notas</Text>
           <Menu
             visible={supplierMenuVisible}
             onDismiss={() => setSupplierMenuVisible(false)}
             anchor={
-              <TouchableOpacity style={styles.selectLike} onPress={() => setSupplierMenuVisible(true)}>
+              <TouchableOpacity style={styles.selectLike} onPress={() => !creditHasActivePayments && setSupplierMenuVisible(true)}>
                 <Text style={styles.selectLikeText}>{supplierName || 'Seleccionar proveedor *'}</Text>
                 <Icon source="chevron-down" size={18} color="#6B7280" />
               </TouchableOpacity>
@@ -1125,6 +1278,7 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
                 onPress={() => {
                   setSupplierId(supplier.id);
                   setSupplierName(supplier.name);
+                  if (purchaseType === 'CREDITO' && !isEditMode) setDueDate(proposeDueDate(supplier.creditDays));
                   recalcAllItemsForSupplier(supplier);
                   setSupplierMenuVisible(false);
                 }}
@@ -1132,6 +1286,24 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
             ))}
           </Menu>
 
+          <Text style={styles.switchLabel}>Condición de compra</Text>
+          <Menu visible={typeMenuVisible} onDismiss={() => setTypeMenuVisible(false)} anchor={<TouchableOpacity style={styles.selectLike} onPress={() => !isEditMode && setTypeMenuVisible(true)}>
+            <Text style={styles.selectLikeText}>{purchaseType === 'CREDITO' ? 'Crédito' : 'Contado'}</Text><Icon source="chevron-down" size={18} color="#6B7280" />
+          </TouchableOpacity>}>
+            <Menu.Item title="Contado" onPress={() => { setPurchaseType('CONTADO'); setInitialPayment('0'); setTypeMenuVisible(false); }} />
+            <Menu.Item title="Crédito" onPress={() => { setPurchaseType('CREDITO'); setDueDate(dueDate || proposeDueDate(selectedSupplier?.creditDays || 0)); setTypeMenuVisible(false); }} />
+          </Menu>
+          {purchaseType === 'CREDITO' && <>
+            <TextInput label="Vencimiento * (YYYY-MM-DD)" value={dueDate} onChangeText={setDueDate} mode="outlined" style={styles.input} placeholder="2026-12-01" />
+            <Text style={styles.switchDescription}>Plazo del proveedor: {selectedSupplier?.creditDays || 0} días</Text>
+            {!isEditMode && (canRegisterSupplierPayments ? <TextInput label="Abono inicial (RD$)" value={initialPayment} onChangeText={setInitialPayment} mode="outlined" keyboardType="decimal-pad" style={styles.input} />
+              : <Text style={styles.switchDescription}>El pago inicial requiere permiso de pagos a proveedores.</Text>)}
+            <Text>Pendiente: {formatCurrency(isEditMode ? creditBalanceCents : Math.max(0, totalCents - (parseAmountCents(initialPayment) || 0)))}</Text>
+            {isEditMode && <Text>Abonado actual: {formatCurrency(creditPaidCents)}</Text>}
+            {creditHasActivePayments && <Text style={styles.switchDescription}>Hay pagos activos. Solo puedes cambiar notas y vencimiento.</Text>}
+          </>}
+
+          {(purchaseType === 'CONTADO' || (!isEditMode && parseAmountCents(initialPayment) > 0)) && <>
           <Text style={styles.switchLabel}>Método de pago</Text>
           <Menu
             visible={paymentMethodMenuVisible}
@@ -1156,6 +1328,11 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
           </Menu>
 
           <Text style={styles.switchLabel}>Cuenta de tesorería</Text>
+          {purchaseType === 'CREDITO' ? <Menu visible={creditAccountMenuVisible} onDismiss={() => setCreditAccountMenuVisible(false)} anchor={<TouchableOpacity style={styles.selectLike} onPress={() => setCreditAccountMenuVisible(true)}>
+            <Text style={styles.selectLikeText}>{paymentAccounts(creditPaymentOptions, paymentMethod).find(account => account.id === creditAccountId)?.name || 'Seleccionar cuenta DOP'}</Text><Icon source="chevron-down" size={18} color="#6B7280" />
+          </TouchableOpacity>}>
+            {paymentAccounts(creditPaymentOptions, paymentMethod).map(account => <Menu.Item key={account.id} title={account.name} onPress={() => { setCreditAccountId(account.id); setCreditAccountMenuVisible(false); }} />)}
+          </Menu> :
           <Menu
             visible={treasuryMenuVisible}
             onDismiss={() => setTreasuryMenuVisible(false)}
@@ -1193,6 +1370,8 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
               }}
             />
           </Menu>
+          }
+          </>}
 
           <TextInput
             label="Notas"
@@ -1206,24 +1385,24 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
             activeOutlineColor={ui.colors.primary}
           />
 
-          <View style={styles.switchRow}>
+          {!creditHasActivePayments && <View style={styles.switchRow}>
             <View style={styles.switchTextWrap}>
               <Text style={styles.switchLabel}>Actualizar costo de productos</Text>
               <Text style={styles.switchDescription}>Si activas esto, el costo de cada producto se actualizará con el costo neto de esta compra.</Text>
             </View>
             <Switch value={updateProductCost} onValueChange={setUpdateProductCost} color={ui.colors.primary} />
-          </View>
+          </View>}
 
-          <View style={styles.switchRow}>
+          {!creditHasActivePayments && <View style={styles.switchRow}>
             <View style={styles.switchTextWrap}>
               <Text style={styles.switchLabel}>Actualizar precio de venta</Text>
               <Text style={styles.switchDescription}>Si activas esto, el precio de venta se recalculará con la lógica de márgenes del sistema.</Text>
             </View>
             <Switch value={updateProductPrice} onValueChange={setUpdateProductPrice} color={ui.colors.primary} />
-          </View>
+          </View>}
         </View>
 
-        <View style={styles.card}>
+        {!creditHasActivePayments && <View style={styles.card}>
           <View style={styles.rowBetween}>
             <Text style={styles.sectionTitle}>Productos</Text>
             <Button mode="outlined" compact onPress={addItem} textColor={ui.colors.primary} style={styles.addItemButton}>
@@ -1356,23 +1535,23 @@ export function AddPurchaseScreen({ navigation, route }: AddPurchaseScreenProps)
               </View>
             </View>
           ))}
-        </View>
+        </View>}
 
-        <View style={styles.totalCard}>
+        {!creditHasActivePayments && <View style={styles.totalCard}>
           <Text style={styles.totalLabel}>Total estimado</Text>
           <Text style={styles.totalValue}>{formatCurrency(totalCents)}</Text>
-        </View>
+        </View>}
 
         <Button
           mode="contained"
           onPress={handleSave}
           loading={loading}
-          disabled={loading || loadingInitialData}
+          disabled={loading || loadingInitialData || creditSubmissionPending}
           buttonColor={ui.colors.primary}
           style={styles.saveButton}
           contentStyle={styles.saveButtonContent}
         >
-          {isEditMode ? 'Guardar Cambios' : 'Guardar Compra'}
+          {creditSubmissionPending ? 'Confirmación pendiente' : creditHasActivePayments ? 'Guardar notas y vencimiento' : isEditMode ? 'Guardar Cambios' : 'Guardar Compra'}
         </Button>
       </ScrollView>
     </SafeAreaView>

@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity } from 'react-native';
-import { Searchbar, Text, Chip } from 'react-native-paper';
+import { View, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { Searchbar, Text, Chip, Button } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { SafeFab } from '../../components/SafeFab';
 import { useFocusEffect } from '@react-navigation/native';
@@ -10,6 +10,10 @@ import { useSyncStore } from '../../store/syncStore';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { useAuthStore } from '../../store/authStore';
+import { FinancialApiError, purchaseCreditService } from '../../services/purchases/purchaseCreditService';
+import { PendingFinancialOperations } from '../../components/PendingFinancialOperations';
+import { syncService } from '../../services/sync/SyncService';
 
 interface PurchaseListScreenProps {
   navigation: any;
@@ -25,6 +29,10 @@ interface PurchaseItem {
   cancelledAt: number | null;
   itemsCount: number;
   synced: boolean;
+  type: 'CONTADO' | 'CREDITO';
+  dueDate: string | null;
+  paidCents: number;
+  balanceCents: number;
 }
 
 function parsePurchaseData(raw: unknown): Record<string, unknown> | null {
@@ -48,6 +56,9 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
 
   const { runFullSyncIfAuthenticated } = useSyncAuth();
   const { isOnline } = useSyncStore();
+  const canCancelPurchases = useAuthStore(state => !!state.subUser?.isOwner || state.subUser?.canCancelPurchases === true);
+  const canManagePurchases = useAuthStore(state => !!state.subUser?.isOwner || state.subUser?.canManagePurchases === true);
+  const canSeeCashHistory = useAuthStore(state => !!state.subUser?.isOwner || state.subUser?.canOperateCashShifts === true || state.subUser?.canViewAllCashShifts === true || state.subUser?.canManageCashShifts === true);
 
   const isOnlineRef = useRef(isOnline);
   isOnlineRef.current = isOnline;
@@ -79,6 +90,10 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
             ? Number(parsed?.itemsCount)
             : rawItems.length,
         synced: row.synced === 1,
+        type: parsed?.type === 'CREDITO' ? 'CREDITO' : 'CONTADO',
+        dueDate: typeof parsed?.dueDate === 'string' ? parsed.dueDate.slice(0, 10) : null,
+        paidCents: Number(parsed?.paidCents ?? row.total_cents ?? 0),
+        balanceCents: Number(parsed?.balanceCents ?? 0),
       } as PurchaseItem;
     });
 
@@ -134,11 +149,26 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
     });
   }, [purchases, searchQuery]);
 
+  const cancelPurchase = (item: PurchaseItem) => {
+    if (!item.serverId || !isOnlineRef.current) { Alert.alert('Sin conexión', 'Conéctate y sincroniza esta compra antes de anularla.'); return; }
+    if (item.type === 'CREDITO' && item.paidCents > 0) { Alert.alert('Pagos activos', 'Anula primero los pagos de esta compra.'); return; }
+    Alert.alert('Anular compra', 'Se revertirá el inventario y, si es a crédito, la deuda. ¿Continuar?', [
+      { text: 'Volver', style: 'cancel' },
+      { text: 'Anular', style: 'destructive', onPress: () => void (async () => {
+        try { await purchaseCreditService.cancelPurchase(item.serverId!); await loadPurchases(); }
+        catch (error) {
+          if (error instanceof FinancialApiError && error.code === 'CASH_DOCUMENT_CLOSED') Alert.alert('Turno cerrado', `${error.message}${canSeeCashHistory ? '' : ' Solicita la corrección al responsable de caja.'}`, canSeeCashHistory ? [
+            { text: 'Cerrar' }, { text: 'Ir a Cuadre diario', onPress: () => navigation.getParent()?.navigate('DailyCloseMenu', { screen: 'DailyClose' }) },
+          ] : [{ text: 'Cerrar' }]);
+          else Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo anular.');
+        }
+      })() },
+    ]);
+  };
+
   const renderPurchase = ({ item }: { item: PurchaseItem }) => (
-    <TouchableOpacity
-      style={styles.purchaseCard}
-      onPress={() => navigation.navigate('AddPurchase', { purchaseId: item.localId })}
-    >
+    <View style={styles.purchaseCard}>
+      <TouchableOpacity onPress={() => navigation.navigate('PurchaseDetail', { purchaseId: item.localId })}>
       <View style={styles.rowBetween}>
         <Text style={styles.supplierName}>{item.supplierName}</Text>
         <View style={styles.chipsWrap}>
@@ -157,13 +187,17 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
 
       <Text style={styles.meta}>Fecha: {formatDate(item.purchasedAt)}</Text>
       <Text style={styles.meta}>Productos: {item.itemsCount}</Text>
+      <Text style={styles.meta}>{item.type === 'CREDITO' ? `Crédito · Vence ${item.dueDate || '—'}` : 'Contado'}</Text>
+      {item.type === 'CREDITO' && <Text style={styles.meta}>Última sincronización · Abonado: {formatCurrency(item.paidCents)} · Pendiente: {formatCurrency(item.cancelledAt ? 0 : item.balanceCents)}</Text>}
       {item.notes ? <Text style={styles.meta}>Notas: {item.notes}</Text> : null}
 
       <View style={styles.totalRow}>
         <Text style={styles.totalLabel}>Total</Text>
         <Text style={styles.totalValue}>{formatCurrency(item.totalCents)}</Text>
       </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+      {canCancelPurchases && !item.cancelledAt && item.serverId && <Button mode="outlined" compact onPress={() => cancelPurchase(item)} disabled={item.type === 'CREDITO' && item.paidCents > 0}>Anular compra</Button>}
+    </View>
   );
 
   return (
@@ -183,6 +217,7 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
       </View>
 
       <FlatList
+        ListHeaderComponent={<PendingFinancialOperations kind="credit_purchase" onConfirmed={(result) => void (async () => { if (result?.id) await syncService.refreshConfirmedCreditPurchase(String(result.id)).catch(() => {}); await loadPurchases(); })()} />}
         data={filteredPurchases}
         renderItem={renderPurchase}
         keyExtractor={(item) => item.localId}
@@ -202,7 +237,7 @@ export function PurchaseListScreen({ navigation }: PurchaseListScreenProps) {
         }
       />
 
-      <SafeFab icon="plus" color="#fff" style={styles.fab} onPress={() => navigation.navigate('AddPurchase')} />
+      {canManagePurchases && <SafeFab icon="plus" color="#fff" style={styles.fab} onPress={() => navigation.navigate('AddPurchase')} />}
     </SafeAreaView>
   );
 }

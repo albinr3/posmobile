@@ -5,6 +5,8 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { cashContextForQueue } from '../../services/cash/cashShiftService';
+import { CashShiftGate } from '../../components/CashShiftGate';
 import { generateLocalId, generateReceiptCode, formatCurrency } from '../../utils/helpers';
 import { AccountReceivable, TreasuryAccount } from '../../types';
 import { ui } from '../../theme/ui';
@@ -162,6 +164,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
     setLoading(true);
     try {
+      const cashQueueContext = await cashContextForQueue(isBatch ? 'payment_batch' : 'payment', 'create', { paymentMethod });
       const receiptCode = generateReceiptCode();
       const now = Date.now();
       const batchLocalId = generateLocalId();
@@ -177,6 +180,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       let firstInvoiceCode: string | null = null;
       let lastBalanceAfterCents: number | null = null;
 
+      await db.transaction(async tx => {
       for (const item of sortedItems) {
         if (remaining <= 0) break;
         const appliedCents = Math.min(remaining, item.balanceCents);
@@ -213,27 +217,16 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           batchLocalId,
         };
 
-        await db.insert('payments', {
-          local_id: localId,
-          receipt_code: receiptCode,
-          amount_cents: appliedCents,
-          ar_id: item.localId,
-          synced: 0,
-          treasury_account_id: paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null,
-          data: JSON.stringify(paymentDataWithBalance),
-        });
-
-        await db.update('accounts_receivable', item.localId, {
-          paid_cents: newPaidCents,
-          balance_cents: newBalanceCents,
-          status: newStatus,
-        });
+        await tx.runAsync('INSERT INTO payments (local_id, receipt_code, amount_cents, ar_id, synced, treasury_account_id, data) VALUES (?, ?, ?, ?, 0, ?, ?)',
+          [localId, receiptCode, appliedCents, item.localId, paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null, JSON.stringify(paymentDataWithBalance)]);
+        await tx.runAsync('UPDATE accounts_receivable SET paid_cents = ?, balance_cents = ?, status = ? WHERE local_id = ?',
+          [newPaidCents, newBalanceCents, newStatus, item.localId]);
 
         createdLocalPaymentIds.push(localId);
       }
 
       if (isBatch) {
-        await syncService.queueOperation(
+        await syncService.queueOperationTx(tx,
           'payment_batch',
           'create',
           {
@@ -246,7 +239,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
             localPaymentIds: createdLocalPaymentIds,
             localReceiptCode: receiptCode,
           },
-          batchLocalId
+          batchLocalId, cashQueueContext
         );
       } else {
         const singlePaymentId = createdLocalPaymentIds[0];
@@ -269,8 +262,10 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
           createdAt: now,
           balanceAfterCents: lastBalanceAfterCents,
         };
-        await syncService.queueOperation('payment', 'create', paymentDataWithBalance, singlePaymentId);
+        await syncService.queueOperationTx(tx, 'payment', 'create', paymentDataWithBalance, singlePaymentId, cashQueueContext);
       }
+      });
+      void syncService.kickQueue().catch(error => console.warn('El abono quedó en cola; falló la sincronización inmediata:', error));
 
       let printNotice = '';
       try {
@@ -312,7 +307,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
       ]);
     } catch (error) {
       console.error('Error guardando pago:', error);
-      Alert.alert('Error', 'No se pudo registrar el pago');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo registrar el pago');
     } finally {
       setLoading(false);
     }
@@ -321,6 +316,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
   if (!firstItem) {
     return (
       <SafeAreaView style={styles.container}>
+        <CashShiftGate />
         <View style={styles.loadingContainer}>
           <Text>Cargando...</Text>
         </View>
@@ -330,6 +326,7 @@ export function RegisterPaymentScreen({ navigation, route }: RegisterPaymentScre
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
+      <CashShiftGate />
       <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: 96 }]}>
         <Surface style={styles.summaryCard}>
           <Text style={styles.customerName}>

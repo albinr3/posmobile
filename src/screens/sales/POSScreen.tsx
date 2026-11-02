@@ -4,6 +4,7 @@ import { View, StyleSheet, FlatList, TouchableOpacity, Alert, Image, ScrollView,
 import { Text, Icon, Searchbar, Menu, IconButton, Modal, Portal, Button, Chip } from 'react-native-paper';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from '../../components/SafeAreaView';
+import { CashShiftGate } from '../../components/CashShiftGate';
 import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -789,6 +790,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
+      <CashShiftGate />
       <FlatList
         key={viewMode}
         data={filteredProducts}

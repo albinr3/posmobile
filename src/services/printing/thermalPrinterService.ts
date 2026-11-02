@@ -453,6 +453,14 @@ export const hasConnectedPrinter = async (): Promise<boolean> => {
   return !!settings.printer?.address;
 };
 
+export const printCashShiftTextDirect = async (text: string): Promise<ThermalPrintResult> => {
+  const { printer } = await readPrinterSettings();
+  if (!printer?.address) return { printed: false, reason: 'missing_config', message: 'No hay impresora conectada en Ajustes.' };
+  if (!isBlePrinterModuleAvailable()) return { printed: false, reason: 'missing_native_module', message: getBlePrinterMissingModuleMessage() };
+  try { await printBleText(text, printer.address); return { printed: true }; }
+  catch (error) { return { printed: false, reason: 'native_error', message: error instanceof Error ? error.message : 'No se pudo imprimir.' }; }
+};
+
 export const autoPrintSaleTicket = async (payload: SaleTicketPayload): Promise<ThermalPrintResult> => {
   const { autoPrint, printer, paperSize } = await readPrinterSettings();
   if (!autoPrint) {

@@ -15,6 +15,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useAuthStore } from '../store/authStore';
 import { getBillingOverviewWithOptions } from '../services/billing/billingService';
 import { syncService } from '../services/sync/SyncService';
+import { getCashContext, setCashClerkTokenGetter } from '../services/cash/cashShiftService';
 import { useSyncStore } from '../store/syncStore';
 import { canAccessModule } from '../utils/moduleAccess';
 
@@ -44,7 +45,10 @@ import { AddCategoryScreen } from '../screens/categories/AddCategoryScreen';
 import { SupplierListScreen } from '../screens/suppliers/SupplierListScreen';
 import { AddSupplierScreen } from '../screens/suppliers/AddSupplierScreen';
 import { PurchaseListScreen } from '../screens/purchases/PurchaseListScreen';
+import { PurchaseDetailScreen } from '../screens/purchases/PurchaseDetailScreen';
 import { AddPurchaseScreen } from '../screens/purchases/AddPurchaseScreen';
+import { AccountsPayableScreen } from '../screens/purchases/AccountsPayableScreen';
+import { PayableDetailScreen } from '../screens/purchases/PayableDetailScreen';
 import { OperatingExpensesScreen } from '../screens/operating-expenses/OperatingExpensesScreen';
 import { AddOperatingExpenseScreen } from '../screens/operating-expenses/AddOperatingExpenseScreen';
 import { CustomerListScreen } from '../screens/customers/CustomerListScreen';
@@ -83,6 +87,7 @@ const DRAWER_ENTRIES = [
   { key: 'categories', label: 'Categorías', icon: 'tag-outline' },
   { key: 'suppliers', label: 'Proveedores', icon: 'store-outline' },
   { key: 'purchases', label: 'Compras', icon: 'basket-outline' },
+  { key: 'accounts_payable', label: 'Cuentas por pagar', icon: 'cash-minus' },
   { key: 'ar', label: 'Cuentas por Cobrar', icon: 'cash-plus' },
   { key: 'payment_receipts', label: 'Recibos de pago', icon: 'receipt-text-outline' },
   { key: 'daily_closing', label: 'Cuadre diario', icon: 'clipboard-text-outline' },
@@ -117,7 +122,7 @@ function canAccessDrawerEntry(subUser: StoredSubUser | null, entry: DrawerEntry)
     case 'payment_receipts':
       return canAccessModule(subUser, 'payments');
     case 'daily_closing':
-      return canAccessModule(subUser, 'dailyClose');
+      return canAccessModule(subUser, 'dailyClose') || !!subUser?.canOperateCashShifts || !!subUser?.canViewAllCashShifts || !!subUser?.canManageCashShifts;
     case 'reports_menu':
       return canAccessModule(subUser, 'reports');
     case 'shipping_labels':
@@ -137,6 +142,8 @@ function canAccessDrawerEntry(subUser: StoredSubUser | null, entry: DrawerEntry)
       return hasLegacyPermission(subUser, 'canManageSuppliers');
     case 'purchases':
       return hasLegacyPermission(subUser, 'canManagePurchases') || hasLegacyPermission(subUser, 'canCancelPurchases');
+    case 'accounts_payable':
+      return hasLegacyPermission(subUser, 'canAccessAccountsPayable');
     case 'operating_expenses':
       return hasLegacyPermission(subUser, 'canManageExpenses') || hasLegacyPermission(subUser, 'canCancelExpenses');
     case 'treasury':
@@ -188,6 +195,8 @@ function getFirstAllowedRoute(subUser: StoredSubUser | null): string {
       return 'SuppliersMenu';
     case 'purchases':
       return 'PurchasesMenu';
+    case 'accounts_payable':
+      return 'AccountsPayableMenu';
     case 'billing':
       return 'BillingMenu';
     case 'payment_receipts':
@@ -251,7 +260,10 @@ const AddCategoryScreenWithBoundary = withScreenBoundary(AddCategoryScreen, 'Add
 const SupplierListScreenWithBoundary = withScreenBoundary(SupplierListScreen, 'SupplierListScreen');
 const AddSupplierScreenWithBoundary = withScreenBoundary(AddSupplierScreen, 'AddSupplierScreen');
 const PurchaseListScreenWithBoundary = withScreenBoundary(PurchaseListScreen, 'PurchaseListScreen');
+const PurchaseDetailScreenWithBoundary = withScreenBoundary(PurchaseDetailScreen, 'PurchaseDetailScreen');
 const AddPurchaseScreenWithBoundary = withScreenBoundary(AddPurchaseScreen, 'AddPurchaseScreen');
+const AccountsPayableScreenWithBoundary = withScreenBoundary(AccountsPayableScreen, 'AccountsPayableScreen');
+const PayableDetailScreenWithBoundary = withScreenBoundary(PayableDetailScreen, 'PayableDetailScreen');
 const OperatingExpensesScreenWithBoundary = withScreenBoundary(OperatingExpensesScreen, 'OperatingExpensesScreen');
 const AddOperatingExpenseScreenWithBoundary = withScreenBoundary(AddOperatingExpenseScreen, 'AddOperatingExpenseScreen');
 const CustomerListScreenWithBoundary = withScreenBoundary(CustomerListScreen, 'CustomerListScreen');
@@ -347,10 +359,18 @@ function PurchasesStack() {
   return (
     <Stack.Navigator screenOptions={commonStackOptions}>
       <Stack.Screen name="PurchaseList" component={PurchaseListScreenWithBoundary} />
+      <Stack.Screen name="PurchaseDetail" component={PurchaseDetailScreenWithBoundary} />
       <Stack.Screen name="AddPurchase" component={AddPurchaseScreenWithBoundary} />
       <Stack.Screen name="BarcodeScanner" component={BarcodeScannerScreenWithBoundary} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
+}
+
+function AccountsPayableStack() {
+  return <Stack.Navigator screenOptions={commonStackOptions}>
+    <Stack.Screen name="AccountsPayableList" component={AccountsPayableScreenWithBoundary} />
+    <Stack.Screen name="PayableDetail" component={PayableDetailScreenWithBoundary} />
+  </Stack.Navigator>;
 }
 
 function CustomersStack() {
@@ -632,6 +652,10 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
       (props.navigation as any).navigate('PurchasesMenu', { screen: 'PurchaseList' });
       return;
     }
+    if (key === 'accounts_payable') {
+      (props.navigation as any).navigate('AccountsPayableMenu', { screen: 'AccountsPayableList' });
+      return;
+    }
     if (key === 'billing') {
       (props.navigation as any).navigate('BillingMenu', { screen: 'InvoiceList' });
       return;
@@ -736,6 +760,7 @@ function CustomDrawerContent(props: DrawerContentComponentProps) {
             (item.key === 'categories' && currentRoute === 'CategoriesMenu') ||
             (item.key === 'suppliers' && currentRoute === 'SuppliersMenu') ||
             (item.key === 'purchases' && currentRoute === 'PurchasesMenu') ||
+            (item.key === 'accounts_payable' && currentRoute === 'AccountsPayableMenu') ||
             (item.key === 'billing_plans' && currentRoute === 'BillingPlansMenu') ||
             (item.key === 'billing' && currentRoute === 'BillingMenu') ||
             (item.key === 'payment_receipts' && currentRoute === 'PaymentReceiptsMenu') ||
@@ -799,6 +824,7 @@ export function MainNavigator() {
   const getTokenRef = useRef(getToken);
   const setBillingStateRef = useRef(setBillingState);
   getTokenRef.current = getToken;
+  setCashClerkTokenGetter(() => getTokenRef.current());
   setBillingStateRef.current = setBillingState;
 
   useEffect(() => {
@@ -870,6 +896,7 @@ export function MainNavigator() {
       try {
         const netInfo = await NetInfo.fetch();
         const hasInternet = !!netInfo.isConnected && netInfo.isInternetReachable !== false;
+        useSyncStore.getState().setIsOnline(hasInternet);
         if (!hasInternet) return;
 
         const clerkToken = await getTokenRef.current();
@@ -877,6 +904,7 @@ export function MainNavigator() {
 
         syncService.setTokenGetter(() => getTokenRef.current());
         syncService.setSubUserTokenGetter(async () => useAuthStore.getState().subUserToken);
+        await getCashContext().catch(error => console.warn('[CashShift] No se pudo actualizar el contexto:', error));
         await syncService.fullSync(clerkToken, { ignoreCooldown: true });
       } catch (error) {
         console.error('[MainNavigator] Error en auto-sync:', error);
@@ -937,9 +965,10 @@ export function MainNavigator() {
           {hasLegacyPermission(subUser, 'canManageCategories') && <Drawer.Screen name="CategoriesMenu" component={CategoriesStack} options={{ title: 'Categorías' }} />}
           {hasLegacyPermission(subUser, 'canManageSuppliers') && <Drawer.Screen name="SuppliersMenu" component={SuppliersStack} options={{ title: 'Proveedores' }} />}
           {(hasLegacyPermission(subUser, 'canManagePurchases') || hasLegacyPermission(subUser, 'canCancelPurchases')) && <Drawer.Screen name="PurchasesMenu" component={PurchasesStack} options={{ title: 'Compras' }} />}
+          {hasLegacyPermission(subUser, 'canAccessAccountsPayable') && <Drawer.Screen name="AccountsPayableMenu" component={AccountsPayableStack} options={{ title: 'Cuentas por pagar' }} />}
           {(hasLegacyPermission(subUser, 'canEditSales') || hasLegacyPermission(subUser, 'canCancelSales')) && <Drawer.Screen name="BillingMenu" component={BillingStack} options={{ title: 'Facturación' }} />}
           {canAccessModule(subUser, 'payments') && <Drawer.Screen name="PaymentReceiptsMenu" component={PaymentReceiptsStack} options={{ title: 'Recibos de pago' }} />}
-          {canAccessModule(subUser, 'dailyClose') && <Drawer.Screen name="DailyCloseMenu" component={DailyCloseStack} options={{ title: 'Cuadre diario' }} />}
+          {(canAccessModule(subUser, 'dailyClose') || !!subUser?.canOperateCashShifts || !!subUser?.canViewAllCashShifts || !!subUser?.canManageCashShifts) && <Drawer.Screen name="DailyCloseMenu" component={DailyCloseStack} options={{ title: 'Cuadre diario' }} />}
           {(hasLegacyPermission(subUser, 'canManageExpenses') || hasLegacyPermission(subUser, 'canCancelExpenses')) && <Drawer.Screen name="OperatingExpensesMenu" component={OperatingExpensesStack} options={{ title: 'Gastos operativos' }} />}
           {(hasLegacyPermission(subUser, 'canViewTreasury') || hasLegacyPermission(subUser, 'canManageTreasuryAccounts') || hasLegacyPermission(subUser, 'canCreateTreasuryTransfers') || hasLegacyPermission(subUser, 'canReverseTreasuryTransfers')) && <Drawer.Screen name="TreasuryMenu" component={TreasuryStack} options={{ title: 'Tesorería' }} />}
           {canAccessModule(subUser, 'accountsReceivable') && <Drawer.Screen name="ARMenu" component={ARStack} options={{ title: 'Cuentas por cobrar' }} />}

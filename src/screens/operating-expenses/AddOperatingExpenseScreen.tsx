@@ -5,6 +5,7 @@ import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { cashContextForQueue } from '../../services/cash/cashShiftService';
 import { useAuthStore } from '../../store/authStore';
 import { generateLocalId, formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
@@ -149,6 +150,7 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
     if (!validate()) return;
     setLoading(true);
     try {
+      const cashQueueContext = await cashContextForQueue('operating_expense', isEditing ? 'update' : 'create', { paymentMethod, treasuryAccountId });
       const localId = expenseLocalId || generateLocalId();
       const expenseDateMs = new Date(expenseDate).getTime();
       const payload = {
@@ -184,30 +186,24 @@ export function AddOperatingExpenseScreen({ navigation, route }: AddOperatingExp
         }),
       };
 
-      if (isEditing) {
-        await db.update('operating_expenses', localId, rowData);
-      } else {
-        await db.insert('operating_expenses', {
-          local_id: localId,
-          server_id: null,
-          ...rowData,
-        });
-      }
-
-      await db.runAsync(
-        "DELETE FROM sync_queue WHERE entity_type = 'operating_expense' AND entity_local_id = ? AND status IN ('pending','error')",
-        [localId]
-      );
-
       const action = serverId ? 'update' : 'create';
-      await syncService.queueOperation('operating_expense', action, payload, localId);
+      await db.transaction(async tx => {
+        if (isEditing) {
+          await tx.runAsync('UPDATE operating_expenses SET description = ?, amount_cents = ?, expense_date = ?, category = ?, notes = ?, payment_method = ?, treasury_account_id = ?, synced = 0, data = ? WHERE local_id = ?', [rowData.description, rowData.amount_cents, rowData.expense_date, rowData.category, rowData.notes, rowData.payment_method, rowData.treasury_account_id, rowData.data, localId]);
+        } else {
+          await tx.runAsync('INSERT INTO operating_expenses (local_id, server_id, description, amount_cents, expense_date, category, notes, payment_method, treasury_account_id, synced, data) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, 0, ?)', [localId, rowData.description, rowData.amount_cents, rowData.expense_date, rowData.category, rowData.notes, rowData.payment_method, rowData.treasury_account_id, rowData.data]);
+        }
+        await tx.runAsync("DELETE FROM sync_queue WHERE entity_type = 'operating_expense' AND entity_local_id = ? AND status IN ('pending','error')", [localId]);
+        await syncService.queueOperationTx(tx, 'operating_expense', action, payload, localId, cashQueueContext);
+      });
+      void syncService.kickQueue().catch(error => console.warn('El gasto quedó en cola; falló la sincronización inmediata:', error));
 
       Alert.alert('Éxito', isEditing ? 'Gasto operativo actualizado.' : 'Gasto operativo creado.', [
         { text: 'OK', onPress: () => navigation.goBack() },
       ]);
     } catch (error: any) {
       console.error('Error guardando gasto operativo:', error);
-      Alert.alert('Error', 'No se pudo guardar el gasto operativo.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo guardar el gasto operativo.');
     } finally {
       setLoading(false);
     }

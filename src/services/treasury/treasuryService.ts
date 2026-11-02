@@ -1,6 +1,7 @@
 import { db } from '../../database/Database';
 import { useAuthStore } from '../../store/authStore';
 import { syncService } from '../sync/SyncService';
+import { cashContextForQueue, getCashContext } from '../cash/cashShiftService';
 import {
   TreasuryAccount,
   TreasuryAccountType,
@@ -394,6 +395,11 @@ export async function updateTreasuryAccount(input: {
   const row = await db.queryFirst<any>('SELECT * FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1', [id, id]);
   if (!row) throw new Error('Cuenta de tesorería no encontrada');
 
+  const cashContext = await getCashContext();
+  if (cashContext.enabled && row.server_id === cashContext.treasuryAccountId && (!input.isActive || input.type !== 'CAJA' || (input.currency && input.currency !== 'DOP'))) {
+    throw new Error('La caja controlada debe permanecer activa, en DOP y como cuenta de caja.');
+  }
+
   const name = String(input.name || '').trim();
   if (!name) throw new Error('El nombre de la cuenta es requerido');
 
@@ -487,6 +493,7 @@ export async function setCashOpeningBalance(input: {
   effectiveAtMs?: number;
   note?: string | null;
 }) {
+  if ((await getCashContext()).enabled) throw new Error('El fondo de caja se controla con aperturas y movimientos del turno.');
   const account = await db.queryFirst<any>(
     'SELECT * FROM treasury_accounts WHERE local_id = ? OR server_id = ? LIMIT 1',
     [input.treasuryAccountId, input.treasuryAccountId]
@@ -946,6 +953,7 @@ export async function createTreasuryTransfer(input: {
   transferredAtMs?: number;
   note?: string | null;
 }): Promise<TreasuryTransfer> {
+  const cashQueueContext = await cashContextForQueue('treasury_transfer', 'create', input);
   const preview = await previewTreasuryTransfer(input);
   const now = Date.now();
   const localId = generateLocalId();
@@ -965,35 +973,14 @@ export async function createTreasuryTransfer(input: {
     createdAt: now,
   };
 
-  await db.insert('treasury_transfers', {
-    local_id: payload.localId,
-    server_id: null,
-    account_id: useAuthStore.getState().accountId || null,
-    from_treasury_account_id: payload.fromTreasuryAccountId,
-    to_treasury_account_id: payload.toTreasuryAccountId,
-    amount_cents: payload.amountCents,
-    transferred_at: payload.transferredAt,
-    note: payload.note,
-    created_by_user_id: payload.createdByUserId,
-    status: payload.status,
-    reverses_transfer_id: payload.reversesTransferId,
-    reversed_by_user_id: payload.reversedByUserId,
-    reversed_at: payload.reversedAt,
-    reverse_reason: payload.reverseReason,
-    created_at: payload.createdAt,
-    synced: 0,
-    data: JSON.stringify(payload),
+  await db.transaction(async tx => {
+    await tx.runAsync('INSERT INTO treasury_transfers (local_id, server_id, account_id, from_treasury_account_id, to_treasury_account_id, amount_cents, transferred_at, note, created_by_user_id, status, reverses_transfer_id, reversed_by_user_id, reversed_at, reverse_reason, created_at, synced, data) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)',
+      [payload.localId, useAuthStore.getState().accountId || null, payload.fromTreasuryAccountId, payload.toTreasuryAccountId,
+        payload.amountCents, payload.transferredAt, payload.note, payload.createdByUserId, payload.status,
+        payload.reversesTransferId, payload.reversedByUserId, payload.reversedAt, payload.reverseReason, payload.createdAt, JSON.stringify(payload)]);
+    await syncService.queueOperationTx(tx, 'treasury_transfer', 'create', { ...payload, id: null }, localId, cashQueueContext);
   });
-
-  await syncService.queueOperation(
-    'treasury_transfer',
-    'create',
-    {
-      ...payload,
-      id: null,
-    },
-    localId
-  );
+  void syncService.kickQueue().catch(error => console.warn('El traspaso quedó en cola; falló la sincronización inmediata:', error));
 
   const row = await db.queryFirst<any>('SELECT * FROM treasury_transfers WHERE local_id = ? LIMIT 1', [localId]);
   return mapTreasuryTransferRow(row);
@@ -1027,6 +1014,7 @@ export async function reverseTreasuryTransfer(input: {
   reason: string;
   reversedAtMs?: number;
 }) {
+  await cashContextForQueue('treasury_transfer', 'update', {});
   const transferId = String(input.transferId || '').trim();
   const reason = String(input.reason || '').trim();
   if (!transferId) throw new Error('Transferencia no encontrada');

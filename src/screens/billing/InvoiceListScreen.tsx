@@ -14,6 +14,7 @@ import { formatCurrency, formatDateTime } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { formatPaymentWithBank } from '../../utils/paymentMethods';
 import { syncService } from '../../services/sync/SyncService';
+import { getCashContext } from '../../services/cash/cashShiftService';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { formatProductQty } from '../../utils/productUnits';
@@ -1168,6 +1169,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
 
   const handleOpenEdit = async (invoice: InvoiceListItem) => {
     try {
+      if ((await getCashContext()).enabled) throw new Error('Corrige esta factura desde el historial del turno de caja.');
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
         Alert.alert('Factura', 'No se encontró la factura.');
@@ -1200,6 +1202,8 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       return;
     }
     try {
+      // Cancelar aquí alteraría inventario y documentos sin consumir la secuencia del turno.
+      if ((await getCashContext()).enabled) throw new Error('Corrige esta factura desde el historial del turno de caja.');
       const row = await db.queryFirst<any>('SELECT * FROM sales WHERE local_id = ?', [invoice.localId]);
       if (!row) {
         Alert.alert('Factura', 'No se encontró la factura.');
@@ -1281,7 +1285,7 @@ export function InvoiceListScreen({ navigation }: InvoiceListScreenProps) {
       Alert.alert('Factura', 'Factura cancelada.');
     } catch (error) {
       console.error('Error cancelando factura:', error);
-      Alert.alert('Error', 'No se pudo cancelar la factura.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo cancelar la factura.');
     }
   };
 

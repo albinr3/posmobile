@@ -10,8 +10,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCartStore } from '../../store/cartStore';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, generateInvoiceCode, generateLocalId } from '../../utils/helpers';
-import { db } from '../../database/Database';
+import { db, type DatabaseTransaction } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
+import { cashContextForQueue, getCashContext } from '../../services/cash/cashShiftService';
+import { CashShiftGate } from '../../components/CashShiftGate';
 import { ui } from '../../theme/ui';
 import { getBottomSafeInset } from '../../utils/safeArea';
 import { SalePaymentSplit, TreasuryAccount } from '../../types';
@@ -552,7 +554,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     customerVisualId: number | null;
     totalCents: number;
     dueDate: number | null;
-  }) => {
+  }, tx?: DatabaseTransaction) => {
     if (!params.customerId) return;
     const arLocalId = buildLocalArIdForSale(params.saleLocalId);
     const arPayload = {
@@ -584,19 +586,18 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       data: JSON.stringify(arPayload),
     };
 
-    const exists = await db.queryFirst<{ local_id?: string }>(
+    const exists = await (tx ?? db).queryFirst<{ local_id?: string }>(
       'SELECT local_id FROM accounts_receivable WHERE local_id = ? LIMIT 1',
       [arLocalId]
     );
     if (exists?.local_id) {
-      await db.update('accounts_receivable', arLocalId, arRow, 'local_id');
+      if (tx) await tx.runAsync('UPDATE accounts_receivable SET customer_id = ?, customer_visual_id = ?, customer_name = ?, total_cents = ?, paid_cents = 0, balance_cents = ?, status = ?, due_date = ?, synced = 0, data = ? WHERE local_id = ?', [arRow.customer_id, arRow.customer_visual_id, arRow.customer_name, arRow.total_cents, arRow.balance_cents, arRow.status, arRow.due_date, arRow.data, arLocalId]);
+      else await db.update('accounts_receivable', arLocalId, arRow, 'local_id');
       return;
     }
 
-    await db.insert('accounts_receivable', {
-      local_id: arLocalId,
-      ...arRow,
-    });
+    if (tx) await tx.runAsync('INSERT INTO accounts_receivable (local_id, customer_id, customer_visual_id, customer_name, total_cents, paid_cents, balance_cents, status, due_date, synced, data) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?)', [arLocalId, arRow.customer_id, arRow.customer_visual_id, arRow.customer_name, arRow.total_cents, arRow.balance_cents, arRow.status, arRow.due_date, arRow.data]);
+    else await db.insert('accounts_receivable', { local_id: arLocalId, ...arRow });
   };
 
   const removeLocalArDraftForSale = async (saleLocalId: string) => {
@@ -798,6 +799,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     setLoading(true);
     let reservation: Awaited<ReturnType<typeof saleStockService.reserve>> | null = null;
     let stockPersisted = false;
+    let committedSale: { id: string; invoiceCode: string } | null = null;
     try {
       if (items.length === 0) return;
       await saleStockService.refresh(editingSaleLocalId);
@@ -952,6 +954,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
       // Comprobar antes de crear la factura o tocar la cola. La reserva SQLite
       // vuelve a validar de forma atómica después de la comprobación remota.
+      const cashContext = await getCashContext();
+      if (cashContext.enabled && editingSaleLocalId) throw new Error('Corrige esta factura desde el historial del turno de caja.');
+      const cashQueueContext = editingSaleLocalId ? null : await cashContextForQueue('sale', 'create', { paymentMethod });
       await syncService.checkSaleStock(items, editingSaleLocalId);
       let localId = generateLocalId();
       let invoiceCode = generateInvoiceCode();
@@ -1209,25 +1214,20 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           saleData.stockConsumptions = reserved.consumptions;
           saleData.stockReservationDelta = reserved.pendingDelta;
           await tx.runAsync('INSERT INTO sales (local_id, invoice_code, customer_id, treasury_account_id, total_cents, status, created_at, synced, data) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)', [localId, invoiceCode, selectedCustomerId, paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA' ? treasuryAccountId : null, cartTotals.totalCents, 'completed', now, JSON.stringify(saleData)]);
+          if (paymentMethod === 'CREDITO') {
+            // La cuenta por cobrar también pertenece al commit de la venta.
+            await upsertLocalArForCreditSale({ saleLocalId: localId, invoiceCode, createdAt: now,
+              customerId: selectedCustomerId, customerName: selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
+              customerVisualId: selectedCustomerVisualId ?? null, totalCents: cartTotals.totalCents,
+              dueDate: creditDueDate }, tx);
+          }
+          // El documento y su operación de caja se confirman juntos; no dejar una venta sin pendiente durable.
+          await syncService.queueOperationTx(tx, 'sale', 'create', saleData, localId, cashQueueContext);
         });
         stockPersisted = true;
+        committedSale = { id: localId, invoiceCode };
 
-        if (paymentMethod === 'CREDITO') {
-          await upsertLocalArForCreditSale({
-            saleLocalId: localId,
-            invoiceCode,
-            createdAt: now,
-            customerId: selectedCustomerId,
-            customerName: selectedCustomerName || GENERIC_CUSTOMER_DISPLAY_NAME,
-            customerVisualId: selectedCustomerVisualId ?? null,
-            totalCents: cartTotals.totalCents,
-            dueDate: creditDueDate,
-          });
-        } else {
-          await removeLocalArDraftForSale(localId);
-        }
-
-        await syncService.queueOperation('sale', 'create', saleData, localId);
+        void syncService.kickQueue().catch(error => console.warn('La venta quedó en cola; no se pudo iniciar la sincronización inmediata:', error));
 
         const syncedSale = await db.queryFirst<{ invoice_code?: string }>(
           'SELECT invoice_code FROM sales WHERE local_id = ?',
@@ -1295,6 +1295,15 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       navigation.navigate('Receipt', { saleId: localId, invoiceCode: resolvedInvoiceCode });
     } catch (error) {
       console.error('Error completando venta:', error);
+      if (committedSale) {
+        // Una falla posterior al commit no convierte la venta en reintentable.
+        // Mostrar el recibo evita que el cajero duplique el cobro o el inventario.
+        clear();
+        clearEditContext();
+        Alert.alert('Venta guardada', 'La venta quedó registrada y pendiente de sincronización. Revisa el recibo; no la registres otra vez.');
+        navigation.navigate('Receipt', { saleId: committedSale.id, invoiceCode: committedSale.invoiceCode });
+        return;
+      }
       if (reservation && !stockPersisted) await saleStockService.release(reservation.delta);
       Alert.alert('No se pudo completar la venta', error instanceof Error ? error.message : 'Revisa las existencias e intenta nuevamente.');
     } finally {
@@ -1382,6 +1391,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
+      <CashShiftGate />
       {cartStockIssue && items.length > 0 ? <Text accessibilityRole="alert" style={{ color: '#DC2626', padding: 12 }}>{cartStockIssue.message}</Text> : null}
       <FlatList
         data={items}

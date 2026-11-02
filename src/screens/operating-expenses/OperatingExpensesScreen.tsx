@@ -7,6 +7,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { useSyncStore } from '../../store/syncStore';
 import { syncService } from '../../services/sync/SyncService';
+import { getCashContext } from '../../services/cash/cashShiftService';
 import { db } from '../../database/Database';
 import { formatCurrency, formatDate } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
@@ -123,6 +124,7 @@ export function OperatingExpensesScreen({ navigation }: OperatingExpensesScreenP
         style: 'destructive',
         onPress: async () => {
           try {
+            if ((await getCashContext()).enabled) throw new Error('Corrige este gasto desde el historial del turno de caja.');
             const localId = item.localId;
             if (item.serverId) {
               await syncService.queueOperation(
@@ -141,7 +143,7 @@ export function OperatingExpensesScreen({ navigation }: OperatingExpensesScreenP
             await loadLocalItems();
           } catch (error) {
             console.error('Error eliminando gasto operativo:', error);
-            Alert.alert('Error', 'No se pudo eliminar el gasto.');
+            Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo eliminar el gasto.');
           }
         },
       },

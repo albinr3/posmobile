@@ -453,6 +453,7 @@ export async function prepareSyncRequestData(
           discountPercentBp: Number.isFinite(Number(data?.discountPercentBp))
             ? Number(data.discountPercentBp)
             : 0,
+          creditDays: Number.isSafeInteger(Number(data?.creditDays)) ? Number(data.creditDays) : 0,
           chargesItbis: Boolean(data?.chargesItbis),
           itbisRateBp:
             data?.chargesItbis

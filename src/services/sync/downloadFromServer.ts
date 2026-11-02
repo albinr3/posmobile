@@ -490,6 +490,8 @@ export async function downloadFromServer(options: {
         address: supplier?.address ? String(supplier.address) : null,
         notes: supplier?.notes ? String(supplier.notes) : null,
         discountPercentBp: Number(supplier?.discountPercentBp || 0),
+        creditDays: Number(supplier?.creditDays ?? 0),
+        isActive: supplier?.isActive !== false,
         chargesItbis: Boolean(supplier?.chargesItbis),
         itbisRateBp:
           supplier?.itbisRateBp === null || supplier?.itbisRateBp === undefined
@@ -502,7 +504,7 @@ export async function downloadFromServer(options: {
         discount_percent_bp: supplierData.discountPercentBp,
         charges_itbis: supplierData.chargesItbis ? 1 : 0,
         itbis_rate_bp: supplierData.itbisRateBp,
-        is_available_for_sale: 1,
+        is_available_for_sale: supplierData.isActive ? 1 : 0,
         synced: 1,
         data: JSON.stringify(supplierData),
       };
@@ -1393,16 +1395,23 @@ export async function downloadFromServer(options: {
       const purchaseData = {
         id: purchaseId,
         serverId: purchaseId,
+        type: purchase?.type === 'CREDITO' ? 'CREDITO' : 'CONTADO',
+        supplierId: purchase?.supplierId ? String(purchase.supplierId) : null,
+        supplierServerId: purchase?.supplierId ? String(purchase.supplierId) : null,
         supplierName: purchase?.supplierName ? String(purchase.supplierName) : '',
         notes: purchase?.notes ? String(purchase.notes) : null,
         totalCents: Number(purchase?.totalCents || 0),
+        payableId: purchase?.payableId ? String(purchase.payableId) : null,
+        dueDate: purchase?.dueDate ? String(purchase.dueDate).slice(0, 10) : null,
+        paidCents: Number(purchase?.paidCents ?? purchase?.totalCents ?? 0),
+        balanceCents: Number(purchase?.balanceCents ?? 0),
         purchasedAt: purchasedAtMs,
         cancelledAt: cancelledAtMs,
         itemsCount: Number(purchase?.itemsCount || normalizedItems.length),
         items: normalizedItems,
         paymentMethod: purchasePaymentMethodField.found
           ? String(purchasePaymentMethodField.value ?? '').trim().toUpperCase()
-          : String(localPurchase?.paymentMethod || 'EFECTIVO').trim().toUpperCase(),
+          : String(localPurchase?.paymentMethod || (purchase?.type === 'CREDITO' ? '' : 'EFECTIVO')).trim().toUpperCase(),
         treasuryAccountId: purchaseTreasuryAccountField.found
           ? normalizeNullableId(purchaseTreasuryAccountField.value)
           : normalizeNullableId(localPurchase?.treasuryAccountId),

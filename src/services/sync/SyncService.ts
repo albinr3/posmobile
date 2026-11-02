@@ -4,13 +4,19 @@ import type { SaleItem } from '../../types';
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
-import { db } from '../../database/Database';
+import { db, type DatabaseTransaction } from '../../database/Database';
+import { cashContextForQueue, cashDeviceToken, cashOperationForInsert, discardCashPending, type CashContext, type CashQueueRow } from '../cash/cashShiftService';
 import { useSyncStore } from '../../store/syncStore';
 import { reportError } from '../error/errorReporter';
 import { API_URL, SYNC_DEBUG, shortToken, summarizeError } from './syncShared';
 import { prepareSyncRequestData } from './prepareSyncRequestData';
 import { downloadFromServer } from './downloadFromServer';
 import { capturePhase0SyncBaselineSnapshot } from './syncBaseline';
+import { generateLocalId } from '../../utils/helpers';
+
+type OnlineFinancialKind = 'credit_purchase' | 'supplier_payment';
+type OnlineFinancialQueueRow = CashQueueRow & { data: string; request_data: string | null };
+const onlineFinancialKind = (value: string): value is OnlineFinancialKind => value === 'credit_purchase' || value === 'supplier_payment';
 
 function parseJwtExpiryMs(token: string | null | undefined): number | null {
   try {
@@ -40,6 +46,7 @@ class SyncService {
   private static readonly SUBUSER_REFRESH_WINDOW_MS = 5 * 60 * 1000;
 
   private isSyncing = false;
+  private onlineFinancialSubmitInFlight = false;
   private isInitialized = false;
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private unsubscribeNetInfo: (() => void) | null = null;
@@ -60,6 +67,25 @@ class SyncService {
   setSubUserTokenGetter(fn: () => Promise<string | null>) {
     if (SYNC_DEBUG) console.log('[SyncService] setSubUserTokenGetter() configurado');
     this.getSubUserTokenFn = fn;
+  }
+
+  async ensureSessionForFinancialRequest() {
+    const result = await this.ensureSubUserSessionFresh();
+    if (!result.ready) throw new Error(result.reason || 'Vuelve a iniciar sesión antes de continuar.');
+  }
+
+  async refreshConfirmedCreditPurchase(serverId: string) {
+    const deadline = Date.now() + 30000;
+    while (this.isSyncing && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
+    if (this.isSyncing) throw new Error('La actualización local sigue en curso.');
+    const token = await this.getTokenFn?.();
+    if (!token) throw new Error('Inicia sesión para actualizar el inventario local.');
+    await this.fullSync(token, { ignoreCooldown: true });
+    const row = await db.queryFirst<{ local_id: string }>('SELECT local_id FROM purchases WHERE server_id = ? LIMIT 1', [serverId]);
+    const status = await db.queryFirst<{ value: string }>("SELECT value FROM sync_metadata WHERE key = 'last_download_successful_entities'");
+    let completed: string[] = [];
+    try { completed = JSON.parse(status?.value || '[]'); } catch { /* exigir nueva descarga */ }
+    if (!row || !completed.includes('products') || !completed.includes('purchases')) throw new Error('La compra está confirmada, pero inventario y listado locales aún deben sincronizarse.');
   }
 
   async init() {
@@ -125,6 +151,7 @@ class SyncService {
       }
       
       // 4. Actualizar timestamp
+      await this.clearCashCatalogRefreshIfDownloaded();
       useSyncStore.getState().setLastSyncTime(Date.now());
     } catch (error) {
       console.error('Error en sincronización completa:', error);
@@ -145,6 +172,48 @@ class SyncService {
     } catch (error) {
       console.error('Error en sincronización incremental:', error);
     }
+  }
+
+  async flushCashShiftQueue(shiftId: string): Promise<void> {
+    if (!useSyncStore.getState().isOnline) throw new Error('Necesitas conexión para sincronizar el turno.');
+    const deadline = Date.now() + 60000;
+    while (this.isSyncing) {
+      if (Date.now() >= deadline) throw new Error('La sincronización sigue en curso. Reintenta el cierre cuando termine.');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    await db.runAsync("UPDATE sync_queue SET status = 'pending', next_attempt_at = NULL, retry_count = 0 WHERE cash_shift_id = ? AND (status = 'pending' OR (status = 'error' AND entity_type NOT IN ('credit_purchase','supplier_payment')))", [shiftId]);
+    await this.processQueue();
+    const pending = await db.query<any>("SELECT id, status, last_error_code FROM sync_queue WHERE cash_shift_id = ? AND status != 'synced' ORDER BY client_sequence LIMIT 1", [shiftId]);
+    if (pending.length) throw new Error(`Queda una operación del turno por confirmar (${pending[0].last_error_code || pending[0].status}).`);
+  }
+
+  async refreshCashDiscardCatalog(): Promise<void> {
+    const marker = await db.queryFirst<{ value: string }>("SELECT value FROM sync_metadata WHERE key = 'cash_catalog_refresh_required'");
+    if (!marker) return;
+    const deadline = Date.now() + 60000;
+    while (this.isSyncing) {
+      if (Date.now() >= deadline) throw new Error('Espera a que termine la sincronización antes de actualizar el catálogo.');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    this.isSyncing = true;
+    try {
+      const token = await this.getTokenFn?.();
+      if (!token) throw new Error('Inicia sesión para actualizar los precios tras anular la compra.');
+      await this.downloadFromServer(token);
+      await this.clearCashCatalogRefreshIfDownloaded();
+    } finally { this.isSyncing = false; }
+  }
+
+  private async clearCashCatalogRefreshIfDownloaded() {
+    const marker = await db.queryFirst<{ value: string }>("SELECT value FROM sync_metadata WHERE key = 'cash_catalog_refresh_required'");
+    if (!marker) return;
+    const status = await db.queryFirst<{ value: string }>("SELECT value FROM sync_metadata WHERE key = 'last_download_successful_entities'");
+    let completed: string[] = [];
+    try { completed = JSON.parse(status?.value || '[]'); } catch { /* mantener pendiente */ }
+    // La descarga puede ser parcial. No declarar restaurados costos y precios
+    // si el catálogo de productos falló en la última descarga.
+    if (!completed.includes('products')) throw new Error('No se restauró el catálogo del servidor. Reintenta la sincronización.');
+    await db.runAsync("DELETE FROM sync_metadata WHERE key = 'cash_catalog_refresh_required'");
   }
 
   async capturePhase0Baseline(label: string = 'manual') {
@@ -294,7 +363,105 @@ class SyncService {
   }
 
   async queueOperation(entityType: string, action: string, data: any, localId: string) {
+    const context = await cashContextForQueue(entityType, action, data);
+    await db.transaction(tx => this.queueOperationTx(tx, entityType, action, data, localId, context));
+    await this.updatePendingCount();
+    if (useSyncStore.getState().isOnline) void this.processQueue().catch(error => console.error('[SyncService] Error en processQueue background:', summarizeError(error)));
+  }
+
+  async kickQueue() {
+    await this.updatePendingCount();
+    if (useSyncStore.getState().isOnline) void this.processQueue().catch(error => console.error('[SyncService] Error en processQueue background:', summarizeError(error)));
+  }
+
+  async listOnlineFinancialPending(): Promise<OnlineFinancialQueueRow[]> {
+    return db.query<OnlineFinancialQueueRow>("SELECT * FROM sync_queue WHERE entity_type IN ('credit_purchase','supplier_payment') AND status != 'synced' ORDER BY created_at, id");
+  }
+
+  private async settleOnlineFinancial(id: number): Promise<{ confirmed: boolean; result?: any; queueId: number; rejected?: boolean; error?: string }> {
+    const deadline = Date.now() + 30000;
+    while (this.isSyncing && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 100));
+    if (!this.isSyncing) await this.processQueue();
+    const row = await db.queryFirst<OnlineFinancialQueueRow>('SELECT * FROM sync_queue WHERE id = ?', [id]);
+    const data = row?.data ? JSON.parse(row.data) : {};
+    return { confirmed: row?.status === 'synced' && !!data.serverResult, result: data.serverResult,
+      queueId: id, rejected: Boolean(data.rejectedAt), error: data.lastErrorMessage || undefined };
+  }
+
+  async submitOnlineFinancial(kind: OnlineFinancialKind, input: Record<string, unknown>): Promise<{ confirmed: boolean; result?: any; queueId: number; rejected?: boolean; error?: string }> {
+    if (this.onlineFinancialSubmitInFlight) throw new Error('La operación anterior todavía se está registrando.');
+    this.onlineFinancialSubmitInFlight = true;
+    let queueId = 0;
+    let operationId: string | null = null;
     try {
+    if (!useSyncStore.getState().isOnline) throw new Error('Conéctate para registrar esta operación.');
+    const actor = (await import('../../store/authStore')).useAuthStore.getState();
+    if (!actor.accountId || !actor.subUser?.id) throw new Error('Selecciona el empleado antes de registrar la operación.');
+    const existing = await this.listOnlineFinancialPending();
+    if (existing.some(row => row.account_id === actor.accountId && row.user_id === actor.subUser?.id)) {
+      throw new Error('Hay una compra o pago por confirmar. Reinténtalo o resuélvelo antes de registrar otro.');
+    }
+    const generatedOperationId = generateLocalId();
+    operationId = generatedOperationId;
+    const payload = { ...input, operationId: generatedOperationId };
+    const context = await cashContextForQueue(kind, 'create', kind === 'supplier_payment'
+      ? { method: input.method, treasuryAccountId: input.treasuryAccountId }
+      : { paymentMethod: input.initialPaymentCents ? input.paymentMethod : null, treasuryAccountId: input.initialPaymentCents ? input.treasuryAccountId : null });
+    await db.transaction(async tx => {
+      await this.queueOperationTx(tx, kind, 'create', payload, generatedOperationId, context);
+      const row = await tx.queryFirst<OnlineFinancialQueueRow>("SELECT * FROM sync_queue WHERE entity_type = ? AND entity_local_id = ? AND action = 'create' ORDER BY id DESC LIMIT 1", [kind, generatedOperationId]);
+      if (!row) throw new Error('No se pudo guardar la operación pendiente.');
+      queueId = row.id;
+      const request = { ...payload, ...(row.client_operation_id ? { cashOperation: {
+        accountId: row.account_id, userId: row.user_id, cashShiftId: row.cash_shift_id,
+        clientOperationId: row.client_operation_id, clientSequence: row.client_sequence,
+      } } : {}) };
+      // El cuerpo queda congelado antes de la primera petición. Una respuesta perdida
+      // nunca debe regenerar el identificador ni cambiar el hash de caja.
+      await tx.runAsync('UPDATE sync_queue SET account_id = ?, user_id = ?, request_data = ? WHERE id = ?',
+        [actor.accountId, actor.subUser!.id, JSON.stringify(request), queueId]);
+    });
+    await this.updatePendingCount();
+    return await this.settleOnlineFinancial(queueId);
+    } catch (error) {
+      if (queueId) {
+        const row = await db.queryFirst<OnlineFinancialQueueRow>('SELECT * FROM sync_queue WHERE id = ?', [queueId]).catch(() => null);
+        if (row && row.entity_type === kind && row.entity_local_id === operationId) {
+          const data = JSON.parse(row.data || '{}');
+          return { confirmed: row.status === 'synced' && !!data.serverResult, result: data.serverResult,
+            queueId, rejected: Boolean(data.rejectedAt), error: data.lastErrorMessage || 'La confirmación está pendiente. Reintenta la misma operación.' };
+        }
+      }
+      throw error;
+    } finally { this.onlineFinancialSubmitInFlight = false; }
+  }
+
+  async retryOnlineFinancial(id: number) {
+    const row = await db.queryFirst<OnlineFinancialQueueRow>('SELECT * FROM sync_queue WHERE id = ?', [id]);
+    if (!row || !onlineFinancialKind(row.entity_type) || row.status === 'synced') throw new Error('El pendiente ya fue resuelto.');
+    const actor = (await import('../../store/authStore')).useAuthStore.getState();
+    if (row.account_id !== actor.accountId || row.user_id !== actor.subUser?.id) throw new Error('Vuelve al empleado que creó este pendiente.');
+    if (!useSyncStore.getState().isOnline) throw new Error('Conéctate para confirmar el pendiente.');
+    // Tras un reintento incierto ya no es seguro ofrecer descarte: el servidor
+    // pudo confirmar esta misma operación aunque se haya perdido la respuesta.
+    const data = JSON.parse(row.data || '{}');
+    await db.runAsync("UPDATE sync_queue SET status = 'pending', retry_count = 0, next_attempt_at = NULL, data = ? WHERE id = ?", [JSON.stringify({ ...data, rejectedAt: null, lastErrorMessage: null }), id]);
+    return this.settleOnlineFinancial(id);
+  }
+
+  async discardRejectedOnlineFinancial(id: number, reason: string) {
+    const row = await db.queryFirst<OnlineFinancialQueueRow>('SELECT * FROM sync_queue WHERE id = ?', [id]);
+    if (!row || !onlineFinancialKind(row.entity_type) || row.status === 'synced') throw new Error('El pendiente ya fue resuelto.');
+    const data = JSON.parse(row.data || '{}');
+    if (!data.rejectedAt) throw new Error('Esta operación puede estar confirmada. Reinténtala antes de descartarla.');
+    if (!reason.trim()) throw new Error('Escribe el motivo para descartar el pendiente.');
+    if (row.cash_shift_id) await discardCashPending(row, reason);
+    else await db.runAsync("UPDATE sync_queue SET status = 'synced', synced_at = ?, last_error_code = 'DISCARDED' WHERE id = ?", [Date.now(), id]);
+    await this.updatePendingCount();
+  }
+
+  // Usar esta variante dentro de la transacción que guarda el documento financiero.
+  async queueOperationTx(tx: DatabaseTransaction, entityType: string, action: string, data: any, localId: string, context: CashContext | null) {
       if (SYNC_DEBUG) {
         console.log('[SyncService] queueOperation()', {
           entityType,
@@ -305,9 +472,9 @@ class SyncService {
       }
 
       // Deduplicación: evitar encolar la misma operación si ya existe una pendiente o en vuelo
-      const existing = await db.queryFirst<any>(
+      const existing = await tx.queryFirst<any>(
         `SELECT id FROM sync_queue
-         WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status IN ('pending', 'syncing')
+         WHERE entity_type = ? AND entity_local_id = ? AND action = ? AND status IN ('pending', 'syncing', 'error')
          LIMIT 1`,
         [entityType, localId, action]
       );
@@ -323,29 +490,14 @@ class SyncService {
         return;
       }
 
-      await db.insert('sync_queue', {
-        entity_type: entityType,
-        entity_local_id: localId,
-        action,
-        data: JSON.stringify(data),
-        status: 'pending',
-        retry_count: 0,
-        created_at: Date.now(),
-      });
-
-      await this.updatePendingCount();
-
-      // Intentar sincronizar si hay internet
-      const { isOnline } = useSyncStore.getState();
-      if (isOnline) {
-        // No bloquear la UX por latencia/timeout de red: sincronizar en background.
-        this.processQueue().catch((error) => {
-          console.error('[SyncService] Error en processQueue background:', summarizeError(error));
-        });
-      }
-    } catch (error) {
-      console.error('Error agregando a cola:', error);
-    }
+      const cashOperation = context ? await cashOperationForInsert(tx, context, localId) : null;
+      await tx.runAsync(
+        `INSERT INTO sync_queue (entity_type, entity_local_id, action, data, status, retry_count, created_at, account_id, user_id, cash_shift_id, client_operation_id, client_sequence)
+         VALUES (?, ?, ?, ?, 'pending', 0, ?, ?, ?, ?, ?, ?)`,
+        [entityType, localId, action, JSON.stringify(data), Date.now(), cashOperation?.accountId ?? null,
+          cashOperation?.userId ?? null, cashOperation?.cashShiftId ?? null,
+          cashOperation?.clientOperationId ?? null, cashOperation?.clientSequence ?? null]
+      );
   }
 
   private async processQueue() {
@@ -435,12 +587,16 @@ class SyncService {
            WHEN entity_type = 'customer' AND action = 'create' THEN 2
            ELSE 3
          END ASC,
-         created_at ASC`,
+         created_at ASC, id ASC`,
       [now]
     );
     if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() pending items', { count: pending.length });
 
     for (const item of pending) {
+      if (item.cash_shift_id && item.client_sequence != null) {
+        const first = await db.queryFirst<{ id: number }>("SELECT id FROM sync_queue WHERE cash_shift_id = ? AND status != 'synced' ORDER BY client_sequence, id LIMIT 1", [item.cash_shift_id]);
+        if (first?.id !== item.id) break;
+      }
       try {
         if (SYNC_DEBUG) {
           console.log('[SyncService] processQueueInternal() syncing item', {
@@ -474,6 +630,8 @@ class SyncService {
           sync_started_at: null,
         }, 'id');
         const stopProcessing = await this.handleSyncError(item, error);
+        // Una secuencia rechazada impide enviar las posteriores del mismo turno.
+        if (item.client_operation_id) break;
         if (stopProcessing) {
           if (SYNC_DEBUG) console.log('[SyncService] processQueueInternal() stopProcessing=true, cortando ciclo');
           break;
@@ -514,6 +672,9 @@ class SyncService {
     if (!subUserToken) {
       throw new Error('No hay token de subusuario disponible. Por favor, selecciona un usuario.');
     }
+    if (item.client_operation_id && (item.account_id !== accountId || item.user_id !== (await import('../../store/authStore')).useAuthStore.getState().subUser?.id)) {
+      throw new Error('Vuelve al empleado que registró este pendiente de caja.');
+    }
 
     if (SYNC_DEBUG) {
       console.log('[SyncService] syncItem() auth context', {
@@ -552,14 +713,31 @@ class SyncService {
       'X-SubUser-Token': subUserToken,
       ...(accountId ? { 'X-Account-Id': accountId } : {}),
       'Content-Type': 'application/json',
+      ...(item.client_operation_id ? { 'X-Cash-Device-Token': await cashDeviceToken() } : {}),
     };
 
+    if (onlineFinancialKind(item.entity_type)) {
+      const requestData = item.request_data ? JSON.parse(item.request_data) : data;
+      if (!item.request_data) await db.update('sync_queue', item.id, { request_data: JSON.stringify(requestData) }, 'id');
+      const deviceToken = await cashDeviceToken();
+      // purchaseAPI identifica el móvil por cookie; caja usa además el encabezado.
+      const headers = { ...requestHeaders, 'X-Cash-Device-Token': deviceToken, Cookie: `movopos-cash-device=${deviceToken}` };
+      const response = await axios.post(`${API_URL}/api/${item.entity_type === 'credit_purchase' ? 'purchases' : 'supplier-payments'}`, requestData, { headers, timeout: 25000 });
+      if (!response.data?.id) throw new Error('El servidor no devolvió el identificador de la operación.');
+      await db.update('sync_queue', item.id, { data: JSON.stringify({ ...data, serverResult: response.data, rejectedAt: null, lastErrorMessage: null }) }, 'id');
+      return;
+    }
+
     // Preparar datos según el tipo de entidad
-    const requestData = await this.prepareRequestData(item.entity_type, data, item.action, {
-      clerkToken,
-      subUserToken,
-      accountId,
+    const requestData = item.request_data ? JSON.parse(item.request_data) : await this.prepareRequestData(item.entity_type, data, item.action, {
+      clerkToken, subUserToken, accountId,
     });
+    if (item.client_operation_id && !item.request_data) {
+      // Guardar el cuerpo exacto antes de enviarlo: un reintento debe tener el mismo hash.
+      requestData.cashOperation = { accountId: item.account_id, userId: item.user_id,
+        cashShiftId: item.cash_shift_id, clientOperationId: item.client_operation_id, clientSequence: item.client_sequence };
+      await db.update('sync_queue', item.id, { request_data: JSON.stringify(requestData) }, 'id');
+    }
 
     const paymentCancelRequested =
       item.entity_type === 'payment' &&
@@ -605,7 +783,7 @@ class SyncService {
         headers: requestHeaders,
       });
     } catch (error) {
-      if (item.action === 'create' && item.entity_type === 'payment_batch' && this.shouldFallbackBatchPayment(error)) {
+      if (!item.client_operation_id && item.action === 'create' && item.entity_type === 'payment_batch' && this.shouldFallbackBatchPayment(error)) {
         if (SYNC_DEBUG) {
           console.warn('[SyncService] payment_batch fallback -> POST /api/payments por factura', {
             queueId: item.id,
@@ -1191,6 +1369,15 @@ class SyncService {
       ? String(error.response?.data?.error || error.response?.data?.message || error.message || '')
       : String(error?.message || '');
     const backendErrorMessage = backendErrorRaw.toLowerCase();
+    if (onlineFinancialKind(item.entity_type) && backendStatus && [400, 403, 404, 409, 422].includes(backendStatus)) {
+      const data = JSON.parse(item.data || '{}');
+      await db.update('sync_queue', item.id, {
+        status: 'error', next_attempt_at: null, retry_count: item.retry_count + 1,
+        last_error_code: String(error.response?.data?.code || `HTTP_${backendStatus}`),
+        data: JSON.stringify({ ...data, rejectedAt: Date.now(), lastErrorMessage: backendErrorRaw }),
+      }, 'id');
+      return true;
+    }
     const dependencyError =
       (typeof error?.message === 'string' &&
         (error.message.includes('Producto sin server_id') ||
@@ -1346,7 +1533,9 @@ class SyncService {
         backendErrorMessage.includes('factura a credito') ||
         backendErrorMessage.includes('factura a crédito')
       );
-    if (returnBusinessRejected) {
+    // Un rechazo dentro de un turno conserva su secuencia hasta que el cajero la anule
+    // explícitamente en el servidor. El rollback automático dejaría un hueco permanente.
+    if (returnBusinessRejected && !item.client_operation_id) {
       await this.rejectReturnLocally(item, backendErrorRaw || 'Devolucion rechazada por backend');
       return false;
     }
@@ -1686,6 +1875,8 @@ class SyncService {
       'payment': 'payments',
       'payment_batch': 'payments/batch',
       'purchase': 'purchases',
+      'credit_purchase': 'purchases',
+      'supplier_payment': 'supplier-payments',
       'operating_expense': 'operating-expenses',
       'treasury_account': 'treasury/accounts',
       'treasury_opening_balance': 'treasury/opening-balances',

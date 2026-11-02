@@ -10,6 +10,9 @@ import { db } from '../../database/Database';
 import { useSyncStore } from '../../store/syncStore';
 import { useSyncAuth } from '../../hooks/useSyncAuth';
 import { syncService } from '../../services/sync/SyncService';
+import { cashContextForQueue, getCashContext } from '../../services/cash/cashShiftService';
+import { listTreasuryAccounts } from '../../services/treasury/treasuryService';
+import type { TreasuryAccount } from '../../types';
 import { formatProductQty, inferProductUnit, unitAllowsDecimals } from '../../utils/productUnits';
 import { calcDocumentTotalsByTaxMode } from '../../utils/tax';
 import {
@@ -67,6 +70,8 @@ interface SaleDetail {
   invoiceCode: string;
   soldAt: string | null;
   type: string;
+  paymentMethod: string;
+  treasuryAccountId: string | null;
   totalCents: number;
   salePricesIncludeItbis: boolean;
   returnPolicy: ReturnPolicy;
@@ -197,6 +202,9 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<SaleSearchResult[]>([]);
   const [selectedSale, setSelectedSale] = useState<SaleDetail | null>(null);
+  const [refundMethod, setRefundMethod] = useState('EFECTIVO');
+  const [refundAccountId, setRefundAccountId] = useState('');
+  const [refundAccounts, setRefundAccounts] = useState<TreasuryAccount[]>([]);
   const [loadingSale, setLoadingSale] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notes, setNotes] = useState('');
@@ -205,6 +213,15 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
   const [loadingReturns, setLoadingReturns] = useState(true);
   const [refreshingReturns, setRefreshingReturns] = useState(false);
   const [returnsError, setReturnsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (screenMode !== 'CREATE') return;
+    let active = true;
+    void listTreasuryAccounts(false).then(rows => { if (active) setRefundAccounts(rows.filter(row => row.isActive)); })
+      .catch(() => { if (active) setRefundAccounts([]); });
+    return () => { active = false; };
+  }, [screenMode]);
+  const availableRefundAccounts = refundAccounts.filter(account => refundMethod === 'EFECTIVO' ? account.type === 'CAJA' : account.type === 'BANCO');
 
   const returnTotals = useMemo(
     () =>
@@ -403,7 +420,18 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
     })),
   });
 
-  const handleCancelReturn = (item: ReturnListItem) => {
+  const handleCancelReturn = async (item: ReturnListItem) => {
+    try {
+      // Una devolución del protocolo de turnos solo se descarta desde Cuadre diario.
+      // Marcar su cola como sincronizada aquí dejaría la siguiente secuencia bloqueada.
+      if ((await getCashContext()).enabled) {
+        Alert.alert('Devolución', 'Anula el pendiente con motivo desde Cuadre diario. Si ya se confirmó, corrígelo desde el historial del turno.');
+        return;
+      }
+    } catch (error) {
+      Alert.alert('Caja', error instanceof Error ? error.message : 'No se pudo comprobar el control de turnos.');
+      return;
+    }
     if (item.cancelledAt) {
       Alert.alert('Devolucion', 'Esta devolucion ya esta cancelada.');
       return;
@@ -424,6 +452,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         style: 'destructive',
         onPress: async () => {
           try {
+            if ((await getCashContext()).enabled) throw new Error('La caja cambió. Anula el pendiente desde Cuadre diario.');
             const cancelledAt = Date.now();
             const returnRow = await db.queryFirst<any>(
               `SELECT local_id, total_cents, notes, cancelled_at, data
@@ -891,6 +920,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         invoiceCode: String(saleRow.invoice_code || parsedSale?.invoiceCode || '-'),
         soldAt,
         type: saleType,
+        paymentMethod: String(parsedSale?.paymentMethod || 'EFECTIVO').toUpperCase(),
+        treasuryAccountId: parsedSale?.treasuryAccountId ? String(parsedSale.treasuryAccountId) : null,
         totalCents: Number(parsedSale?.totalCents || saleRow.total_cents || 0),
         salePricesIncludeItbis,
         returnPolicy,
@@ -903,6 +934,10 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       };
 
       setSelectedSale(detail);
+      const defaultMethod = ['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'OTRO'].includes(detail.paymentMethod) ? detail.paymentMethod : 'EFECTIVO';
+      setRefundMethod(defaultMethod);
+      const matchingAccount = refundAccounts.find(account => account.localId === detail.treasuryAccountId || account.serverId === detail.treasuryAccountId);
+      setRefundAccountId(matchingAccount?.type === (defaultMethod === 'EFECTIVO' ? 'CAJA' : 'BANCO') ? matchingAccount.localId : '');
       setReturnItems([]);
       setNotes('');
       setQuery('');
@@ -995,6 +1030,13 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
 
     try {
       setSaving(true);
+      const isCreditReturn = selectedSale.type.toUpperCase() === 'CREDITO';
+      const refundAccount = isCreditReturn ? null : refundAccounts.find(account => account.localId === refundAccountId);
+      if (!isCreditReturn && (!refundAccount || !refundAccount.serverId || refundAccount.type !== (refundMethod === 'EFECTIVO' ? 'CAJA' : 'BANCO'))) {
+        throw new Error('Selecciona una cuenta de devolución sincronizada y compatible con el método.');
+      }
+      const refundTreasuryAccountId = refundAccount?.serverId || null;
+      const cashQueueContext = await cashContextForQueue('return', 'create', { refundMethod: isCreditReturn ? null : refundMethod, refundTreasuryAccountId });
       const selectedSaleSnapshot = selectedSale;
       const returnItemsSnapshot = [...returnItems];
       const notesSnapshot = notes.trim();
@@ -1032,6 +1074,8 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         saleLocalId: selectedSaleSnapshot.id,
         saleServerId,
         arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+        refundMethod: isCreditReturn ? null : refundMethod,
+        refundTreasuryAccountId,
         salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
         subtotalCents: computedTotals.subtotalCents,
         itbisCents: computedTotals.itbisCents,
@@ -1067,42 +1111,23 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         })),
       };
 
-      await db.insert('returns', {
-        local_id: returnLocalId,
-        server_id: null,
-        return_code: returnCode,
-        sale_local_id: selectedSaleSnapshot.id,
-        sale_server_id: saleServerId,
-        total_cents: totalReturnCents,
-        notes: notesSnapshot || null,
-        returned_at: returnedAt,
-        cancelled_at: null,
-        synced: 0,
-        data: JSON.stringify(returnData),
-      });
-
+      await db.transaction(async tx => {
+      await tx.runAsync('INSERT INTO returns (local_id, server_id, return_code, sale_local_id, sale_server_id, total_cents, notes, returned_at, cancelled_at, synced, data) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, NULL, 0, ?)',
+        [returnLocalId, returnCode, selectedSaleSnapshot.id, saleServerId, totalReturnCents, notesSnapshot || null, returnedAt, JSON.stringify(returnData)]);
       for (const item of returnItemsSnapshot) {
         const lineTotalCents = calcDocumentTotalsByTaxMode({
           items: [{ quantity: item.qty, priceCents: item.unitPriceCents, itbisRateBp: item.itbisRateBp ?? 1800 }],
           shippingCents: 0,
           salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
         }).totalCents;
-        const productRow = await db.queryFirst<{ local_id?: string; server_id?: string }>(
+        const productRow = await tx.queryFirst<{ local_id?: string; server_id?: string }>(
           'SELECT local_id, server_id FROM products WHERE local_id = ? OR server_id = ? LIMIT 1',
           [item.productId, item.productId]
         );
-        await db.insert('return_items', {
-          local_id: generateLocalId(),
-          return_local_id: returnLocalId,
-          sale_item_id: item.saleItemId,
-          product_local_id: productRow?.local_id ? String(productRow.local_id) : null,
-          product_server_id: productRow?.server_id ? String(productRow.server_id) : null,
-          product_name: item.productName,
-          qty: item.qty,
-          unit_price_cents: item.unitPriceCents,
-          line_total_cents: lineTotalCents,
-          synced: 0,
-          data: JSON.stringify({
+        await tx.runAsync('INSERT INTO return_items (local_id, return_local_id, sale_item_id, product_local_id, product_server_id, product_name, qty, unit_price_cents, line_total_cents, synced, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)', [
+          generateLocalId(), returnLocalId, item.saleItemId, productRow?.local_id ? String(productRow.local_id) : null,
+          productRow?.server_id ? String(productRow.server_id) : null, item.productName, item.qty, item.unitPriceCents, lineTotalCents,
+          JSON.stringify({
             saleItemId: item.saleItemId,
             productId: item.productId,
             qty: item.qty,
@@ -1111,7 +1136,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
             itbisRateBp: item.itbisRateBp ?? 1800,
             product: { name: item.productName, reference: item.productReference || null, unit: item.unit || 'UNIDAD' },
           }),
-        });
+        ]);
       }
 
       if (
@@ -1119,7 +1144,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
         selectedSaleSnapshot.returnPolicy.arLocalId
       ) {
         const arLocalId = String(selectedSaleSnapshot.returnPolicy.arLocalId);
-        const arRow = await db.queryFirst<any>(
+        const arRow = await tx.queryFirst<any>(
           'SELECT total_cents, balance_cents, paid_cents, status, data FROM accounts_receivable WHERE local_id = ? LIMIT 1',
           [arLocalId]
         );
@@ -1131,34 +1156,35 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           const newStatus = newBalanceCents <= 0 ? 'PAGADO' : 'PARCIAL';
           const arParsed = parseJsonSafe(arRow.data);
 
-          await db.update('accounts_receivable', arLocalId, {
-            balance_cents: newBalanceCents,
-            paid_cents: newPaidCents,
-            status: newStatus,
-            synced: 0,
-            data: JSON.stringify({
+          await tx.runAsync('UPDATE accounts_receivable SET balance_cents = ?, paid_cents = ?, status = ?, synced = 0, data = ? WHERE local_id = ?', [
+            newBalanceCents, newPaidCents, newStatus,
+            JSON.stringify({
               ...(arParsed || {}),
               balanceCents: newBalanceCents,
               paidCents: newPaidCents,
               status: newStatus,
-            }),
-          });
+            }), arLocalId,
+          ]);
         }
       }
 
-      await syncService.queueOperation(
+      await syncService.queueOperationTx(tx,
         'return',
         'create',
         {
           saleId: selectedSaleSnapshot.id,
           saleServerId,
           arLocalId: selectedSaleSnapshot.returnPolicy.arLocalId || null,
+          refundMethod: isCreditReturn ? null : refundMethod,
+          refundTreasuryAccountId,
           salePricesIncludeItbis: selectedSaleSnapshot.salePricesIncludeItbis ?? true,
           items: queueItems,
           notes: notesSnapshot || null,
         },
-        returnLocalId
+        returnLocalId, cashQueueContext
       );
+      });
+      void syncService.kickQueue().catch(error => console.warn('La devolución quedó en cola; falló la sincronización inmediata:', error));
 
       const receipt: ReturnReceiptPayload = {
         returnId: returnLocalId,
@@ -1190,7 +1216,7 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
       navigation.navigate('ReturnReceipt', { receipt, autoPrint: true });
     } catch (error: any) {
       console.error('Error creando devolución:', error?.message || error);
-      Alert.alert('Error', 'No se pudo crear la devolución.');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo crear la devolución.');
     } finally {
       setSaving(false);
     }
@@ -1401,6 +1427,27 @@ export function CreateReturnScreen({ navigation }: CreateReturnScreenProps) {
           <Text style={styles.policyErrorText}>
             {selectedSale?.returnPolicy.blockedReason || 'Esta venta no permite devoluciones.'}
           </Text>
+        ) : null}
+        {selectedSale?.type !== 'CREDITO' ? (
+          <View style={styles.block}>
+            <Text style={styles.sectionTitle}>Reembolso</Text>
+            <Text>Selecciona cómo y desde qué cuenta se devolverá el dinero.</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {(['EFECTIVO', 'TRANSFERENCIA', 'TARJETA', 'OTRO'] as const).map(method => (
+                <Button key={method} mode={refundMethod === method ? 'contained' : 'outlined'}
+                  onPress={() => { setRefundMethod(method); setRefundAccountId(''); }} style={{ margin: 3 }}>
+                  {method === 'EFECTIVO' ? 'Efectivo' : method === 'TRANSFERENCIA' ? 'Transferencia' : method === 'TARJETA' ? 'Tarjeta' : 'Otro'}
+                </Button>
+              ))}
+            </View>
+            {availableRefundAccounts.map(account => (
+              <Button key={account.localId} mode={refundAccountId === account.localId ? 'contained-tonal' : 'outlined'}
+                onPress={() => setRefundAccountId(account.localId)} style={{ marginVertical: 3 }}>
+                {account.name}{!account.serverId ? ' (pendiente de sincronizar)' : ''}
+              </Button>
+            ))}
+            {availableRefundAccounts.length === 0 ? <Text style={styles.policyErrorText}>No hay una cuenta disponible para este método.</Text> : null}
+          </View>
         ) : null}
         <Button mode="text" onPress={() => setSelectedSale(null)}>
           Cambiar venta
