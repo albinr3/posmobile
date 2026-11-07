@@ -23,6 +23,21 @@ interface SelectUserScreenProps {
   navigation: any;
 }
 
+async function getTokenWithTimeout(getToken: () => Promise<string | null>): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // Axios solo limita la petición HTTP; Clerk también puede quedarse esperando antes de enviarla.
+    return await Promise.race([
+      getToken(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('La sesión tardó demasiado en responder. Comprueba tu conexión y reintenta.')), 15000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
   const [users, setUsers] = useState<SubUser[]>([]);
   const [account, setAccount] = useState<{ id: string; name: string } | null>(null);
@@ -31,6 +46,10 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
   const { getToken, signOut } = useAuth();
   const { logout } = useAuthStore();
   const activeRequest = useRef<AbortController | null>(null);
+  const getTokenRef = useRef(getToken);
+  const navigationRef = useRef(navigation);
+  getTokenRef.current = getToken;
+  navigationRef.current = navigation;
 
   const loadSubUsers = useCallback(async () => {
     // Tomar el bloqueo antes de getToken y descartar respuestas al abandonar la pantalla.
@@ -40,7 +59,7 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
     try {
       setLoading(true);
       setError(null);
-      const token = await getToken();
+      const token = await getTokenWithTimeout(() => getTokenRef.current());
       if (controller.signal.aborted) return;
       if (!token) {
         setError('No hay token de autenticación');
@@ -61,21 +80,22 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
       setAccount(response.data.account);
       setUsers(response.data.users || []);
       if (response.data.needsInitialSetup) {
-        navigation.replace('SetupBusiness');
+        navigationRef.current.replace('SetupBusiness');
         return;
       }
       if (response.data.message && response.data.needsSetup) setError(response.data.message);
     } catch (err: any) {
       if (controller.signal.aborted) return;
       console.error('Error cargando subusuarios:', err);
-      setError(err.response?.data?.error || 'Error al cargar usuarios');
+      setError(err.response?.data?.error || (err instanceof Error && err.message.includes('La sesión tardó') ? err.message : 'No se pudieron cargar los usuarios. Comprueba tu conexión y reintenta.'));
     } finally {
       if (activeRequest.current === controller) {
         activeRequest.current = null;
         if (!controller.signal.aborted) setLoading(false);
       }
     }
-  }, [getToken, navigation]);
+  // Mantener estable el efecto de foco evita cancelar y reiniciar cargas en cada render.
+  }, []);
 
   useFocusEffect(useCallback(() => {
     void loadSubUsers();
