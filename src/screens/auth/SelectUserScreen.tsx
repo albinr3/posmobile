@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import { View, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { Text, Avatar, Button } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -29,39 +30,57 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
   const [error, setError] = useState<string | null>(null);
   const { getToken, signOut } = useAuth();
   const { logout } = useAuthStore();
+  const activeRequest = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    loadSubUsers();
-  }, []);
-
-  const loadSubUsers = async () => {
+  const loadSubUsers = useCallback(async () => {
+    // Tomar el bloqueo antes de getToken y descartar respuestas al abandonar la pantalla.
+    if (activeRequest.current) return;
+    const controller = new AbortController();
+    activeRequest.current = controller;
     try {
       setLoading(true);
       setError(null);
       const token = await getToken();
+      if (controller.signal.aborted) return;
       if (!token) {
         setError('No hay token de autenticación');
         return;
       }
 
       const response = await axios.get(`${API_URL}/api/auth/subusers`, {
+        signal: controller.signal,
+        timeout: 20000,
         headers: {
           Authorization: `Bearer ${token}`,
           'X-Clerk-Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
+      if (controller.signal.aborted) return;
 
       setAccount(response.data.account);
       setUsers(response.data.users || []);
+      if (response.data.needsInitialSetup) {
+        navigation.replace('SetupBusiness');
+        return;
+      }
       if (response.data.message && response.data.needsSetup) setError(response.data.message);
     } catch (err: any) {
+      if (controller.signal.aborted) return;
       console.error('Error cargando subusuarios:', err);
       setError(err.response?.data?.error || 'Error al cargar usuarios');
     } finally {
-      setLoading(false);
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+        if (!controller.signal.aborted) setLoading(false);
+      }
     }
-  };
+  }, [getToken, navigation]);
+
+  useFocusEffect(useCallback(() => {
+    void loadSubUsers();
+    return () => { activeRequest.current?.abort(); activeRequest.current = null; };
+  }, [loadSubUsers]));
 
   const handleSelectUser = (selectedUser: SubUser) => {
     navigation.navigate('SubUserLogin', {
@@ -113,6 +132,7 @@ export function SelectUserScreen({ navigation }: SelectUserScreenProps) {
           <Button mode="contained" buttonColor={ui.colors.primary} onPress={loadSubUsers}>
             Reintentar
           </Button>
+          <Button onPress={handleClerkLogout}>Cerrar sesión de correo</Button>
         </View>
       </SafeAreaView>
     );

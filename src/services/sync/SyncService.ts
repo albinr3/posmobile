@@ -116,8 +116,11 @@ class SyncService {
     }
   }
 
-  async fullSync(authToken: string, options?: { ignoreCooldown?: boolean }) {
-    if (this.isSyncing) return;
+  async fullSync(authToken: string, options?: { ignoreCooldown?: boolean; throwOnError?: boolean }) {
+    if (this.isSyncing) {
+      if (options?.throwOnError) throw new Error('Ya hay una sincronización en curso.');
+      return;
+    }
     const now = Date.now();
     if (!options?.ignoreCooldown && now - this.lastFullSyncAttemptAt < 15_000) {
       if (SYNC_DEBUG) console.log('[SyncService] fullSync() omitido por cooldown');
@@ -132,12 +135,13 @@ class SyncService {
       const refreshed = await this.ensureSubUserSessionFresh();
       if (!refreshed.ready) {
         useSyncStore.getState().setSyncBlockedReason(refreshed.reason);
+        if (options?.throwOnError) throw new Error('No se pudo preparar la sesión para sincronizar.');
         return;
       }
       useSyncStore.getState().setSyncBlockedReason(null);
 
       // 1. Descargar datos del servidor
-      await this.downloadFromServer(authToken);
+      await this.downloadFromServer(authToken, options?.throwOnError);
       
       const pendingBeforeUpload = await this.getPendingQueueCount();
       if (pendingBeforeUpload > 0) {
@@ -145,7 +149,7 @@ class SyncService {
         await this.uploadPendingChanges(authToken);
 
         // 3. Volver a descargar para reflejar en local lo aplicado en servidor
-        await this.downloadFromServer(authToken);
+        await this.downloadFromServer(authToken, options?.throwOnError);
       } else if (SYNC_DEBUG) {
         console.log('[SyncService] fullSync() sin pendientes, se omite segunda descarga');
       }
@@ -155,6 +159,7 @@ class SyncService {
       useSyncStore.getState().setLastSyncTime(Date.now());
     } catch (error) {
       console.error('Error en sincronización completa:', error);
+      if (options?.throwOnError) throw error;
     } finally {
       if (SYNC_DEBUG) console.log('[SyncService] fullSync() end');
       this.isSyncing = false;
@@ -1838,11 +1843,12 @@ class SyncService {
     return { ready: true, reason: null, clerkToken };
   }
 
-  private async downloadFromServer(authToken: string) {
+  private async downloadFromServer(authToken: string, throwOnPartial = false) {
     await downloadFromServer({
       authToken,
       getTokenFn: this.getTokenFn,
       getSubUserTokenFn: this.getSubUserTokenFn,
+      throwOnPartial,
     });
   }
 

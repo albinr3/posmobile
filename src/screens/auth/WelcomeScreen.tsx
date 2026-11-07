@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Alert, Linking, StyleSheet, TouchableOpacity, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Alert, StyleSheet, TouchableOpacity, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Button, Text } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -7,35 +7,30 @@ import { ui } from '../../theme/ui';
 
 export const WELCOME_SEEN_STORAGE_KEY = 'movopos_welcome_seen_v1';
 
-const SIGN_UP_URL = 'https://www.movopos.com/login?signup=true';
-
 interface WelcomeScreenProps {
   navigation: any;
 }
 
 export function WelcomeScreen({ navigation }: WelcomeScreenProps) {
   const [isContinuing, setIsContinuing] = useState(false);
+  const busy = useRef(false);
 
   const finishWelcome = async (openSignUp: boolean) => {
-    if (isContinuing) return;
+    if (busy.current) return;
 
+    busy.current = true;
     setIsContinuing(true);
     try {
       // Se guarda antes de navegar para que esta pantalla solo se muestre una vez por dispositivo.
       await AsyncStorage.setItem(WELCOME_SEEN_STORAGE_KEY, '1');
-      navigation.replace('Login');
-
-      if (openSignUp) {
-        const canOpen = await Linking.canOpenURL(SIGN_UP_URL);
-        if (!canOpen) throw new Error('No se puede abrir el enlace de registro');
-        await Linking.openURL(SIGN_UP_URL);
-      }
+      navigation.replace(openSignUp ? 'SignUp' : 'Login');
     } catch (error) {
       console.warn('No se pudo completar la bienvenida:', error);
       if (openSignUp) {
-        Alert.alert('No se pudo abrir el registro', 'Intenta nuevamente desde www.movopos.com.');
+        Alert.alert('No se pudo abrir el registro', 'Intenta nuevamente.');
       }
     } finally {
+      busy.current = false;
       setIsContinuing(false);
     }
   };

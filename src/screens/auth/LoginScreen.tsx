@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -21,15 +21,23 @@ interface LoginScreenProps {
 export function LoginScreen({ navigation }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const busy = useRef(false);
   const { isLoaded, signIn } = useSignIn();
-  const { isSignedIn, signOut } = useAuth();
+  const { isSignedIn } = useAuth();
   const { startOAuthFlow } = useOAuth({ strategy: 'oauth_google' });
 
   const handleEmailCode = async () => {
+    if (isSignedIn) {
+      navigation.reset({ index: 0, routes: [{ name: 'BiometricSetup' }] });
+      return;
+    }
     if (!email || !email.includes('@')) return;
-    if (!isLoaded) return;
+    if (!isLoaded || busy.current) return;
 
+    busy.current = true;
     setLoading(true);
+    setErrorMessage('');
     try {
       await signIn.create({ identifier: email.trim() });
       const factors = (signIn.supportedFirstFactors as any[]) || [];
@@ -41,44 +49,51 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         strategy: 'email_code',
         emailAddressId,
       } as any);
-      navigation.navigate('EmailVerification', { email: email.trim(), emailAddressId });
-    } catch (error) {
+      navigation.navigate('EmailVerification', { email: email.trim(), emailAddressId, mode: 'signin', codeSent: true, initialError: '' });
+    } catch (error: any) {
       console.error('Error enviando código:', error);
+      setErrorMessage(error?.errors?.[0]?.longMessage || error?.message || 'No se pudo enviar el código.');
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   };
 
   const handleGoogle = async () => {
+    if (busy.current) return;
+    busy.current = true;
     setLoading(true);
+    setErrorMessage('');
     try {
       if (isSignedIn) {
-        try {
-          await signOut();
-        } catch (signOutError) {
-          console.log('Error cerrando sesión previa:', signOutError);
-        }
+        // Cancelar Google nunca debe cerrar una sesión que ya estaba activa.
+        navigation.reset({ index: 0, routes: [{ name: 'BiometricSetup' }] });
+        return;
       }
 
       const redirectUrl = makeRedirectUri({
         scheme: 'movopos',
         path: 'oauth-native-callback',
       });
-      const { createdSessionId, setActive } = await startOAuthFlow({ redirectUrl });
+      const { createdSessionId, setActive, authSessionResult } = await startOAuthFlow({ redirectUrl, unsafeMetadata: { registration_device: 'mobile' } });
 
-      if (createdSessionId) {
-        await setActive?.({ session: createdSessionId });
-        navigation.navigate('BiometricSetup');
+      if (createdSessionId && setActive) {
+        await setActive({ session: createdSessionId });
+        navigation.reset({ index: 0, routes: [{ name: 'BiometricSetup' }] });
+      } else if (authSessionResult?.type !== 'cancel' && authSessionResult?.type !== 'dismiss') {
+        setErrorMessage('No se completó el acceso con Google. Intenta nuevamente.');
       }
     } catch (error: any) {
       if (error?.errors?.[0]?.message?.includes('already signed in') || error?.message?.includes('already signed in')) {
         if (isSignedIn) {
-          navigation.navigate('BiometricSetup');
+          navigation.reset({ index: 0, routes: [{ name: 'BiometricSetup' }] });
           return;
         }
       }
       console.error('Error Google OAuth:', error);
+      setErrorMessage(error?.errors?.[0]?.longMessage || error?.message || 'No se pudo continuar con Google.');
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   };
@@ -106,6 +121,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
             placeholderTextColor={ui.colors.textMuted}
             style={styles.input}
           />
+          {!!errorMessage && <Text style={{ color: ui.colors.danger, marginTop: 8 }}>{errorMessage}</Text>}
 
           <Button
             mode="contained"
@@ -124,6 +140,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
             <Image source={require('../../../assets/search.png')} style={styles.googleIcon} resizeMode="contain" />
             <Text style={styles.googleButtonText}>Continuar con Google</Text>
           </TouchableOpacity>
+          <Button onPress={() => navigation.navigate('SignUp')} disabled={loading}>Crear una cuenta</Button>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>

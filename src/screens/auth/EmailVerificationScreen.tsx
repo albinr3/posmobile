@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, StyleSheet, TextInput as RNTextInput } from 'react-native';
 import { Button, Text, Surface } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
-import { useSignIn } from '@clerk/clerk-expo';
+import { useSignIn, useSignUp } from '@clerk/clerk-expo';
 
 interface EmailVerificationScreenProps {
   navigation: any;
@@ -10,6 +10,9 @@ interface EmailVerificationScreenProps {
     params?: {
       email?: string;
       emailAddressId?: string;
+      mode?: 'signup' | 'signin';
+      codeSent?: boolean;
+      initialError?: string;
     };
   };
 }
@@ -17,11 +20,21 @@ interface EmailVerificationScreenProps {
 export function EmailVerificationScreen({ navigation, route }: EmailVerificationScreenProps) {
   const email = route?.params?.email || '';
   const emailAddressId = route?.params?.emailAddressId;
+  const isSignUp = route?.params?.mode === 'signup';
   const [code, setCode] = useState(['', '', '', '', '', '']);
   const [loading, setLoading] = useState(false);
-  const [resendTimer, setResendTimer] = useState(60);
+  const [resendTimer, setResendTimer] = useState(route?.params?.codeSent === false ? 0 : 60);
   const inputRefs = useRef<(RNTextInput | null)[]>([]);
   const { isLoaded, signIn, setActive } = useSignIn();
+  const signUpState = useSignUp();
+  const busy = useRef(false);
+  const [errorMessage, setErrorMessage] = useState(route?.params?.initialError || '');
+
+  useEffect(() => {
+    setCode(['', '', '', '', '', '']);
+    setErrorMessage(route?.params?.initialError || '');
+    setResendTimer(route?.params?.codeSent === false ? 0 : 60);
+  }, [email, emailAddressId, isSignUp, route?.params?.codeSent, route?.params?.initialError]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -55,46 +68,54 @@ export function EmailVerificationScreen({ navigation, route }: EmailVerification
   };
 
   const verifyCode = async (otp: string) => {
+    if (busy.current || otp.length !== 6) return;
+    busy.current = true;
     setLoading(true);
+    setErrorMessage('');
     try {
-      if (!isLoaded || !signIn) {
-        return;
-      }
+      if (isSignUp ? !signUpState.isLoaded || !signUpState.signUp : !isLoaded || !signIn) throw new Error('La autenticación aún no está lista.');
+      const resource = isSignUp ? signUpState.signUp! : signIn!;
+      // La verificación puede haber terminado aunque setActive falle por falta de red.
+      // Reintentar la activación sin volver a consumir un código ya verificado.
+      const result = resource.status === 'complete' ? resource : isSignUp
+        ? await signUpState.signUp!.attemptEmailAddressVerification({ code: otp })
+        : await signIn!.attemptFirstFactor({ strategy: 'email_code', code: otp });
 
-      const result = await signIn.attemptFirstFactor({
-        strategy: 'email_code',
-        code: otp,
-      });
-
-      if (result.status === 'complete') {
-        await setActive({ session: result.createdSessionId });
-      }
-
-      navigation.navigate('BiometricSetup');
-    } catch (error) {
+      if (result.status !== 'complete' || !result.createdSessionId) throw new Error('Faltan pasos para completar la autenticación.');
+      await (isSignUp ? signUpState.setActive : setActive)!({ session: result.createdSessionId });
+      navigation.reset({ index: 0, routes: [{ name: 'BiometricSetup' }] });
+    } catch (error: any) {
       console.error('Error verificando código:', error);
+      setErrorMessage(error?.errors?.[0]?.longMessage || error?.message || 'No se pudo verificar el código.');
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   };
 
   const handleResend = async () => {
-    setResendTimer(60);
+    if (busy.current || resendTimer > 0) return;
+    busy.current = true;
+    setLoading(true);
+    setErrorMessage('');
     try {
-      if (!isLoaded || !signIn) {
-        return;
+      if (isSignUp) {
+        if (!signUpState.isLoaded || !signUpState.signUp) throw new Error('La autenticación aún no está lista.');
+        await signUpState.signUp.prepareEmailAddressVerification({ strategy: 'email_code' });
+      } else {
+        if (!isLoaded || !signIn) throw new Error('La autenticación aún no está lista.');
+        if (!emailAddressId) throw new Error('No se encontró el correo de verificación. Vuelve al inicio de sesión.');
+        await signIn.prepareFirstFactor({ strategy: 'email_code', emailAddressId });
       }
-
-      if (!emailAddressId) {
-        throw new Error('Missing emailAddressId');
-      }
-
-      await signIn.prepareFirstFactor({
-        strategy: 'email_code',
-        emailAddressId,
-      } as any);
-    } catch (error) {
+      setCode(['', '', '', '', '', '']);
+      inputRefs.current[0]?.focus();
+      setResendTimer(60);
+    } catch (error: any) {
       console.error('Error reenviando código:', error);
+      setErrorMessage(error?.errors?.[0]?.longMessage || error?.message || 'No se pudo reenviar el código.');
+    } finally {
+      busy.current = false;
+      setLoading(false);
     }
   };
 
@@ -102,7 +123,7 @@ export function EmailVerificationScreen({ navigation, route }: EmailVerification
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
         <Surface style={styles.card}>
-          <Text style={styles.title}>Verificación</Text>
+          <Text style={styles.title}>{isSignUp ? 'Verifica tu registro' : 'Verifica tu acceso'}</Text>
           <Text style={styles.description}>
             Ingresa el código enviado a{'\n'}
             <Text style={styles.email}>{email}</Text>
@@ -117,6 +138,7 @@ export function EmailVerificationScreen({ navigation, route }: EmailVerification
                 }}
                 style={styles.codeInput}
                 value={digit}
+                editable={!loading}
                 onChangeText={(value) => handleChange(value, index)}
                 onKeyPress={(e) => handleKeyPress(e, index)}
                 keyboardType="number-pad"
@@ -126,6 +148,7 @@ export function EmailVerificationScreen({ navigation, route }: EmailVerification
             ))}
           </View>
 
+          {!!errorMessage && <Text style={{ color: '#b00020', textAlign: 'center' }}>{errorMessage}</Text>}
           <Button
             mode="contained"
             onPress={() => verifyCode(code.join(''))}
@@ -140,7 +163,7 @@ export function EmailVerificationScreen({ navigation, route }: EmailVerification
             {resendTimer > 0 ? (
               <Text style={styles.resendText}>Reenviar código en {resendTimer}s</Text>
             ) : (
-              <Button mode="text" onPress={handleResend}>
+              <Button mode="text" onPress={handleResend} disabled={loading}>
                 Reenviar código
               </Button>
             )}

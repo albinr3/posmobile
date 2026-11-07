@@ -71,7 +71,10 @@ export function AppNavigator() {
     });
   }
 
-  if (isLoading || !isWelcomeLoaded) {
+  // El navegador de autenticación solo lee initialRouteName al montarse.
+  // Esperar a Clerk evita dejar una cuenta pendiente en Login tras reiniciar.
+  // Una sesión local restaurada sigue pudiendo abrirse sin conexión.
+  if (isLoading || !isWelcomeLoaded || (!isAuthenticated && !isLoaded)) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#1a73e8" />
@@ -89,7 +92,7 @@ export function AppNavigator() {
             {() => (
               <AuthNavigator
                 initialRouteName={
-                  shouldShowWelcome ? 'Welcome' : isLoaded && isSignedIn ? 'SelectUser' : 'Login'
+                  isSignedIn ? 'SelectUser' : shouldShowWelcome ? 'Welcome' : 'Login'
                 }
               />
             )}

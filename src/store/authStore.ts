@@ -85,7 +85,8 @@ interface AuthState {
   isLoading: boolean;
   biometricEnabled: boolean;
   setUser: (user: User | null) => void;
-  setSubUser: (subUser: SubUser | null, token: string | null, accountId: string | null) => Promise<void>;
+  setSubUser: (subUser: SubUser | null, token: string | null, accountId: string | null, activate?: boolean) => Promise<void>;
+  activateSubUser: () => void;
   updateCashPermissions: (userId: string, permissions: Pick<SubUser, 'canOperateCashShifts' | 'canViewAllCashShifts' | 'canManageCashShifts' | 'canRecordCashMovements'>) => Promise<void>;
   setBillingState: (billingState: BillingState | null) => void;
   setLoading: (loading: boolean) => void;
@@ -132,7 +133,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
   },
 
-  setSubUser: async (subUser: SubUser | null, token: string | null, accountId: string | null) => {
+  setSubUser: async (subUser: SubUser | null, token: string | null, accountId: string | null, activate = true) => {
     if (AUTH_DEBUG) {
       console.log('[AuthStore] setSubUser() input', {
         username: subUser?.username || null,
@@ -163,7 +164,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       accountId,
       billingState: subUser && token ? get().billingState : null,
       isBillingBlocked: subUser && token ? get().isBillingBlocked : false,
-      isAuthenticated: !!subUser && !!token,
+      isAuthenticated: activate && !!subUser && !!token,
       isLoading: false,
     });
     if (AUTH_DEBUG) {
@@ -173,6 +174,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         hasSubUser: !!subUser,
       });
     }
+  },
+
+  activateSubUser: () => {
+    const { subUser, subUserToken, accountId } = get();
+    if (subUser && subUserToken && accountId) set({ isAuthenticated: true });
   },
 
   updateCashPermissions: async (userId, permissions) => {

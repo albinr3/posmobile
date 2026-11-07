@@ -7,6 +7,8 @@ import { BiometricSetupScreen } from '../screens/auth/BiometricSetupScreen';
 import { SelectUserScreen } from '../screens/auth/SelectUserScreen';
 import { SubUserLoginScreen } from '../screens/auth/SubUserLoginScreen';
 import { WelcomeScreen } from '../screens/auth/WelcomeScreen';
+import { SignUpScreen } from '../screens/auth/SignUpScreen';
+import { SetupBusinessScreen } from '../screens/auth/SetupBusinessScreen';
 
 const Stack = createStackNavigator();
 
@@ -24,6 +26,8 @@ export function AuthNavigator({ initialRouteName = 'Login' }: AuthNavigatorProps
     >
       <Stack.Screen name="Welcome" component={WelcomeScreen} />
       <Stack.Screen name="Login" component={LoginScreen} />
+      <Stack.Screen name="SignUp" component={SignUpScreen} />
+      <Stack.Screen name="SetupBusiness" component={SetupBusinessScreen} />
       <Stack.Screen name="OTPVerification" component={OTPVerificationScreen} />
       <Stack.Screen name="EmailVerification" component={EmailVerificationScreen} />
       <Stack.Screen name="BiometricSetup" component={BiometricSetupScreen} />

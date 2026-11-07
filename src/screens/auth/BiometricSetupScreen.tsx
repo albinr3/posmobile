@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
 import { Button, Text, Surface } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
@@ -20,6 +20,7 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
   const [loading, setLoading] = useState(false);
   const { setBiometricEnabled, setUser } = useAuthStore();
   const { user } = useUser();
+  const busy = useRef(false);
 
   useEffect(() => {
     checkBiometricSupport();
@@ -38,6 +39,8 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
   };
 
   const handleEnableBiometric = async () => {
+    if (busy.current) return;
+    busy.current = true;
     setLoading(true);
     try {
       const availability = await isBiometricAvailable();
@@ -70,16 +73,21 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
       console.error('Error configurando biométrico:', error);
       Alert.alert('Biometria', 'No se pudo activar el acceso biometrico.');
     } finally {
+      busy.current = false;
       setLoading(false);
     }
   };
 
   const navigateToHome = () => {
     // Navegar a la pantalla de selección de subusuario
-    navigation.navigate('SelectUser');
+    navigation.replace('SelectUser');
   };
 
   const handleSkip = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    setLoading(true);
+    try {
     await setBiometricEnabledPreference(false);
     setBiometricEnabled(false);
     if (user) {
@@ -93,6 +101,13 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
       });
     }
     navigateToHome();
+    } catch (error) {
+      console.error('Error guardando preferencia biométrica:', error);
+      Alert.alert('Biometría', 'No se pudo guardar la preferencia. Intenta nuevamente.');
+    } finally {
+      busy.current = false;
+      setLoading(false);
+    }
   };
 
   return (
@@ -115,6 +130,7 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
                 mode="contained"
                 onPress={handleEnableBiometric}
                 loading={loading}
+                disabled={loading}
                 style={styles.button}
                 contentStyle={styles.buttonContent}
                 icon="fingerprint"
@@ -125,6 +141,7 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
               <Button
                 mode="text"
                 onPress={handleSkip}
+                disabled={loading}
                 style={styles.skipButton}
               >
                 Omitir por ahora
@@ -142,6 +159,7 @@ export function BiometricSetupScreen({ navigation }: BiometricSetupScreenProps) 
               <Button
                 mode="contained"
                 onPress={handleSkip}
+                disabled={loading}
                 style={styles.button}
                 contentStyle={styles.buttonContent}
               >

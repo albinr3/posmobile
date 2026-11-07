@@ -322,6 +322,7 @@ export async function downloadFromServer(options: {
   authToken: string;
   getTokenFn: (() => Promise<string | null>) | null;
   getSubUserTokenFn: (() => Promise<string | null>) | null;
+  throwOnPartial?: boolean;
 }): Promise<void> {
   const { authToken, getTokenFn, getSubUserTokenFn } = options;
   const failedEntities: Array<{ entity: string; error: string }> = [];
@@ -1905,6 +1906,9 @@ export async function downloadFromServer(options: {
     await setSyncMetadataValue('last_download_successful_entities', JSON.stringify(successfulEntities));
     if (failedEntities.length === 0) {
       await setSyncMetadataValue('last_successful_download_at', String(Date.now()));
+    }
+    if (failedEntities.length && options.throwOnPartial) {
+      throw new Error('No se pudieron descargar todos los datos.');
     }
   } catch (error: any) {
     console.error('❌ [SyncService] Error descargando datos del servidor:', error);
