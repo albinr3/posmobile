@@ -75,7 +75,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
         scheme: 'movopos',
         path: 'oauth-native-callback',
       });
-      const { createdSessionId, setActive, authSessionResult } = await startOAuthFlow({ redirectUrl, unsafeMetadata: { registration_device: 'mobile' } });
+      const { createdSessionId, setActive, authSessionResult } = await startOAuthFlow({ redirectUrl, unsafeMetadata: { registration_device: 'mobile', registration_source: 'app' } });
 
       if (createdSessionId && setActive) {
         await setActive({ session: createdSessionId });

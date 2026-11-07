@@ -74,7 +74,7 @@ export function SignUpScreen({ navigation }: any) {
         : await signUp.create({
             emailAddress: cleanEmail,
             password,
-            unsafeMetadata: { registration_device: 'mobile' },
+            unsafeMetadata: { registration_device: 'mobile', registration_source: 'app' },
           });
 
       setPassword('');
@@ -119,7 +119,7 @@ export function SignUpScreen({ navigation }: any) {
       }
       const result = await startOAuthFlow({
         redirectUrl: makeRedirectUri({ scheme: 'movopos', path: 'oauth-native-callback' }),
-        unsafeMetadata: { registration_device: 'mobile' },
+        unsafeMetadata: { registration_device: 'mobile', registration_source: 'app' },
       });
       if (result.createdSessionId && result.setActive) {
         await result.setActive({ session: result.createdSessionId });
