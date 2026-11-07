@@ -1,7 +1,7 @@
 import type { StockConsumption } from '../../utils/stockCore';
 import { saleStockService, useSaleStockStore } from '../../services/stock/saleStockService';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, FlatList, Alert, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Text, Surface, Button, IconButton, Divider, Menu, Portal, Modal, TextInput, Icon } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
@@ -118,6 +118,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     clearEditContext,
   } = useCartStore();
   const [loading, setLoading] = useState(false);
+  const [summaryHeight, setSummaryHeight] = useState(0);
   const completingSaleRef = useRef(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
@@ -1399,12 +1400,19 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   return (
     <SafeAreaView style={styles.container} edges={[]}>
       <CashShiftGate />
-      {cartStockIssue && items.length > 0 ? <Text accessibilityRole="alert" style={{ color: '#DC2626', padding: 12 }}>{cartStockIssue.message}</Text> : null}
+      {items.length > 0 && (loading || stockSnapshot.saving) ? (
+        <View style={styles.savingIndicator} accessibilityRole="progressbar" accessibilityLabel="Procesando venta">
+          <ActivityIndicator color={ui.colors.primary} />
+          <Text style={styles.savingText}>Procesando venta...</Text>
+        </View>
+      ) : cartStockIssue && items.length > 0 ? (
+        <Text accessibilityRole="alert" style={{ color: '#DC2626', padding: 12 }}>{cartStockIssue.message}</Text>
+      ) : null}
       <FlatList
         data={items}
         renderItem={renderItem}
         keyExtractor={(item) => item.lineId}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: items.length > 0 ? summaryHeight + 12 : 12 }]}
         ListFooterComponent={items.length > 0 ? (
           <View style={{ marginTop: 12, marginBottom: 12 }}>
             <TextInput
@@ -1431,7 +1439,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       />
 
       {items.length > 0 && (
-        <BottomDock>
+        <BottomDock onLayout={(event) => setSummaryHeight(event.nativeEvent.layout.height)}>
           <Surface style={styles.summaryCard}>
             {editingSaleLocalId ? (
               <View style={styles.editingBanner}>
@@ -1969,7 +1977,16 @@ const styles = StyleSheet.create({
   },
   listContent: {
     padding: 12,
-    paddingBottom: 240,
+  },
+  savingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    padding: 12,
+  },
+  savingText: {
+    color: ui.colors.textMuted,
   },
   itemCard: {
     flexDirection: 'row',
