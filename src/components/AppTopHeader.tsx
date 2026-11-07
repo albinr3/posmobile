@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, View, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { AppState, View, StyleSheet, TouchableOpacity, Image, Alert } from 'react-native';
 import { Text, Icon, Menu } from 'react-native-paper';
 import { useNavigation, DrawerActions } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -112,9 +112,9 @@ async function writePersistedBillingStateCache(cacheKey: string, entry: BillingS
 export function AppTopHeader() {
   const navigation = useNavigation<any>();
   const insets = useSafeAreaInsets();
-  const { getToken } = useAuth();
+  const { getToken, signOut } = useAuth();
   const { user: clerkUser } = useUser();
-  const { user, subUser, subUserToken, accountId, setSubUser } = useAuthStore();
+  const { user, subUser, subUserToken, accountId, setSubUser, logout } = useAuthStore();
   const displayName = subUser?.name || user?.name || 'Usuario';
   const subUserName = subUser?.name || subUser?.username || 'Sin subusuario';
   const clerkEmail = clerkUser?.primaryEmailAddress?.emailAddress || user?.email || 'Sin correo en Clerk';
@@ -374,6 +374,51 @@ export function AppTopHeader() {
     return null;
   }, [billingState]);
 
+  const handleLogout = () => {
+    setProfileMenuVisible(false);
+    setTimeout(() => {
+      Alert.alert('Cerrar sesión', 'Esto cerrará el subusuario y la cuenta principal (correo). ¿Deseas continuar?', [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cerrar sesión',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut();
+              await logout();
+            } catch (error) {
+              console.error('Error cerrando sesión:', error);
+              try {
+                await logout();
+              } catch {}
+              Alert.alert('Sesión', 'No se pudo cerrar sesión. Intenta de nuevo.');
+            }
+          },
+        },
+      ]);
+    }, 100);
+  };
+
+  const handleSwitchUser = () => {
+    setProfileMenuVisible(false);
+    setTimeout(() => {
+      Alert.alert('Cambiar usuario', 'Se cerrará el subusuario actual y volverás a selección de usuario.', [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Cambiar',
+          onPress: async () => {
+            try {
+              await setSubUser(null, null, null);
+            } catch (error) {
+              console.error('Error cambiando subusuario:', error);
+              Alert.alert('Usuario', 'No se pudo cambiar de usuario.');
+            }
+          },
+        },
+      ]);
+    }, 100);
+  };
+
   return (
     <View style={{ paddingTop: insets.top }}>
       {billingBanner ? (
@@ -434,7 +479,7 @@ export function AppTopHeader() {
             <Text style={styles.profileValue}>{companyData.name}</Text>
             {companyData.phone ? (
               <>
-                <Text style={styles.profileLabel}>Telefono</Text>
+                <Text style={styles.profileLabel}>Teléfono</Text>
                 <Text style={styles.profileValue}>{companyData.phone}</Text>
               </>
             ) : null}
@@ -442,6 +487,26 @@ export function AppTopHeader() {
             <Text style={styles.profileValue}>{subUserName}</Text>
             <Text style={styles.profileLabel}>Correo Clerk</Text>
             <Text style={styles.profileValue}>{clerkEmail}</Text>
+
+            <View style={styles.menuDivider} />
+
+            <TouchableOpacity
+              style={styles.switchUserButton}
+              activeOpacity={0.7}
+              onPress={handleSwitchUser}
+            >
+              <Icon source="account-switch-outline" size={18} color={ui.colors.primary} />
+              <Text style={styles.switchUserText}>Cambiar usuario</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.logoutButton}
+              activeOpacity={0.7}
+              onPress={handleLogout}
+            >
+              <Icon source="logout" size={18} color="#DC2626" />
+              <Text style={styles.logoutText}>Cerrar sesión</Text>
+            </TouchableOpacity>
           </View>
         </Menu>
       </View>
@@ -502,14 +567,19 @@ const styles = StyleSheet.create({
   },
   avatarLetter: { color: ui.colors.primary, fontSize: 13, fontWeight: '800' },
   profileMenu: {
-    borderRadius: 10,
+    borderRadius: 12,
     backgroundColor: '#fff',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
   },
   profileMenuContent: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    minWidth: 220,
-    maxWidth: 280,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minWidth: 240,
+    maxWidth: 290,
   },
   profileLabel: {
     color: ui.colors.textMuted,
@@ -521,5 +591,44 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     marginBottom: 8,
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: ui.colors.border,
+    marginVertical: 8,
+  },
+  switchUserButton: {
+    marginTop: 2,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  switchUserText: {
+    color: ui.colors.primary,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  logoutButton: {
+    marginTop: 8,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  logoutText: {
+    color: '#DC2626',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });
