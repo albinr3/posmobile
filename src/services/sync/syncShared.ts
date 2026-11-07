@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+export { API_URL } from '../apiConfig';
 export const SYNC_DEBUG = false;
 
 export function shortToken(token: string | null | undefined): string {

@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
+import { API_URL } from '../../services/apiConfig';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
@@ -91,7 +92,6 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
         setCategories([]);
         return;
       }
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const headers = {
         Authorization: `Bearer ${clerkToken}`,
         'X-Clerk-Authorization': `Bearer ${clerkToken}`,

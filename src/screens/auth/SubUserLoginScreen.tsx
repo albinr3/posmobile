@@ -8,7 +8,7 @@ import { useAuthStore } from '../../store/authStore';
 import { syncService } from '../../services/sync/SyncService';
 import { ui } from '../../theme/ui';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+import { API_URL } from '../../services/apiConfig';
 const SUBUSER_LOGIN_DEBUG = false;
 
 function shortToken(token: string | null | undefined): string {

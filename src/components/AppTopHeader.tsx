@@ -7,6 +7,7 @@ import { useAuth, useUser } from '@clerk/clerk-expo';
 import NetInfo from '@react-native-community/netinfo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { API_URL } from '../services/apiConfig';
 import { useAuthStore } from '../store/authStore';
 import { ui } from '../theme/ui';
 import { setSalesSettingsFromCompanyPayload } from '../services/settings/salesSettings';
@@ -170,7 +171,6 @@ export function AppTopHeader() {
           const clerkToken = await getTokenRef.current();
           if (!clerkToken) return null;
 
-          const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
           const response = await axios.get(`${API_URL}/api/billing/state`, {
             headers: {
               Authorization: `Bearer ${clerkToken}`,
@@ -234,7 +234,6 @@ export function AppTopHeader() {
   useEffect(() => {
     let mounted = true;
     const cacheKey = accountId || subUserToken || 'default';
-    const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
 
     const applyCompanyPayload = async (payload: CompanySettingsResponse | null) => {
       await setSalesSettingsFromCompanyPayload(payload || null);

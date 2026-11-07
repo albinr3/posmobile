@@ -5,6 +5,7 @@ import { useAuth } from '@clerk/clerk-expo';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { API_URL } from '../../services/apiConfig';
 import * as ImagePicker from 'expo-image-picker';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { normalizeSalesSettings, setSalesSettings } from '../../services/settings/salesSettings';
@@ -221,7 +222,6 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         return;
       }
 
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const response = await axios.get(`${API_URL}/api/company-settings`, {
         headers: {
           Authorization: `Bearer ${clerkToken}`,
@@ -282,7 +282,6 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         return;
       }
 
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const parsedMargin = Number.parseFloat(defaultProfitMargin || '0');
       const marginBp = Math.round((Number.isFinite(parsedMargin) ? parsedMargin : 0) * 100);
       const payload = {
@@ -413,7 +412,6 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
         },
       };
 
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const headers = {
         Authorization: `Bearer ${clerkToken}`,
         'X-Clerk-Authorization': `Bearer ${clerkToken}`,
@@ -482,7 +480,6 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
     const clerkToken = await getToken();
     if (!clerkToken) throw new Error('No hay sesión principal activa.');
 
-    const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
     const uploadUrl = `${API_URL}/api/upload-product-image`;
 
     const form = new FormData();

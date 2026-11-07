@@ -7,6 +7,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
+import { API_URL } from '../../services/apiConfig';
 import { db } from '../../database/Database';
 import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
@@ -101,7 +102,6 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
     const clerkToken = await getToken();
     if (!clerkToken) return null;
 
-    const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
     try {
       const response = await axios.get(`${API_URL}/api/products`, {
         params: { query: normalizedSku, take: 25 },
@@ -219,7 +219,6 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         'X-SubUser-Token': subUserToken,
         ...(accountId ? { 'X-Account-Id': accountId } : {}),
       };
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const candidates = ['/api/products/next-id', '/api/products/next-code', '/api/products/next'];
 
       for (const path of candidates) {
@@ -293,7 +292,6 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         setCategories([]);
         return;
       }
-      const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
       const headers = {
         Authorization: `Bearer ${clerkToken}`,
         'X-Clerk-Authorization': `Bearer ${clerkToken}`,

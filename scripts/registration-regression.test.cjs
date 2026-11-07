@@ -6,6 +6,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
+function loadApiConfig(env = {}) {
+  const file = path.join(__dirname, '../src/services/apiConfig.ts');
+  const exports = {};
+  const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
+  vm.runInNewContext(code, { exports, process: { env } }, { filename: file });
+  return exports;
+}
+
 function fixture(screenName, options = {}) {
   const cells = [...(options.cells || [])]; let cursor = 0;
   const state = { signedIn: false, ...options };
@@ -35,7 +43,7 @@ function fixture(screenName, options = {}) {
   vm.runInNewContext(code, { exports, console: { error() {} }, process: { env: {} }, require: name => {
     if (name === 'react') return react;
     if (name === 'react/jsx-runtime') return { jsx, jsxs: jsx };
-    if (name === 'react-native') return { StyleSheet: { create: x => x }, Platform: { OS: 'android' }, View: 'View', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView', TextInput: 'RNTextInput', ActivityIndicator: 'ActivityIndicator' };
+    if (name === 'react-native') return { StyleSheet: { create: x => x }, Platform: { OS: 'android' }, View: 'View', ScrollView: 'ScrollView', KeyboardAvoidingView: 'KeyboardAvoidingView', TextInput: 'RNTextInput', ActivityIndicator: 'ActivityIndicator', TouchableOpacity: 'TouchableOpacity', Image: 'Image' };
     if (name === 'react-native-paper') return { Button: 'Button', Text: 'Text', TextInput: 'TextInput', Surface: 'Surface' };
     if (name === '@clerk/clerk-expo') return clerk;
     if (name === 'expo-auth-session') return { makeRedirectUri: () => 'movopos://oauth-native-callback' };
@@ -43,7 +51,9 @@ function fixture(screenName, options = {}) {
     if (name.endsWith('/ui')) return { ui: { colors: {}, radius: {} } };
     if (name.endsWith('/authStore')) { const hook = () => state.store; hook.getState = () => state.store; return { useAuthStore: hook }; }
     if (name.endsWith('/SyncService')) return { syncService: { setTokenGetter() {}, setSubUserTokenGetter() {}, fullSync: (...args) => state.sync(...args) } };
-    if (name === 'axios') return { post: (...args) => state.post(...args) };
+    if (name === 'axios') return { post: (...args) => state.post(...args), get: (...args) => state.get(...args) };
+    if (name.endsWith('/apiConfig')) return loadApiConfig(state.env);
+    if (name.endsWith('.png')) return {};
     if (name === '@react-native-async-storage/async-storage') return {};
     if (name === '@react-navigation/native') return { NavigationContainer: 'NavigationContainer', createNavigationContainerRef: () => ({ isReady: () => false }) };
     if (name === '@react-navigation/stack') return { createStackNavigator: () => ({ Navigator: 'Navigator', Screen: 'Screen' }) };
@@ -59,9 +69,10 @@ function fixture(screenName, options = {}) {
     const nodes = [];
     function walk(node) { if (typeof node === 'function') return walk(node()); if (!node || typeof node !== 'object') return; if (Array.isArray(node)) return node.forEach(walk); nodes.push(node); walk(node.props?.children); }
     walk(tree);
+    const textContent = node => typeof node === 'string' ? node : Array.isArray(node) ? node.map(textContent).join('') : node?.props ? textContent(node.props.children) : '';
     return {
-      input: label => nodes.find(n => n.type === 'TextInput' && n.props.label === label)?.props,
-      button: label => nodes.find(n => n.type === 'Button' && n.props.children === label)?.props,
+      input: label => nodes.find(n => ['TextInput', 'RNTextInput'].includes(n.type) && (n.props.label === label || n.props.accessibilityLabel === label))?.props,
+      button: label => nodes.find(n => ['Button', 'TouchableOpacity'].includes(n.type) && textContent(n.props.children) === label)?.props,
       digits: nodes.filter(n => n.type === 'RNTextInput').map(n => n.props),
       text: nodes.filter(n => n.type === 'Text').map(n => n.props.children).join(' '),
       authRoute: nodes.find(n => n.type === 'AuthNavigator')?.props.initialRouteName,
@@ -85,8 +96,11 @@ test('Un fallo al enviar el código permite reenviar sin recrear el registro ni 
   await f.render().button('Crear cuenta').onPress();
   assert.equal(f.events[0][1], 'EmailVerification');
   assert.equal(f.events[0][2].codeSent, false);
+  assert.equal(f.render().input('Contraseña'), undefined);
+  f.render().input('Correo').onChangeText('otra@example.test');
   assert.equal(f.render().input('Contraseña').value, '');
   assert.equal(f.render().input('Confirmar contraseña').value, '');
+  f.render().input('Correo').onChangeText('ana@example.test');
   await f.render().button('Continuar registro').onPress();
   assert.equal(creates, 1); assert.equal(deliveries, 2);
   assert.equal(f.events[1][2].codeSent, true);
@@ -96,8 +110,8 @@ test('Una contraseña rechazada o correo existente muestra el error y permite co
   for (const reason of ['Contraseña rechazada', 'Este correo ya existe']) {
     const f = fixture('SignUpScreen', { signUp: { create: async () => { throw { errors: [{ longMessage: reason }] }; } } });
     f.render().input('Correo').onChangeText('ana@example.test');
-    f.render().input('Contraseña').onChangeText('test');
-    f.render().input('Confirmar contraseña').onChangeText('test');
+    f.render().input('Contraseña').onChangeText('test-password');
+    f.render().input('Confirmar contraseña').onChangeText('test-password');
     await f.render().button('Crear cuenta').onPress();
     assert.match(f.render().text, new RegExp(reason)); assert.equal(f.events.length, 0);
     assert.equal(f.render().button('Crear cuenta').disabled, false);
@@ -117,7 +131,7 @@ test('Reintentar el guardado local tras el commit no repite la creación del neg
   await Promise.all([handler(), handler()]);
   assert.equal(posts, 1); assert.equal(saves, 1); assert.equal(syncs, 0);
   assert.equal(f.render().button('Entrar y sincronizar después'), undefined);
-  await f.render().button('Reintentar').onPress();
+  await f.render().button('Reintentar sincronización').onPress();
   assert.equal(posts, 1); assert.equal(saves, 2); assert.equal(syncs, 1); assert.equal(activations, 1);
 });
 
@@ -132,7 +146,7 @@ test('Reintentar sincronización conserva el registro y la sesión ya guardados'
   f.render().input('WhatsApp').onChangeText('8095550123');
   await f.render().button('Guardar y continuar').onPress();
   assert.equal(activations, 0); assert.ok(f.render().button('Entrar y sincronizar después'));
-  await f.render().button('Reintentar').onPress();
+  await f.render().button('Reintentar sincronización').onPress();
   assert.equal(posts, 1); assert.equal(saves, 1); assert.equal(syncs, 2); assert.equal(activations, 1);
 });
 
@@ -206,4 +220,55 @@ test('Al reiniciar se espera a Clerk y se retoma la configuración aunque la bie
   assert.equal(f.render().authRoute, 'Welcome');
   f.state.loaded = false; f.state.store.isAuthenticated = true;
   assert.equal(f.render().main, true); assert.equal(f.render().loading, false);
+});
+
+test('La URL de producción evita la redirección 308 y conserva servidores personalizados', () => {
+  assert.equal(loadApiConfig().API_URL, 'https://www.movopos.com');
+  assert.equal(loadApiConfig({ EXPO_PUBLIC_API_URL: 'https://movopos.com/' }).API_URL, 'https://www.movopos.com');
+  assert.equal(loadApiConfig({ API_URL: 'https://movopos.com' }).API_URL, 'https://www.movopos.com');
+  assert.equal(loadApiConfig({ EXPO_PUBLIC_API_URL: 'http://192.168.1.4:3000/' }).API_URL, 'http://192.168.1.4:3000');
+  assert.equal(loadApiConfig({ EXPO_PUBLIC_API_URL: 'https://example.test/backend/' }).API_URL, 'https://example.test/backend');
+});
+
+test('Guardar negocio hace el POST directo al dominio canónico incluso con la URL antigua en el entorno', async () => {
+  const f = fixture('SetupBusinessScreen', {
+    env: { EXPO_PUBLIC_API_URL: 'https://movopos.com/' },
+    post: async (url, body, options) => {
+      assert.equal(url, 'https://www.movopos.com/api/auth/setup');
+      assert.equal(body.businessName, 'Tienda');
+      assert.equal(options.headers['X-Clerk-Authorization'], 'Bearer clerk');
+      return { data: { success: true, user: { id: 'admin' }, token: 'subtoken', account: { id: 'account' } } };
+    },
+    store: { setSubUser: async () => {}, activateSubUser() {} }, sync: async () => {},
+  });
+  f.render().input('Nombre del negocio').onChangeText('Tienda');
+  f.render().input('WhatsApp').onChangeText('8095550123');
+  await f.render().button('Guardar y continuar').onPress();
+  assert.equal(f.render().button('Entrar y sincronizar después').disabled, false);
+});
+
+test('Si se pierde la respuesta tras el commit, se detecta la cuenta configurada y se piden los perfiles', async () => {
+  let posts = 0, gets = 0;
+  const f = fixture('SetupBusinessScreen', {
+    post: async () => { posts++; throw { code: 'ERR_NETWORK', message: 'Network Error' }; },
+    get: async url => { gets++; assert.equal(url, 'https://www.movopos.com/api/auth/subusers'); return { data: { needsInitialSetup: false, users: [{ id: 'admin' }] } }; },
+  });
+  f.render().input('Nombre del negocio').onChangeText('Tienda');
+  f.render().input('WhatsApp').onChangeText('8095550123');
+  await f.render().button('Guardar y continuar').onPress();
+  assert.equal(posts, 1); assert.equal(gets, 1);
+  assert.equal(f.events[0][0], 'replace'); assert.equal(f.events[0][1], 'SelectUser');
+});
+
+test('Un timeout sin configuración confirmada permite reintentar y explica que el correo ya existe', async () => {
+  const f = fixture('SetupBusinessScreen', {
+    post: async () => { throw { code: 'ECONNABORTED', message: 'timeout of 20000ms exceeded' }; },
+    get: async () => { throw new Error('Sin conexión'); },
+  });
+  f.render().input('Nombre del negocio').onChangeText('Tienda');
+  f.render().input('WhatsApp').onChangeText('8095550123');
+  await f.render().button('Guardar y continuar').onPress();
+  assert.match(f.render().text, /Tu cuenta de correo ya está creada/);
+  assert.equal(f.render().button('Guardar y continuar').disabled, false);
+  assert.equal(f.events.length, 0);
 });

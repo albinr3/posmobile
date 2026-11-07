@@ -8,7 +8,7 @@ import axios from 'axios';
 import { ui } from '../../theme/ui';
 import { useAuthStore } from '../../store/authStore';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+import { API_URL } from '../../services/apiConfig';
 
 interface SubUser {
   id: string;

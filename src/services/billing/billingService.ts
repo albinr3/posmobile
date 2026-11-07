@@ -1,7 +1,7 @@
 import axios from 'axios';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || process.env.API_URL || 'https://movopos.com';
+import { API_URL } from '../apiConfig';
 
 const BILLING_OVERVIEW_ENDPOINTS = ['/api/billing/overview', '/api/billing'];
 const BILLING_PROFILE_ENDPOINT = '/api/billing/profile';
