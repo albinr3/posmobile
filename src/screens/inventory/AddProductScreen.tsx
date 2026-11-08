@@ -513,6 +513,8 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       await createLocalProduct(productData, accountId, subUser?.id ?? null);
       if ((tutorialProduct || initialDraft) && useOnboardingStore.getState().sessionKey === tutorialKey && useOnboardingStore.getState().stage === 'product') {
         useOnboardingStore.getState().savedProduct(localId);
+        navigation.goBack();
+        return;
       }
       Alert.alert('Éxito', 'Producto guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {

@@ -8,6 +8,9 @@ import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCartStore } from '../../store/cartStore';
+import { useTutorialCartStore } from '../../store/tutorialCartStore';
+import { useOnboardingStore } from '../../store/onboardingStore';
+import { OnboardingTarget } from '../../components/onboarding/OnboardingTarget';
 import { normalizeSaleNotes, SALE_NOTES_MAX_LENGTH } from '../../utils/saleNotes';
 import { useAuthStore } from '../../store/authStore';
 import { formatCurrency, generateInvoiceCode, generateLocalId } from '../../utils/helpers';
@@ -18,7 +21,7 @@ import { CashShiftGate } from '../../components/CashShiftGate';
 import { ui } from '../../theme/ui';
 import { SalePrice } from '../../components/sales/SalesPresentation';
 import { getBottomSafeInset } from '../../utils/safeArea';
-import { SalePaymentSplit, TreasuryAccount } from '../../types';
+import { SaleItem, SalePaymentSplit, TreasuryAccount } from '../../types';
 import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
 import { formatProductQty, unitAllowsDecimals } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
@@ -42,6 +45,7 @@ import {
 
 interface CartScreenProps {
   navigation: any;
+  tutorial?: boolean;
   route?: {
     params?: {
       customerId?: string | null;
@@ -80,11 +84,12 @@ const DEFAULT_CASH_ACCOUNT_NAME = 'caja efectivo';
 const normalizeAccountName = (value: unknown): string =>
   String(value || '').trim().toLocaleLowerCase('es');
 
-export function CartScreen({ navigation, route }: CartScreenProps) {
+export function CartScreen({ navigation, route, tutorial = false }: CartScreenProps) {
+  const useScreenCart = tutorial ? useTutorialCartStore : useCartStore;
   const stockSnapshot = useSaleStockStore();
   useFocusEffect(useCallback(() => {
-    void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
-  }, []));
+    if (!tutorial) void saleStockService.refresh(useScreenCart.getState().editingSaleLocalId);
+  }, [tutorial, useScreenCart]));
   const insets = useSafeAreaInsets();
   const systemBottomInset = getBottomSafeInset(insets.bottom);
   const {
@@ -117,9 +122,10 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     editingSaleLocalId,
     editingInvoiceCode,
     clearEditContext,
-  } = useCartStore();
+  } = useScreenCart();
   const [loading, setLoading] = useState(false);
   const [summaryHeight, setSummaryHeight] = useState(0);
+  const itemsListRef = useRef<FlatList<SaleItem>>(null);
   const completingSaleRef = useRef(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const [splitPaymentModalVisible, setSplitPaymentModalVisible] = useState(false);
@@ -133,13 +139,13 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const [discountError, setDiscountError] = useState<string | null>(null);
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
   const [legalTipEnabled, setLegalTipEnabled] = useState(false);
-  const { setCustomer } = useCartStore();
+  const { setCustomer } = useScreenCart();
   const { subUser } = useAuthStore();
   const [treasuryAccounts, setTreasuryAccounts] = useState<TreasuryAccount[]>([]);
   const requestCreateAccountModal = useTreasuryUIStore((state) => state.requestCreateAccountModal);
   const consumeLastCreatedAccountId = useTreasuryUIStore((state) => state.consumeLastCreatedAccountId);
-  const canOverridePrice = !!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN';
-  const canApplyDiscounts = !!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN';
+  const canOverridePrice = !tutorial && (!!subUser?.isOwner || (subUser as any)?.canOverridePrice === true || subUser?.role === 'ADMIN');
+  const canApplyDiscounts = !tutorial && (!!subUser?.isOwner || (subUser as any)?.canApplyDiscounts === true || subUser?.role === 'ADMIN');
   const appliedDiscountPercentBp = normalizeDiscountPercentBp(discountPercentBp ?? 0);
 
   const [priceDialogLineId, setPriceDialogLineId] = useState<string | null>(null);
@@ -182,7 +188,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         return [{ ingredientId: ingredient.ingredientId, ingredientName: ingredient.ingredientName, adjustmentType }];
       });
       const newLineId = buildLineId(cartItem.productId, adjustments);
-      const { items: currentItems } = useCartStore.getState();
+      const { items: currentItems } = useScreenCart.getState();
       const shouldSplit = recipeApplyScope === 'ONE' && cartItem.quantity > 1;
 
       if (shouldSplit) {
@@ -203,26 +209,26 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
           const newLine = { ...cartItem, lineId: newLineId, quantity: 1, totalCents: cartItem.priceCents, recipeAdjustments: adjustments };
           nextItems.splice(insertIdx + 1, 0, newLine);
         }
-        if (!useCartStore.getState().setItems(nextItems)) return;
+        if (!useScreenCart.getState().setItems(nextItems)) return;
       } else {
         if (newLineId !== recipeDialogLineId) {
           const existingTarget = currentItems.find(i => i.lineId === newLineId);
           if (existingTarget) {
-            if (!useCartStore.getState().setItems(currentItems
+            if (!useScreenCart.getState().setItems(currentItems
                 .filter(i => i.lineId !== recipeDialogLineId)
                 .map(i => i.lineId === newLineId
                   ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
                   : i
                 ))) return;
           } else {
-            if (!useCartStore.getState().setItems(currentItems.map(item =>
+            if (!useScreenCart.getState().setItems(currentItems.map(item =>
                 item.lineId === recipeDialogLineId
                   ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
                   : item
               ))) return;
           }
         } else {
-          if (!useCartStore.getState().setItems(currentItems.map(item =>
+          if (!useScreenCart.getState().setItems(currentItems.map(item =>
               item.lineId === recipeDialogLineId
                 ? { ...item, recipeAdjustments: adjustments }
                 : item
@@ -293,6 +299,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   }, [discountPercentBp, customerId, customerSaleDiscountPercentBp]);
 
   useEffect(() => {
+    if (tutorial) return;
     const unsubscribe = subscribeSalesSettings((settings) => {
       setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
       const nextLegalTipEnabled = settings.legalTipEnabled === true;
@@ -303,10 +310,11 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
     });
 
     return unsubscribe;
-  }, [setApplyLegalTip]);
+  }, [tutorial, setApplyLegalTip]);
 
   useFocusEffect(
     useCallback(() => {
+      if (tutorial) return;
       let active = true;
       const loadTreasuryAccounts = async () => {
         try {
@@ -346,6 +354,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         active = false;
       };
     }, [
+      tutorial,
       consumeLastCreatedAccountId,
       paymentMethod,
       paymentSplits,
@@ -374,6 +383,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   useFocusEffect(
     useCallback(() => {
+      if (tutorial) return;
       let active = true;
       getSalesSettings()
         .then((settings) => {
@@ -394,12 +404,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       return () => {
         active = false;
       };
-    }, [setApplyLegalTip])
+    }, [tutorial, setApplyLegalTip])
   );
 
   useFocusEffect(
     useCallback(() => {
-      if (!editingSaleLocalId) return;
+      if (tutorial || !editingSaleLocalId) return;
       let active = true;
       const loadDocumentMode = async () => {
         try {
@@ -425,7 +435,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       return () => {
         active = false;
       };
-    }, [editingSaleLocalId, setApplyLegalTip])
+    }, [tutorial, editingSaleLocalId, setApplyLegalTip])
   );
 
   const cartTotals = useMemo(
@@ -458,7 +468,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   );
 
   useEffect(() => {
-    if (editingSaleLocalId) return;
+    if (tutorial || editingSaleLocalId) return;
     const routeCustomerId = route?.params?.customerId;
     const routeCustomerName = route?.params?.customerName;
     const routeCustomerVisualId = route?.params?.customerVisualId;
@@ -506,6 +516,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       active = false;
     };
   }, [
+    tutorial,
     editingSaleLocalId,
     route?.params?.customerId,
     route?.params?.customerName,
@@ -663,6 +674,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   );
 
   useEffect(() => {
+    if (tutorial) return;
     if (normalizeMethod(paymentMethod) !== 'EFECTIVO') return;
     const allowed = filterTreasuryAccountsByMethod(
       treasuryAccounts.filter((account) => account.isActive),
@@ -675,6 +687,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       setTreasuryAccountId(preferred.localId);
     }
   }, [
+    tutorial,
     paymentMethod,
     pickDefaultTreasuryAccountByMethod,
     setTreasuryAccountId,
@@ -801,6 +814,20 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
   const handleCompleteSale = async () => {
     if (completingSaleRef.current) return;
     completingSaleRef.current = true;
+    if (tutorial) {
+      const practiceItems = useScreenCart.getState().items;
+      if (practiceItems.length === 0 || practiceItems.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
+        completingSaleRef.current = false;
+        return;
+      }
+      // La práctica usa los mismos controles, pero no genera cobros, movimientos ni facturas.
+      if (!useOnboardingStore.getState().completePractice()) {
+        completingSaleRef.current = false;
+        return;
+      }
+      navigation.replace('PracticeDone');
+      return;
+    }
     setLoading(true);
     let reservation: Awaited<ReturnType<typeof saleStockService.reserve>> | null = null;
     let stockPersisted = false;
@@ -1319,13 +1346,13 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
       setLoading(false);
       completingSaleRef.current = false;
       useSaleStockStore.setState({ saving: false });
-      void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
+      void saleStockService.refresh(useScreenCart.getState().editingSaleLocalId);
     }
   };
 
-  const cartStockIssue = saleStockService.issue(items);
+  const cartStockIssue = tutorial ? null : saleStockService.issue(items);
 
-  const renderItem = ({ item }: { item: typeof items[0] }) => {
+  const renderItem = ({ item, index }: { item: typeof items[0]; index: number }) => {
     const step = unitAllowsDecimals(item.unit) ? 0.5 : 1;
     const adjustments = item.recipeAdjustments ?? [];
     const hasRecipeItems = Array.isArray(item.recipeItems) && item.recipeItems.length > 0;
@@ -1372,19 +1399,23 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             </TouchableOpacity>
           )}
         </View>
-        <View style={styles.quantityContainer}>
+        <OnboardingTarget id="sale.quantities" visible={tutorial && index === 0} style={styles.quantityContainer}
+          reveal={() => itemsListRef.current?.scrollToOffset({ offset: 0, animated: false })}>
           <IconButton
             icon="minus"
             size={20}
+            accessibilityLabel={`Reducir cantidad de ${item.productName}`}
             onPress={() => updateQuantity(item.lineId, Math.max(0, Math.round((item.quantity - step) * 100) / 100))}
           />
           <Text style={styles.quantity}>{formatProductQty(item.quantity, item.unit)}</Text>
           <IconButton
             icon="plus"
             size={20}
+            accessibilityLabel={`Aumentar cantidad de ${item.productName}`}
+            disabled={tutorial && item.quantity >= 10}
             onPress={() => updateQuantity(item.lineId, Math.round((item.quantity + step) * 100) / 100)}
           />
-        </View>
+        </OnboardingTarget>
         <View style={styles.itemTotal}>
           <Text style={styles.itemTotalText}>{formatCurrency(item.totalCents)}</Text>
           <IconButton
@@ -1400,8 +1431,8 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={[]}>
-      <CashShiftGate />
-      {items.length > 0 && (loading || stockSnapshot.saving) ? (
+      {!tutorial && <CashShiftGate />}
+      {items.length > 0 && (loading || (!tutorial && stockSnapshot.saving)) ? (
         <View style={styles.savingIndicator} accessibilityRole="progressbar" accessibilityLabel="Procesando venta">
           <ActivityIndicator color={ui.colors.primary} />
           <Text style={styles.savingText}>Procesando venta...</Text>
@@ -1410,11 +1441,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         <Text accessibilityRole="alert" style={{ color: '#DC2626', padding: 12 }}>{cartStockIssue.message}</Text>
       ) : null}
       <FlatList
+        ref={itemsListRef}
         data={items}
         renderItem={renderItem}
         keyExtractor={(item) => item.lineId}
         contentContainerStyle={[styles.listContent, { paddingBottom: items.length > 0 ? summaryHeight + 12 : 12 }]}
-        ListFooterComponent={items.length > 0 ? (
+        ListFooterComponent={!tutorial && items.length > 0 ? (
           <View style={{ marginTop: 12, marginBottom: 12 }}>
             <TextInput
               label="Nota (opcional)"
@@ -1432,9 +1464,16 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Text style={styles.emptyText}>El carrito está vacío</Text>
-            <Button mode="contained" onPress={() => navigation.goBack()}>
+            <OnboardingTarget id="sale.addProducts" visible={tutorial}>
+            <Button mode="contained" onPress={() => {
+              if (tutorial) {
+                useOnboardingStore.getState().go('catalog');
+                navigation.navigate('POSMain');
+              } else navigation.goBack();
+            }}>
               Agregar Productos
             </Button>
+            </OnboardingTarget>
           </View>
         }
       />
@@ -1449,12 +1488,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
             ) : null}
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Cliente:</Text>
-              <Button mode="text" onPress={() => navigation.navigate('SelectCustomer')}>
+              <Button mode="text" disabled={tutorial} onPress={() => navigation.navigate('SelectCustomer')}>
                 {formatCustomerLabel(customerName || GENERIC_CUSTOMER_DISPLAY_NAME, customerVisualId)}
               </Button>
             </View>
 
-            <View style={styles.summaryRow}>
+            {!tutorial && <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Descuento (%):</Text>
               <View style={styles.discountInputWrap}>
                 <TextInput
@@ -1481,9 +1520,9 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
                   placeholder="0"
                 />
               </View>
-            </View>
+            </View>}
             {discountError ? <Text style={styles.discountErrorText}>{discountError}</Text> : null}
-            {!canApplyDiscounts ? (
+            {!tutorial && !canApplyDiscounts ? (
               <Text style={styles.discountReadonlyHint}>No tienes permiso para modificar descuentos.</Text>
             ) : null}
             <View style={styles.summaryRow}>
@@ -1492,7 +1531,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
                 visible={menuVisible}
                 onDismiss={() => setMenuVisible(false)}
                 anchor={
-                  <Button mode="text" onPress={() => setMenuVisible(true)}>
+                  <Button mode="text" disabled={tutorial} onPress={() => setMenuVisible(true)}>
                     {paymentMethods.find(m => m.value === paymentMethod)?.label}
                   </Button>
                 }
@@ -1509,7 +1548,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               </Menu>
             </View>
 
-            {(paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && (
+            {!tutorial && (paymentMethod === 'EFECTIVO' || paymentMethod === 'TRANSFERENCIA') && (
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Cuenta de tesorería:</Text>
                 <Menu
@@ -1585,12 +1624,12 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
                 <Text style={styles.summaryDiscountValue}>-{formatCurrency(cartTotals.discountSubtotalCents)}</Text>
               </View>
             ) : null}
-            <View style={styles.summaryRow}>
+            {!tutorial && <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Flete:</Text>
               <Button mode="text" compact onPress={openShippingModal}>
                 {shippingCents > 0 ? formatCurrency(shippingCents) : 'Agregar'}
               </Button>
-            </View>
+            </View>}
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>
                 ITBIS {salePricesIncludeItbis ? '(incluido)' : '(no incluido)'}:
@@ -1618,19 +1657,21 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
               <SalePrice style={styles.totalValue} cents={cartTotals.totalCents} />
             </View>
 
+            <OnboardingTarget id="sale.complete" visible={tutorial}>
             <Button
               mode="contained"
               buttonColor={ui.colors.primary}
               textColor="#fff"
               labelStyle={styles.completeButtonLabel}
               onPress={handleCompleteSale}
-              disabled={loading || !!cartStockIssue || !stockSnapshot.ready}
+              disabled={loading || (!tutorial && (!!cartStockIssue || !stockSnapshot.ready))}
               loading={loading}
               style={styles.completeButton}
               contentStyle={styles.completeButtonContent}
             >
               {editingSaleLocalId ? 'Guardar Cambios' : 'Completar Venta'}
             </Button>
+            </OnboardingTarget>
           </Surface>
         </BottomDock>
       )}

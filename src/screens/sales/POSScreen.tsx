@@ -9,6 +9,10 @@ import { BottomDock } from '../../components/BottomDock';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCartStore } from '../../store/cartStore';
+import { useTutorialCartStore } from '../../store/tutorialCartStore';
+import { useOnboardingStore } from '../../store/onboardingStore';
+import { OnboardingTarget } from '../../components/onboarding/OnboardingTarget';
+import { PRACTICE_CATALOG } from '../../services/onboarding/practiceCatalog';
 import { db } from '../../database/Database';
 import { Product, SaleItem } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
@@ -23,6 +27,7 @@ import { calculateLegalTipCents, normalizeApplyLegalTip } from '../../utils/lega
 
 interface POSScreenProps {
   navigation: any;
+  tutorial?: boolean;
   route?: {
     params?: {
       editSaleLocalId?: string;
@@ -131,15 +136,16 @@ const normalizeEditPaymentSplits = (
     .filter((split: { method: string; amountCents: number; transferBankName: string | null; treasuryAccountId: string | null }) => split.amountCents > 0);
 };
 
-export function POSScreen({ navigation, route }: POSScreenProps) {
+export function POSScreen({ navigation, route, tutorial = false }: POSScreenProps) {
+  const useScreenCart = tutorial ? useTutorialCartStore : useCartStore;
   const stockSnapshot = useSaleStockStore();
   useFocusEffect(useCallback(() => {
-    void saleStockService.refresh(useCartStore.getState().editingSaleLocalId);
-  }, []));
+    if (!tutorial) void saleStockService.refresh(useScreenCart.getState().editingSaleLocalId);
+  }, [tutorial, useScreenCart]));
   const [searchQuery, setSearchQuery] = useState('');
   const [scanExactSkuQuery, setScanExactSkuQuery] = useState<string | null>(null);
-  const [products, setProducts] = useState<POSProduct[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState<POSProduct[]>(tutorial ? [...PRACTICE_CATALOG] : []);
+  const [loading, setLoading] = useState(!tutorial);
   const [paymentMenuVisible, setPaymentMenuVisible] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>('IMAGENES');
   const [salePricesIncludeItbis, setSalePricesIncludeItbis] = useState(true);
@@ -150,6 +156,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const internalNavigationRef = useRef(false);
   const lastCatalogLoadAtRef = useRef(0);
   const productsCountRef = useRef(0);
+  const productsListRef = useRef<FlatList<POSProduct>>(null);
 
   // Recipe modifier state
   const [recipeDialogLineId, setRecipeDialogLineId] = useState<string | null>(null);
@@ -177,11 +184,12 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     editingSaleLocalId,
     editingInvoiceCode,
     clear,
-  } = useCartStore();
+  } = useScreenCart();
 
   const saleType: SaleType = paymentMethod === 'CREDITO' ? 'CREDITO' : 'CONTADO';
 
   useEffect(() => {
+    if (tutorial) return;
     let mounted = true;
     const loadSavedViewMode = async () => {
       try {
@@ -207,22 +215,24 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [tutorial]);
 
   useEffect(() => {
+    if (tutorial) return;
     const unsubscribe = subscribeSalesSettings((settings) => {
       setSalePricesIncludeItbis(settings.salePricesIncludeItbis !== false);
       setLegalTipEnabled(settings.legalTipEnabled === true);
     });
 
     return unsubscribe;
-  }, []);
+  }, [tutorial]);
 
   useEffect(() => {
+    if (tutorial) return;
     AsyncStorage.setItem(VIEW_MODE_STORAGE_KEY, viewMode).catch((error) => {
       console.error('Error guardando vista de POS:', error);
     });
-  }, [viewMode]);
+  }, [tutorial, viewMode]);
 
   useEffect(() => {
     productsCountRef.current = products.length;
@@ -230,13 +240,14 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   useFocusEffect(
     useCallback(() => {
+      if (tutorial) return;
       const now = Date.now();
       const shouldReload = productsCountRef.current === 0 || now - lastCatalogLoadAtRef.current > 15_000;
       if (shouldReload) {
         setLoading(true);
         loadProducts();
       }
-    }, [])
+    }, [tutorial])
   );
 
   useEffect(() => {
@@ -255,6 +266,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   }, [navigation, clear]);
 
   useEffect(() => {
+    if (tutorial) return;
     const saleLocalId = route?.params?.editSaleLocalId;
     if (!saleLocalId) return;
     if (hydratedEditSaleRef.current === saleLocalId) return;
@@ -415,9 +427,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     };
 
     loadInvoiceToCart();
-  }, [route?.params?.editSaleLocalId, route?.params?.editNonce, loadInvoiceForEdit, navigation]);
+  }, [tutorial, route?.params?.editSaleLocalId, route?.params?.editNonce, loadInvoiceForEdit, navigation]);
 
   const loadProducts = useCallback(async () => {
+    if (tutorial) return;
     try {
       const result = await db.query<any>('SELECT * FROM products WHERE is_available_for_sale = 1 ORDER BY name');
       const mapped = result.map((row) => {
@@ -453,7 +466,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tutorial]);
 
   const getProductImage = (item: POSProduct) => {
     const fromParsed = Array.isArray(item.parsedData?.imageUrls) ? item.parsedData.imageUrls[0] : null;
@@ -525,6 +538,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   };
 
   const handleScanBarcode = () => {
+    if (tutorial) return;
     internalNavigationRef.current = true;
     navigation.navigate('BarcodeScanner', {
       scannerMode: 'CART_SPLIT',
@@ -551,18 +565,19 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
     </TouchableOpacity>
   );
 
-  const renderProduct = ({ item }: { item: any }) => {
+  const renderProduct = ({ item, index }: { item: any; index: number }) => {
     const isRecipe = (item as any).productKind === 'RECIPE';
-    const stockIssue = saleStockService.preview(item, items).issue;
+    const stockIssue = tutorial ? null : saleStockService.preview(item, items).issue;
     const isOut = Boolean(stockIssue);
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
     const productImage = getProductImage(item);
-    const stockLabel = stockIssue ? (stockIssue.kind === 'missing' ? 'Sincroniza para validar' : (stockIssue.available ?? 0) <= 0 ? 'Sin existencia' : 'Existencia insuficiente') : isRecipe ? 'Receta' : `${formatProductQty(saleStockService.available(item), item.unit)} disponible`;
+    const stockLabel = tutorial ? 'Producto de prueba' : stockIssue ? (stockIssue.kind === 'missing' ? 'Sincroniza para validar' : (stockIssue.available ?? 0) <= 0 ? 'Sin existencia' : 'Existencia insuficiente') : isRecipe ? 'Receta' : `${formatProductQty(saleStockService.available(item), item.unit)} disponible`;
     const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
     if (viewMode === 'LISTA') {
       return (
-        <View style={styles.listItemWrap}>
+        <OnboardingTarget id="sale.products" visible={tutorial && index === 0} style={styles.listItemWrap}
+          reveal={() => productsListRef.current?.scrollToOffset({ offset: 0, animated: false })}>
           <TouchableOpacity
             style={[styles.productCard, styles.productCardList]}
             onPress={() => handleProductPress(item)}
@@ -597,13 +612,13 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
               </View>
             </View>
           </TouchableOpacity>
-        </View>
+        </OnboardingTarget>
       );
     }
 
-    return (
+    const productCard = (
       <TouchableOpacity
-        style={styles.productCard}
+        style={[styles.productCard, tutorial && index === 0 && { width: '100%' }]}
         onPress={() => handleProductPress(item)}
             disabled={isOut}
             accessibilityState={{ disabled: isOut }}
@@ -649,6 +664,10 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
         </View>
       </TouchableOpacity>
     );
+    return tutorial && index === 0 ? (
+      <OnboardingTarget id="sale.products" visible style={{ width: '48.4%' }}
+        reveal={() => productsListRef.current?.scrollToOffset({ offset: 0, animated: false })}>{productCard}</OnboardingTarget>
+    ) : productCard;
   };
 
   const renderHeader = () => (
@@ -661,6 +680,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
           <TouchableOpacity
             style={styles.collapsibleHeader}
+            disabled={tutorial}
             activeOpacity={0.7}
             onPress={() => {
               LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -685,7 +705,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             </View>
           </TouchableOpacity>
 
-          {saleOptionsExpanded && (
+          {!tutorial && saleOptionsExpanded && (
             <View>
               <Text style={styles.label}>Cliente</Text>
               <TouchableOpacity
@@ -757,9 +777,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             inputStyle={styles.searchInput}
             iconColor="#9CA3AF"
           />
-          <TouchableOpacity style={styles.qrBtn} onPress={handleScanBarcode}>
+          {!tutorial && <TouchableOpacity style={styles.qrBtn} onPress={handleScanBarcode}>
             <Icon source="qrcode-scan" size={28} color="#6B7280" />
-          </TouchableOpacity>
+          </TouchableOpacity>}
         </View>
 
         <View style={styles.viewToggle}>
@@ -792,8 +812,9 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
 
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
-      <CashShiftGate showActivationOffer />
+      {!tutorial && <CashShiftGate showActivationOffer />}
       <FlatList
+        ref={productsListRef}
         key={viewMode}
         data={filteredProducts}
         renderItem={renderProduct}
@@ -809,11 +830,11 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
               <Text style={styles.emptyText}>Cargando productos...</Text>
             </View>
           ) : (
-            <View style={viewMode === 'IMAGENES' ? styles.row : styles.listRow}>{renderCreateProductCard()}</View>
+            <View style={viewMode === 'IMAGENES' ? styles.row : styles.listRow}>{!tutorial && renderCreateProductCard()}</View>
           )
         }
         ListFooterComponent={
-          filteredProducts.length > 0 ? <View style={viewMode === 'IMAGENES' ? styles.row : styles.listRow}>{renderCreateProductCard()}</View> : null
+          !tutorial && filteredProducts.length > 0 ? <View style={viewMode === 'IMAGENES' ? styles.row : styles.listRow}>{renderCreateProductCard()}</View> : null
         }
       />
 
@@ -825,10 +846,12 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
             <Text style={styles.itemsText}>{items.length} productos</Text>
           </View>
         </View>
+        <OnboardingTarget id="sale.checkout" visible={tutorial}>
         <TouchableOpacity
           style={[styles.chargeButton, getItemCount() === 0 && styles.chargeButtonDisabled]}
           onPress={() => {
             internalNavigationRef.current = true;
+            if (tutorial) useOnboardingStore.getState().go('cart');
             navigation.navigate('Cart', { customerId, customerName, customerVisualId, editSaleLocalId: editingSaleLocalId });
           }}
           disabled={getItemCount() === 0}
@@ -836,6 +859,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
           <Text style={styles.chargeButtonText}>{editingSaleLocalId ? 'Guardar Cambios' : 'Facturar'}</Text>
           <Icon source="arrow-right" size={18} color="#fff" />
         </TouchableOpacity>
+        </OnboardingTarget>
       </BottomDock>
 
       <Portal>
@@ -979,7 +1003,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                     return [{ ingredientId: ingredient.ingredientId, ingredientName: ingredient.ingredientName, adjustmentType }];
                   });
                   const newLineId = buildLineId(cartItem.productId, adjustments);
-                  const { items: currentItems } = useCartStore.getState();
+                  const { items: currentItems } = useScreenCart.getState();
                   const shouldSplit = recipeApplyScope === 'ONE' && cartItem.quantity > 1;
 
                   if (shouldSplit) {
@@ -1006,26 +1030,26 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                       };
                       nextItems.splice(insertIdx + 1, 0, newLine);
                     }
-                    if (!useCartStore.getState().setItems(nextItems)) return;
+                    if (!useScreenCart.getState().setItems(nextItems)) return;
                   } else {
                     if (newLineId !== recipeDialogLineId) {
                       const existingTarget = currentItems.find(i => i.lineId === newLineId);
                       if (existingTarget) {
-                        if (!useCartStore.getState().setItems(currentItems
+                        if (!useScreenCart.getState().setItems(currentItems
                             .filter(i => i.lineId !== recipeDialogLineId)
                             .map(i => i.lineId === newLineId
                               ? { ...i, quantity: i.quantity + cartItem.quantity, totalCents: (i.quantity + cartItem.quantity) * i.priceCents }
                               : i
                             ))) return;
                       } else {
-                        if (!useCartStore.getState().setItems(currentItems.map(item =>
+                        if (!useScreenCart.getState().setItems(currentItems.map(item =>
                             item.lineId === recipeDialogLineId
                               ? { ...item, lineId: newLineId, recipeAdjustments: adjustments }
                               : item
                           ))) return;
                       }
                     } else {
-                      if (!useCartStore.getState().setItems(currentItems.map(item =>
+                      if (!useScreenCart.getState().setItems(currentItems.map(item =>
                           item.lineId === recipeDialogLineId
                             ? { ...item, recipeAdjustments: adjustments }
                             : item
