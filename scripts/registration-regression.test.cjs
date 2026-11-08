@@ -56,6 +56,10 @@ function fixture(screenName, options = {}) {
     if (name.endsWith('.png')) return {};
     if (name === '@react-native-async-storage/async-storage') return {};
     if (name === '@react-navigation/native') return { NavigationContainer: 'NavigationContainer', createNavigationContainerRef: () => ({ isReady: () => false }) };
+    if (name === './navigationRef') return { navigationRef: { isReady: () => false } };
+    if (name.endsWith('/OnboardingHost')) return { OnboardingHost: 'OnboardingHost' };
+    if (name.endsWith('/PracticeNavigator')) return { PracticeNavigator: 'PracticeNavigator' };
+    if (name.endsWith('/onboardingStore')) return { useOnboardingStore: { setState() {} } };
     if (name === '@react-navigation/stack') return { createStackNavigator: () => ({ Navigator: 'Navigator', Screen: 'Screen' }) };
     if (name === './AuthNavigator') return { AuthNavigator: 'AuthNavigator' };
     if (name === './MainNavigator') return { MainNavigator: 'MainNavigator' };

@@ -32,6 +32,7 @@ import {
 } from '../../services/printing/blePrinterService';
 import { COMPANY_SETTINGS_SNAPSHOT_KEY } from '../../services/printing/thermalPrinterService';
 import { ui } from '../../theme/ui';
+import { TutorialEntryCard } from '../../components/onboarding/TutorialEntryCard';
 
 interface PrinterDevice {
   id: string;
@@ -843,6 +844,7 @@ export function PrinterSettingsScreen({ navigation }: PrinterSettingsScreenProps
   return (
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <TutorialEntryCard />
         <Surface style={styles.section}>
           <View style={styles.sectionHeaderRow}>
             <View>

@@ -10,7 +10,8 @@ import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
 import { API_URL } from '../../services/apiConfig';
 import { db } from '../../database/Database';
-import { syncService } from '../../services/sync/SyncService';
+import { updateLocalProduct } from '../../services/products/updateLocalProduct';
+import { positiveProductCents } from '../../services/products/productAmounts';
 import { ui } from '../../theme/ui';
 import { useAuthStore } from '../../store/authStore';
 import {
@@ -43,7 +44,7 @@ const EDITABLE_PRODUCT_KIND_OPTIONS: Array<{ value: MobileProductKind; label: st
 export function ProductEditScreen({ navigation, route }: ProductEditScreenProps) {
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
+  const { subUserToken, accountId, subUser } = useAuthStore();
   const { productId } = route.params;
 
   const [localId, setLocalId] = useState<string>('');
@@ -276,20 +277,20 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
       Alert.alert('Error', 'El nombre es requerido');
       return;
     }
-    if (!price || isNaN(parseFloat(price))) {
-      Alert.alert('Error', 'El precio es requerido');
+    if (positiveProductCents(price) === null) {
+      Alert.alert('Error', 'El precio debe ser mayor que cero y tener un importe válido en centavos.');
       return;
     }
-    if (!cost || isNaN(parseFloat(cost))) {
-      Alert.alert('Error', 'El costo es requerido');
+    if (positiveProductCents(cost) === null) {
+      Alert.alert('Error', 'El costo debe ser mayor que cero y tener un importe válido en centavos.');
       return;
     }
 
     savingRef.current = true;
     setLoading(true);
     try {
-      const costCents = Math.round(parseFloat(cost) * 100);
-      const priceCents = Math.round(parseFloat(price) * 100);
+      const costCents = positiveProductCents(cost)!;
+      const priceCents = positiveProductCents(price)!;
       const isLocalImage = !!imageUri && imageUri.startsWith('file://');
       const imageUrls = imageUri && !isLocalImage ? [imageUri] : [];
       const snapshot = productSnapshot || {};
@@ -321,41 +322,13 @@ export function ProductEditScreen({ navigation, route }: ProductEditScreenProps)
         updatedAt: Date.now(),
       };
 
-      await db.update(
-        'products',
-        localId,
-        {
-          name: payload.name,
-          sku: payload.sku,
-          cost_cents: payload.costCents,
-          price_cents: payload.priceCents,
-          stock: currentStock,
-          synced: 0,
-          is_available_for_sale: isAvailableForSale ? 1 : 0,
-          data: JSON.stringify(payload),
-        },
-        'local_id'
-      );
-
-      if (serverId) {
-        await db.runAsync(
-          "DELETE FROM sync_queue WHERE entity_type = 'product' AND action = 'update' AND entity_local_id = ? AND status IN ('pending','error')",
-          [localId]
-        );
-        await syncService.queueOperation('product', 'update', payload, localId);
-      } else {
-        await db.runAsync(
-          "DELETE FROM sync_queue WHERE entity_type = 'product' AND entity_local_id = ? AND status IN ('pending','error')",
-          [localId]
-        );
-        await syncService.queueOperation('product', 'create', payload, localId);
-      }
+      await updateLocalProduct(payload, accountId, subUser?.id ?? null);
 
       hasPendingImageSelectionRef.current = false;
       Alert.alert('Éxito', 'Producto actualizado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {
       console.error('Error actualizando producto:', error);
-      Alert.alert('Error', 'No se pudo actualizar el producto');
+      Alert.alert('Error', error instanceof Error ? error.message : 'No se pudo actualizar el producto');
     } finally {
       setLoading(false);
       savingRef.current = false;

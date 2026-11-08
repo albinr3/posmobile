@@ -16,6 +16,7 @@ import { syncService } from '../../services/sync/SyncService';
 import { cashContextForQueue, getCashContext } from '../../services/cash/cashShiftService';
 import { CashShiftGate } from '../../components/CashShiftGate';
 import { ui } from '../../theme/ui';
+import { SalePrice } from '../../components/sales/SalesPresentation';
 import { getBottomSafeInset } from '../../utils/safeArea';
 import { SalePaymentSplit, TreasuryAccount } from '../../types';
 import { formatPaymentWithBank, getPaymentMethodLabel } from '../../utils/paymentMethods';
@@ -1614,7 +1615,7 @@ export function CartScreen({ navigation, route }: CartScreenProps) {
 
             <View style={styles.totalRow}>
               <Text style={styles.totalLabel}>Total:</Text>
-              <Text style={styles.totalValue}>{formatCurrency(cartTotals.totalCents)}</Text>
+              <SalePrice style={styles.totalValue} cents={cartTotals.totalCents} />
             </View>
 
             <Button

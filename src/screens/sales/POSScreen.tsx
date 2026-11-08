@@ -13,6 +13,7 @@ import { db } from '../../database/Database';
 import { Product, SaleItem } from '../../types';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { SalePrice } from '../../components/sales/SalesPresentation';
 import { formatProductQty, inferProductUnit, inferProductKind } from '../../utils/productUnits';
 import { buildLineId } from '../../store/createCartStore';
 import { getSalesSettings, subscribeSalesSettings } from '../../services/settings/salesSettings';
@@ -541,7 +542,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
   const renderCreateProductCard = () => (
     <TouchableOpacity
       style={[styles.createCard, viewMode === 'LISTA' && styles.createCardList]}
-      onPress={() => navigation.navigate('Inventory', { screen: 'AddProduct' })}
+      onPress={() => navigation.navigate('InventoryMenu', { screen: 'AddProduct' })}
     >
       <View style={styles.createIconBubble}>
         <Icon source="plus" size={34} color={ui.colors.textMuted} />
@@ -585,7 +586,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
                 <Text style={styles.productNameList} numberOfLines={1}>
                   {item.name}
                 </Text>
-                <Text style={styles.productPriceList}>RD$ {(item.priceCents / 100).toFixed(2)}</Text>
+                <SalePrice style={styles.productPriceList} cents={item.priceCents} />
               </View>
               <View style={styles.listBottomRow}>
                 <Text style={styles.skuTextList}>
@@ -643,7 +644,7 @@ export function POSScreen({ navigation, route }: POSScreenProps) {
               {item.reference}
             </Text>
           ) : null}
-          <Text style={styles.productPrice}>RD$ {(item.priceCents / 100).toFixed(2)}</Text>
+          <SalePrice style={styles.productPrice} cents={item.priceCents} />
           <Text style={[styles.stockText, isOut && styles.stockOut]}>{stockLabel}</Text>
         </View>
       </TouchableOpacity>

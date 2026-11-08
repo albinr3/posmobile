@@ -3,13 +3,16 @@ import { View, StyleSheet, TouchableOpacity, StatusBar, Alert, Linking, Image, P
 import { createDrawerNavigator, DrawerContentScrollView, DrawerContentComponentProps } from '@react-navigation/drawer';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
-import { getFocusedRouteNameFromRoute } from '@react-navigation/native';
+import { getFocusedRouteNameFromRoute, useIsFocused } from '@react-navigation/native';
 import { useAuth } from '@clerk/clerk-expo';
 import NetInfo from '@react-native-community/netinfo';
 import axios from 'axios';
 import { Text, Icon, ActivityIndicator } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ui } from '../theme/ui';
+import { useOnboardingStore } from '../store/onboardingStore';
+import { OnboardingTarget } from '../components/onboarding/OnboardingTarget';
+import { navigationRef } from './navigationRef';
 import { AppTopHeader } from '../components/AppTopHeader';
 import { ErrorBoundary } from '../components/ErrorBoundary';
 import { useAuthStore } from '../store/authStore';
@@ -492,6 +495,8 @@ function PlaceholderScreen({ route }: any) {
 }
 
 function BottomTabs() {
+  const tabsFocused = useIsFocused();
+  const tutorialRoute = useOnboardingStore(s => s.routeName);
   const insets = useSafeAreaInsets();
   const { subUser } = useAuthStore();
   const canUseDashboard = canAccessModule(subUser, 'dashboard');
@@ -541,6 +546,14 @@ function BottomTabs() {
         <Tab.Screen
           name="POS"
           component={SalesStack}
+          listeners={{ tabPress: event => {
+            const tutorial = useOnboardingStore.getState();
+            if (tutorial.active && tutorial.stage === 'sell' && !tutorial.completedAt) {
+              event.preventDefault();
+              tutorial.go('catalog');
+              navigationRef.navigate('TutorialPractice');
+            }
+          } }}
           options={({ route }) => {
             const nestedRoute = getFocusedRouteNameFromRoute(route) ?? 'POSMain';
             const hideTabBar = ['Cart', 'SelectCustomer', 'AddCustomer', 'Receipt', 'BarcodeScanner'].includes(nestedRoute);
@@ -552,7 +565,7 @@ function BottomTabs() {
               tabBarLabelStyle: { height: 0 },
               tabBarStyle: hideTabBar ? { display: 'none' } : defaultTabBarStyle,
               tabBarIcon: ({ focused }) => (
-                <View
+                <OnboardingTarget id="nav.sell" persistent visible={tabsFocused && !['Cart', 'SelectCustomer', 'AddCustomer', 'Receipt', 'BarcodeScanner'].includes(tutorialRoute)}><View
                   style={{
                     width: 66,
                     height: 66,
@@ -567,7 +580,7 @@ function BottomTabs() {
                   }}
                 >
                   <Icon source="cash-register" color="#fff" size={30} />
-                </View>
+                </View></OnboardingTarget>
               ),
             };
           }}
@@ -929,6 +942,11 @@ export function MainNavigator() {
       subscription.remove();
     };
   }, [subUserToken]);
+
+  useEffect(() => {
+    useOnboardingStore.getState().setRuntimeReady(!checkingBillingAccess && !isBillingBlocked);
+    return () => useOnboardingStore.getState().setRuntimeReady(false);
+  }, [checkingBillingAccess, isBillingBlocked]);
 
   if (checkingBillingAccess) {
     return (

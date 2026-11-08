@@ -57,6 +57,19 @@ class SyncService {
   private lastFullSyncAttemptAt = 0;
   private subUserRefreshInFlight: Promise<boolean> | null = null;
 
+  async withProductQueuePaused<T>(work: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + 30000;
+    while (this.isSyncing) {
+      if (Date.now() >= deadline) throw new Error('La sincronización sigue en curso. Reintenta guardar el producto.');
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    // No debe existir ningún await entre comprobar y tomar el mismo lock del worker.
+    // De lo contrario puede enviarse el create antiguo después de corregir su costo.
+    this.isSyncing = true;
+    try { return await work(); }
+    finally { this.isSyncing = false; }
+  }
+
   // Método para establecer la función que obtiene el token de Clerk
   setTokenGetter(fn: () => Promise<string | null>) {
     if (SYNC_DEBUG) console.log('[SyncService] setTokenGetter() configurado');

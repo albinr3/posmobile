@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { useAuth } from '@clerk/clerk-expo';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
@@ -9,10 +9,14 @@ import { useAuthStore } from '../store/authStore';
 import { AuthNavigator } from './AuthNavigator';
 import { MainNavigator } from './MainNavigator';
 import { WELCOME_SEEN_STORAGE_KEY } from '../screens/auth/WelcomeScreen';
+import { navigationRef } from './navigationRef';
+import { OnboardingHost } from '../components/onboarding/OnboardingHost';
+import { PracticeNavigator } from '../screens/onboarding/PracticeNavigator';
+import { useOnboardingStore } from '../store/onboardingStore';
 
 const Stack = createStackNavigator();
 const APP_NAV_DEBUG = false;
-export const navigationRef = createNavigationContainerRef();
+export { navigationRef } from './navigationRef';
 
 function getCurrentRoutePath(): string | null {
   if (!navigationRef.isReady()) return null;
@@ -35,7 +39,7 @@ function getCurrentRoutePath(): string | null {
 setErrorRouteGetter(() => getCurrentRoutePath());
 
 export function AppNavigator() {
-  const { isAuthenticated, isLoading } = useAuthStore();
+  const { isAuthenticated, isLoading, accountId, subUser } = useAuthStore();
   const { isLoaded, isSignedIn } = useAuth();
   const [isWelcomeLoaded, setIsWelcomeLoaded] = useState(false);
   const [shouldShowWelcome, setShouldShowWelcome] = useState(false);
@@ -83,10 +87,15 @@ export function AppNavigator() {
   }
 
   return (
-    <NavigationContainer ref={navigationRef}>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <NavigationContainer ref={navigationRef}
+      onReady={() => useOnboardingStore.setState({ routeName: navigationRef.getCurrentRoute()?.name ?? '' })}
+      onStateChange={() => useOnboardingStore.setState({ routeName: navigationRef.getCurrentRoute()?.name ?? '' })}>
+      <Stack.Navigator key={isAuthenticated ? `${accountId}:${subUser?.id}` : 'auth'} screenOptions={{ headerShown: false }}>
         {isAuthenticated ? (
-          <Stack.Screen name="Main" component={MainNavigator} />
+          <>
+            <Stack.Screen name="Main" component={MainNavigator} />
+            <Stack.Screen name="TutorialPractice" component={PracticeNavigator} options={{ gestureEnabled: false, animation: 'none' }} />
+          </>
         ) : (
           <Stack.Screen name="Auth">
             {() => (
@@ -99,6 +108,7 @@ export function AppNavigator() {
           </Stack.Screen>
         )}
       </Stack.Navigator>
+      <OnboardingHost />
     </NavigationContainer>
   );
 }

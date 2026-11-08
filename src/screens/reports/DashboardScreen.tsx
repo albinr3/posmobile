@@ -7,6 +7,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { db } from '../../database/Database';
 import { formatCurrency } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
+import { TutorialEntryCard } from '../../components/onboarding/TutorialEntryCard';
 import { useSyncStore } from '../../store/syncStore';
 
 interface DashboardScreenProps {
@@ -244,6 +245,7 @@ export function DashboardScreen({ navigation }: DashboardScreenProps) {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         contentContainerStyle={styles.content}
       >
+        <TutorialEntryCard />
         <View style={styles.pageHeader}>
           <View style={styles.pageHeaderTextWrap}>
             <Text style={styles.pageHeaderTitle}>Dashboard</Text>

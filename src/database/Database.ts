@@ -216,6 +216,10 @@ class DatabaseService {
     });
   }
 
+  getAccountScope(): string | null {
+    return this.currentAccountScope;
+  }
+
   async setAccountScope(accountId: string | null): Promise<void> {
     await this.enqueueTask(async () => {
       const normalizedScope = accountId ? String(accountId) : null;

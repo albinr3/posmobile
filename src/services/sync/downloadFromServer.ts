@@ -426,7 +426,9 @@ export async function downloadFromServer(options: {
     await runEntityTask('products', async () => {
       // Obtener todas las páginas incluye los insumos que no se venden por separado.
       const products = await fetchAllWithCursor('products', headers);
-      await saleStockService.applyCatalog(products);
+      // Los demos de la web nunca entran al catálogo operativo de la app.
+      // applyCatalog desactiva también los demos descargados por versiones anteriores.
+      await saleStockService.applyCatalog(products.filter((product: any) => product.isOnboardingDemo !== true));
     });
 
     // Descargar clientes

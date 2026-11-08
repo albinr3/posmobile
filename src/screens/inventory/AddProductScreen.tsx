@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image, Modal, FlatList } from 'react-native';
+import { View, StyleSheet, ScrollView, Alert, TouchableOpacity, Image, Modal, FlatList, KeyboardAvoidingView, Platform } from 'react-native';
 import { TextInput, Button, Text, Icon, Menu, Divider, Switch } from 'react-native-paper';
 import { SafeAreaView } from '../../components/SafeAreaView';
 import { BottomDock } from '../../components/BottomDock';
@@ -9,11 +9,16 @@ import { useAuth } from '@clerk/clerk-expo';
 import axios from 'axios';
 import { API_URL } from '../../services/apiConfig';
 import { db } from '../../database/Database';
-import { syncService } from '../../services/sync/SyncService';
 import { generateLocalId } from '../../utils/helpers';
 import { ui } from '../../theme/ui';
 import { useAuthStore } from '../../store/authStore';
 import { PRODUCT_UNIT_OPTIONS, getUnitAbbreviation, type MobileProductKind, unitAllowsDecimals } from '../../utils/productUnits';
+import { useOnboardingStore } from '../../store/onboardingStore';
+import { OnboardingTarget } from '../../components/onboarding/OnboardingTarget';
+import { useTutorialScroll } from '../../components/onboarding/useTutorialScroll';
+import { nextProductField, type ProductDraft } from '../../services/onboarding/onboardingModel';
+import { createLocalProduct } from '../../services/products/createLocalProduct';
+import { positiveProductCents } from '../../services/products/productAmounts';
 
 interface AddProductScreenProps {
   navigation: any;
@@ -37,30 +42,34 @@ const CREATE_PRODUCT_KIND_OPTIONS: Array<{ value: MobileProductKind; label: stri
 ];
 
 export function AddProductScreen({ navigation }: AddProductScreenProps) {
+  const tutorialProduct = useOnboardingStore(s => s.active && s.stage === 'product' && !s.completedAt);
+  const initialDraft = useRef(tutorialProduct ? useOnboardingStore.getState().draft : null).current;
+  const tutorialKey = useRef(useOnboardingStore.getState().sessionKey).current;
+  const { scrollRef, onScroll, reveal } = useTutorialScroll();
   const insets = useSafeAreaInsets();
   const { getToken } = useAuth();
-  const { subUserToken, accountId } = useAuthStore();
-  const [name, setName] = useState('');
-  const [sku, setSku] = useState('');
-  const [reference, setReference] = useState('');
-  const [supplierId, setSupplierId] = useState<string | null>(null);
-  const [supplierName, setSupplierName] = useState<string>('');
-  const [categoryId, setCategoryId] = useState<string | null>(null);
-  const [categoryName, setCategoryName] = useState<string>('');
+  const { subUserToken, accountId, subUser } = useAuthStore();
+  const [name, setName] = useState(initialDraft?.name ?? '');
+  const [sku, setSku] = useState(initialDraft?.sku ?? '');
+  const [reference, setReference] = useState(initialDraft?.reference ?? '');
+  const [supplierId, setSupplierId] = useState<string | null>(initialDraft?.supplierId ?? null);
+  const [supplierName, setSupplierName] = useState<string>(initialDraft?.supplierName ?? '');
+  const [categoryId, setCategoryId] = useState<string | null>(initialDraft?.categoryId ?? null);
+  const [categoryName, setCategoryName] = useState<string>(initialDraft?.categoryName ?? '');
   const [suppliers, setSuppliers] = useState<OptionItem[]>([]);
   const [categories, setCategories] = useState<OptionItem[]>([]);
   const [supplierMenuVisible, setSupplierMenuVisible] = useState(false);
   const [categoryMenuVisible, setCategoryMenuVisible] = useState(false);
-  const [cost, setCost] = useState('');
-  const [price, setPrice] = useState('');
-  const [stock, setStock] = useState('');
-  const [minStock, setMinStock] = useState('5');
-  const [productKind, setProductKind] = useState<MobileProductKind>('BASIC');
-  const [unit, setUnit] = useState('KG');
+  const [cost, setCost] = useState(initialDraft?.cost ?? '');
+  const [price, setPrice] = useState(initialDraft?.price ?? '');
+  const [stock, setStock] = useState(initialDraft?.stock ?? '');
+  const [minStock, setMinStock] = useState(initialDraft?.minStock ?? '5');
+  const [productKind, setProductKind] = useState<MobileProductKind>(initialDraft?.productKind ?? 'BASIC');
+  const [unit, setUnit] = useState(initialDraft?.unit ?? 'KG');
   const [unitMenuVisible, setUnitMenuVisible] = useState(false);
-  const [taxRate, setTaxRate] = useState<'18' | '16' | '0'>('18');
-  const [isAvailableForSale, setIsAvailableForSale] = useState(true);
-  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [taxRate, setTaxRate] = useState<'18' | '16' | '0'>(initialDraft?.taxRate ?? '18');
+  const [isAvailableForSale, setIsAvailableForSale] = useState(initialDraft?.isAvailableForSale ?? true);
+  const [imageUri, setImageUri] = useState<string | null>(initialDraft?.imageUri ?? null);
   const [loading, setLoading] = useState(false);
   const [apiNextProductId, setApiNextProductId] = useState<string>('Cargando...');
   const [idLoading, setIdLoading] = useState(false);
@@ -76,6 +85,21 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
 
   const activeUnit = productKind === 'MEASURED' ? unit : 'UNIDAD';
   const stockStep = unitAllowsDecimals(activeUnit) ? 0.5 : 1;
+
+  const tutorialDraft = useMemo<ProductDraft>(() => ({ name, sku, reference, supplierId, supplierName, categoryId, categoryName,
+    cost, price, stock, minStock, productKind, unit, taxRate, isAvailableForSale, imageUri }),
+  [name, sku, reference, supplierId, supplierName, categoryId, categoryName, cost, price, stock, minStock, productKind, unit, taxRate, isAvailableForSale, imageUri]);
+  useEffect(() => {
+    if (tutorialProduct && useOnboardingStore.getState().sessionKey === tutorialKey) useOnboardingStore.getState().setDraft(tutorialDraft);
+  }, [tutorialProduct, tutorialDraft, tutorialKey]);
+  useEffect(() => navigation.addListener('beforeRemove', () => {
+    const tutorial = useOnboardingStore.getState();
+    if (tutorial.sessionKey === tutorialKey && tutorial.active && tutorial.stage === 'product') tutorial.postpone();
+  }), [navigation, tutorialKey]);
+  const confirmTutorialField = () => { if (tutorialProduct) {
+    useOnboardingStore.getState().setDraft(tutorialDraft);
+    useOnboardingStore.getState().confirmField();
+  } };
 
   const findDuplicateSkuLocally = useCallback(async (rawSku: string): Promise<DuplicateSkuInfo | null> => {
     const normalizedSku = String(rawSku || '').trim();
@@ -410,16 +434,22 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
     // Guard síncrono contra double-tap (el estado React no es lo suficientemente rápido)
     if (savingRef.current) return;
 
+    if (tutorialProduct && nextProductField(tutorialDraft) !== 'save') {
+      confirmTutorialField();
+      Alert.alert('Revisa tu producto', 'Completa los datos señalados por la guía antes de guardar.');
+      return;
+    }
+
     if (!name.trim()) {
       Alert.alert('Error', 'El nombre es requerido');
       return;
     }
-    if (!price || isNaN(parseFloat(price))) {
-      Alert.alert('Error', 'El precio es requerido');
+    if (positiveProductCents(price) === null) {
+      Alert.alert('Error', 'El precio debe ser mayor que cero y tener un importe válido en centavos.');
       return;
     }
-    if (!cost || isNaN(parseFloat(cost))) {
-      Alert.alert('Error', 'El costo es requerido');
+    if (positiveProductCents(cost) === null) {
+      Alert.alert('Error', 'El costo debe ser mayor que cero y tener un importe válido en centavos.');
       return;
     }
 
@@ -455,8 +485,8 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       }
 
       const localId = generateLocalId();
-      const costCents = Math.round(parseFloat(cost) * 100);
-      const priceCents = Math.round(parseFloat(price) * 100);
+      const costCents = positiveProductCents(cost)!;
+      const priceCents = positiveProductCents(price)!;
       const stockValue = stock ? parseFloat(stock) : 0;
 
       const productData = {
@@ -480,19 +510,10 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         createdAt: Date.now(),
       };
 
-      await db.insert('products', {
-        local_id: localId,
-        name: productData.name,
-        sku: productData.sku,
-        cost_cents: costCents,
-        price_cents: priceCents,
-        stock: stockValue,
-        synced: 0,
-        is_available_for_sale: isAvailableForSale ? 1 : 0,
-        data: JSON.stringify(productData),
-      });
-
-      await syncService.queueOperation('product', 'create', productData, localId);
+      await createLocalProduct(productData, accountId, subUser?.id ?? null);
+      if ((tutorialProduct || initialDraft) && useOnboardingStore.getState().sessionKey === tutorialKey && useOnboardingStore.getState().stage === 'product') {
+        useOnboardingStore.getState().savedProduct(localId);
+      }
       Alert.alert('Éxito', 'Producto guardado correctamente', [{ text: 'OK', onPress: () => navigation.goBack() }]);
     } catch (error) {
       console.error('Error guardando producto:', error);
@@ -525,6 +546,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
   };
 
   return (
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.topHeader}>
         <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
@@ -534,7 +556,8 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
         <View style={styles.backBtn} />
       </View>
 
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 120 + insets.bottom }]}>
+      <ScrollView ref={scrollRef} onScroll={onScroll} scrollEventThrottle={16} keyboardShouldPersistTaps="handled"
+        contentContainerStyle={[styles.content, { paddingBottom: (tutorialProduct ? 380 : 120) + insets.bottom }]}>
         <View style={styles.sectionCard}>
           <View style={styles.sectionHeader}>
             <View style={styles.sectionIcon}>
@@ -553,15 +576,16 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             <Text style={styles.readOnlyValue}>{apiNextProductId}</Text>
           </View>
 
-          <TextInput
+          <OnboardingTarget id="product.name" reveal={reveal}><TextInput
             label="Nombre del Producto *"
             value={name}
             onChangeText={setName}
+            onBlur={confirmTutorialField}
             mode="outlined"
             style={styles.input}
             outlineColor={ui.colors.border}
             activeOutlineColor={ui.colors.primary}
-          />
+          /></OnboardingTarget>
 
           <View style={styles.row}>
             <View style={styles.half}>
@@ -671,7 +695,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             <Text style={styles.sectionTitle}>Tipo y Unidad</Text>
           </View>
 
-          <View style={styles.choiceRow}>
+          <OnboardingTarget id="product.kind" reveal={reveal}><View style={styles.choiceRow}>
             {CREATE_PRODUCT_KIND_OPTIONS.map((option) => (
               <TouchableOpacity
                 key={option.value}
@@ -688,7 +712,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
                 </Text>
               </TouchableOpacity>
             ))}
-          </View>
+          </View></OnboardingTarget>
 
           {productKind === 'MEASURED' ? (
             <>
@@ -730,28 +754,30 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             <Text style={styles.sectionTitle}>Precios y Costos</Text>
           </View>
 
-          <TextInput
+          <OnboardingTarget id="product.price" reveal={reveal}><TextInput
             label={productKind === 'MEASURED' ? `Precio de Venta por ${getUnitAbbreviation(activeUnit)} (RD$) *` : 'Precio de Venta (RD$) *'}
             value={price}
             onChangeText={setPrice}
+            onBlur={confirmTutorialField}
             mode="outlined"
             keyboardType="decimal-pad"
             style={styles.input}
             left={<TextInput.Affix text="RD$ " />}
             outlineColor={ui.colors.border}
             activeOutlineColor={ui.colors.primary}
-          />
-          <TextInput
+          /></OnboardingTarget>
+          <OnboardingTarget id="product.cost" reveal={reveal}><TextInput
             label={productKind === 'MEASURED' ? `Costo por ${getUnitAbbreviation(activeUnit)} (RD$) *` : 'Costo Unitario (RD$) *'}
             value={cost}
             onChangeText={setCost}
+            onBlur={confirmTutorialField}
             mode="outlined"
             keyboardType="decimal-pad"
             style={styles.input}
             left={<TextInput.Affix text="RD$ " />}
             outlineColor={ui.colors.border}
             activeOutlineColor={ui.colors.primary}
-          />
+          /></OnboardingTarget>
         </View>
 
 
@@ -812,7 +838,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
              </View>
           ) : (
             <View style={styles.row}>
-              <View style={styles.half}>
+              <OnboardingTarget id="product.stock" reveal={reveal} style={styles.half}>
                 <Text style={styles.counterLabel}>
                   Existencia Actual {productKind === 'MEASURED' ? `(${getUnitAbbreviation(activeUnit)})` : ''}
                 </Text>
@@ -826,6 +852,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
                   <TextInput
                     value={stock}
                     onChangeText={setStock}
+                    onBlur={confirmTutorialField}
                     mode="flat"
                     keyboardType={unitAllowsDecimals(activeUnit) ? 'decimal-pad' : 'number-pad'}
                     style={styles.counterInput}
@@ -839,7 +866,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
                     <Icon source="plus" size={16} color={ui.colors.textMuted} />
                   </TouchableOpacity>
                 </View>
-              </View>
+              </OnboardingTarget>
               <View style={styles.half}>
                 <Text style={styles.counterLabel}>
                   Stock Mínimo {productKind === 'MEASURED' ? `(${getUnitAbbreviation(activeUnit)})` : ''}
@@ -903,7 +930,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
             </View>
             <Text style={styles.sectionTitle}>Visibilidad</Text>
           </View>
-          <View style={[styles.row, { marginTop: 14, justifyContent: 'space-between' }]}>
+          <OnboardingTarget id="product.available" reveal={reveal}><View style={[styles.row, { marginTop: 14, justifyContent: 'space-between' }]}>
             <View style={{ flex: 1, paddingRight: 10 }}>
               <Text style={{ color: ui.colors.text, fontWeight: '700', fontSize: 15 }}>Disponible para venta</Text>
               <Text style={{ color: ui.colors.textMuted, fontSize: 12, marginTop: 4 }}>
@@ -915,7 +942,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
               onValueChange={setIsAvailableForSale}
               color={ui.colors.primary}
             />
-          </View>
+          </View></OnboardingTarget>
         </View>
 
         <View style={styles.sectionCard}>
@@ -941,7 +968,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       </ScrollView>
 
       <BottomDock style={styles.bottomAction}>
-        <Button
+        <OnboardingTarget id="product.save"><Button
           mode="contained"
           icon="content-save"
           onPress={handleSave}
@@ -952,7 +979,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
           contentStyle={styles.saveButtonContent}
         >
           Guardar Producto
-        </Button>
+        </Button></OnboardingTarget>
       </BottomDock>
 
       <Modal
@@ -1044,6 +1071,7 @@ export function AddProductScreen({ navigation }: AddProductScreenProps) {
       </Modal>
 
     </SafeAreaView>
+    </KeyboardAvoidingView>
   );
 }
 
