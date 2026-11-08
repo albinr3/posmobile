@@ -65,7 +65,7 @@ export function CashShiftGate({ showActivationOffer = false }: { showActivationO
     <ScrollView contentContainerStyle={styles.overlay}>
       <View style={styles.offerCard}>
         <View style={styles.illustration}>
-          <Svg width={150} height={120} viewBox="0 0 150 120" accessibilityLabel="Ilustración de una caja registradora">
+          <Svg width={150} height={120} viewBox="0 0 150 120" accessibilityLabel="Ilustración de una caja registradora y dinero">
             <Circle cx="75" cy="59" r="55" fill="#EEE5FF" />
             <Rect x="40" y="49" width="70" height="48" rx="9" fill="#7F13EC" />
             <Rect x="51" y="24" width="48" height="33" rx="5" fill="#A56CFF" />
@@ -74,10 +74,12 @@ export function CashShiftGate({ showActivationOffer = false }: { showActivationO
             <Path d="M66 78h18" stroke="#7F13EC" strokeWidth="4" strokeLinecap="round" />
             <Circle cx="111" cy="36" r="15" fill="#1FA464" />
             <Path d="m104 36 5 5 9-10" fill="none" stroke="#FFF" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            <Circle cx="36" cy="34" r="14" fill="#E9A820" />
+            <Path d="M40 29.5c-1-1-2.3-1.5-4-1.5-2.2 0-3.5 1.1-3.5 2.8 0 4.2 7 1.8 7 5.8 0 1.7-1.5 2.9-3.8 2.9-1.7 0-3.3-.6-4.4-1.7M36 25.5v16" fill="none" stroke="#FFF" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round" />
           </Svg>
         </View>
-        <Text variant="headlineSmall" style={styles.offerTitle}>Tu caja, clara en cada turno</Text>
-        <Text style={styles.offerText}>Controla el efectivo que recibe y entrega cada empleado, y consulta las diferencias al cerrar su turno.</Text>
+        <Text variant="headlineSmall" style={styles.offerTitle}>¿Tienes empleados y manejas varios turnos de caja?</Text>
+        <Text style={styles.offerText}>Activa esta opción para que cada empleado abra y cierre su propio turno. Así podrás llevar un mejor control del efectivo y de los movimientos de cada turno.</Text>
         <Text style={styles.offerHint}>Para activarlo, revisarás los saldos y confirmarás el efectivo inicial en Cuadre diario. La activación es permanente.</Text>
         {!!error && <Text style={styles.error}>{error}</Text>}
         <Button mode="contained" disabled={busy} loading={busy} onPress={() => void chooseOffer(true)} style={styles.offerButton}>Activar control por turnos</Button>

@@ -43,6 +43,12 @@ interface POSProduct extends Product {
 }
 
 type SaleType = 'CONTADO' | 'CREDITO';
+
+const practiceImages: Record<string, number> = {
+  'tutorial-demo:coffee': require('../../../assets/tutorial/coffee.jpg'),
+  'tutorial-demo:water': require('../../../assets/tutorial/water.jpg'),
+  'tutorial-demo:snack': require('../../../assets/tutorial/snack.jpg'),
+};
 type ViewMode = 'LISTA' | 'IMAGENES';
 
 const PAYMENT_OPTIONS = [
@@ -570,7 +576,8 @@ export function POSScreen({ navigation, route, tutorial = false }: POSScreenProp
     const stockIssue = tutorial ? null : saleStockService.preview(item, items).issue;
     const isOut = Boolean(stockIssue);
     const selectedQty = cartQuantityByProduct.get(item.localId) || 0;
-    const productImage = getProductImage(item);
+    const practiceImage = tutorial ? practiceImages[item.localId] : undefined;
+    const productImage = practiceImage || getProductImage(item);
     const stockLabel = tutorial ? 'Producto de prueba' : stockIssue ? (stockIssue.kind === 'missing' ? 'Sincroniza para validar' : (stockIssue.available ?? 0) <= 0 ? 'Sin existencia' : 'Existencia insuficiente') : isRecipe ? 'Receta' : `${formatProductQty(saleStockService.available(item), item.unit)} disponible`;
     const selectedQtyLabel = formatProductQty(selectedQty, item.unit);
 
@@ -637,7 +644,7 @@ export function POSScreen({ navigation, route, tutorial = false }: POSScreenProp
         ) : null}
         <View style={styles.imageBox}>
           {productImage ? (
-            <Image source={{ uri: productImage }} style={styles.productImage} resizeMode="cover" />
+            <Image source={practiceImage || { uri: productImage as string }} style={styles.productImage} resizeMode="cover" />
           ) : (
             <>
               <Text style={styles.imageLetter}>{item.name.charAt(0).toUpperCase()}</Text>
